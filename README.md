@@ -1,55 +1,70 @@
-# Zimam · زمام
+# Zimam
 
-Every issue and pull request across your GitHub repositories, in one list you can search, filter and save views of. In Arabic and English.
+Every issue and pull request across your GitHub organizations, in one fast, filterable list.
 
-Zimam runs entirely in your browser. It talks to no server but `api.github.com`, with a read-only token that stays in your browser.
+**[zimam.ieasybooks.com](https://zimam.ieasybooks.com)** · Arabic and English
 
-## The name
+[![CI](https://github.com/ieasybooks/zimam/actions/workflows/ci.yml/badge.svg)](https://github.com/ieasybooks/zimam/actions/workflows/ci.yml)
 
-In 162 AH (778–79 CE), the Abbasid caliph al-Mahdī founded the **Dīwān al-Zimām** (ديوان الزمام): overseeing all the government's offices (dīwāns) had become too much for one person. Each dīwān got a control office of its own, and a central one, _zimām al-azimma_, watched over them all. _Zimām_ means "reins", as in «أمسك بزمام الأمور», to take hold of the reins.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.webp">
+  <img alt="Zimam showing the open issues and pull requests of the nuxt organization" src="docs/screenshot-light.webp">
+</picture>
 
-Zimam does the same for your repositories: each workspace is a dīwān, and Zimam keeps the reins of all of them.
+## Features
 
-## What it does
+- **One list across sources.** A workspace mixes organizations, user accounts and single repositories. Keep as many workspaces as you like.
+- **Faceted filters with live counts.** Type, state, active or archived repository, account, repository, label, author, assignee, review, checks and last activity. Each value shows how many items picking it would give.
+- **Views are URLs.** Save filter sets in the sidebar; every screen is a link you can share or bookmark.
+- **Near-live.** Changes appear within a minute while the tab is open, and the rows that changed are marked.
+- **Fast.** Opens from a local cache in under a second and scrolls thousands of rows with virtual rendering.
+- **Arabic and English.** Right-to-left layout, Arabic plural forms, and search that folds Arabic spelling variants (hamza, tā' marbūṭa, diacritics).
+- Light and dark themes, comfortable or compact rows.
 
-- Gathers issues and pull requests from any mix of organizations, accounts and single repositories.
-- Filters with one click, each value showing how many items it would match: type, state, active or archived repository, account, repository, label, author, assignee, review, checks, and last activity.
-- Saves views in a sidebar. Every screen is also a link.
-- Keeps itself current: open items load first, older closed items follow in the background, and changes show up within a minute while the tab is open.
-- Spends little of your GitHub allowance. Checking every repository for changes costs one search, and Zimam slows down and pauses before your hourly limit runs out, since every tool on your GitHub account shares it.
+## How it works
+
+Zimam is a static single-page app with no backend: the browser calls GitHub's GraphQL API directly, with the token you give it.
+
+- **First load.** Open issues and pull requests load first, per repository, four at a time. The closed history then loads in the background, in 45-second slices with a check for changes before each one, and resumes where it stopped.
+- **Updates.** Every minute, one search query per eight sources finds everything updated since the last check (`updated:>=`, with a 10-minute overlap for the search index's lag). Rows that changed are marked for a few seconds.
+- **What search can't see.** A finished CI run doesn't change a pull request's `updatedAt`, so open pull requests' checks and reviews are polled every 5 minutes. Deleted and transferred items are caught by refetching the open items every 6 hours.
+- **Rate limits.** GitHub's hourly allowance is shared by every tool on your account. Zimam leaves 2% of it for the others, loads history only while more than 15% remains, and pauses until the reset time GitHub reports.
+- **Storage.** Each workspace's items are cached in IndexedDB, settings and views in `localStorage`. With several tabs open, one tab syncs (Web Locks) and the others pick up its cache (BroadcastChannel).
+- **Filtering** is one pass over the cached items, so results and counts update as you click. Filters live in the URL's query string.
+
+## Security
+
+- Your token stays in your browser's storage and is sent only to `api.github.com`.
+- A Content Security Policy enforces it: the page can connect only to GitHub's API and Cloudflare Web Analytics, and load images only from GitHub's avatar host.
+- Settings exports leave tokens out.
 
 ## Tokens
 
-Read access is enough.
+Read access is enough. Each workspace keeps its own token.
 
-- A [fine-grained token](https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&issues=read&pull_requests=read&metadata=read&commit_statuses=read) reaches one organization or account. Choose it as the resource owner and give the token all repositories.
-- A [classic token](https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam) with `repo` and `read:org` reaches all of your organizations at once.
+| Token                                                                                                                                                                                                    | Reaches                                   | Permissions                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
+| [Fine-grained](https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&issues=read&pull_requests=read&metadata=read&commit_statuses=read) | One organization or account, as its owner | Issues, pull requests, metadata and commit statuses: read-only   |
+| [Classic](https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam)                                                                                                                 | Every organization you belong to          | `repo` and `read:org` (without `repo`, public repositories only) |
 
-Each workspace keeps its own token.
+## Stack
+
+Vue 3, Nuxt UI, vue-i18n, TanStack Virtual, Vite, Bun, Vitest, oxlint and oxfmt. Hosted as static assets on Cloudflare Workers.
 
 ## Development
 
 ```sh
-mise install
+mise install     # pinned Bun and Node
 bun install
-mise dev        # http://127.0.0.1:5190
-mise check      # format, lint and types
-mise test       # unit tests
+mise dev         # http://127.0.0.1:5190
+mise check       # format, lint and types
+mise test        # unit tests
 ```
 
-In development, the setup screen offers to use your `gh` CLI's token, so there is nothing to paste.
+In development, the setup screen can use your `gh` CLI's token, so there is nothing to paste.
 
-## Deployment
+`main` deploys to Cloudflare Workers from GitHub Actions once its checks pass.
 
-[zimam.ieasybooks.com](https://zimam.ieasybooks.com) serves the static assets of the `zimam-web` Worker; there is no Worker script. This repository owns the build, `wrangler.jsonc` and the deploys. [ieasybooks/infrastructure](https://github.com/ieasybooks/infrastructure) owns the custom domain, the deploy token and the vault rule that hands it out.
+## The name
 
-Every push to `main` by AliOsm deploys once its checks pass: the production job in `.github/workflows/ci.yml` gets `ZIMAM_WEB_DEPLOY_TOKEN` from the vault. That token can deploy `zimam-web` and nothing else, and the vault gives it only to that job, on `main`. Pushes by anyone else run the checks without deploying. To deploy `main` again, run `gh workflow run ci.yml --ref main -R ieasybooks/zimam`. To roll back, revert the change on `main`.
-
-`public/_headers` sets the security headers, including a Content Security Policy that lets the page reach only `api.github.com`, GitHub's avatars and Cloudflare's Web Analytics.
-
-The Worker was created once by hand, before the infrastructure could scope a token to it. From the infrastructure repository, next to this one:
-
-```sh
-mise run vault:run INFRASTRUCTURE_CLOUDFLARE_API_TOKEN=CLOUDFLARE_API_TOKEN -- \
-  mise -C ../zimam exec -- bash -c 'bun install --frozen-lockfile && bun run build && bun run deploy --message "$(git rev-parse HEAD)"'
-```
+Zimam (زمام) means "reins". In 162 AH (778–79 CE), the Abbasid caliph al-Mahdī created the Dīwān al-Zimām, the office that oversaw all the others.
