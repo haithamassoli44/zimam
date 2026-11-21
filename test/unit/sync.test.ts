@@ -45,6 +45,8 @@ function fakeGitHub() {
     onQuery: () => {},
   }
 
+  const rollup = (id: string) => ({ commit: { statusCheckRollup: { state: state.checks[id] ?? 'SUCCESS' } } })
+
   const gh: GitHub = {
     scopes: () => ['repo'],
     rate: () => null,
@@ -73,7 +75,6 @@ function fakeGitHub() {
       if (call === 'nodes') return { nodes: [] } as T
       if (call === 'checks') {
         const ids = variables.ids as string[]
-        const rollup = (id: string) => ({ commit: { statusCheckRollup: { state: state.checks[id] ?? 'SUCCESS' } } })
         return {
           nodes: ids.map((id) => ({ id, isDraft: false, reviewDecision: null, commits: { nodes: [rollup(id)] } })),
         } as T
@@ -83,7 +84,10 @@ function fakeGitHub() {
       const kind = text.includes('issues(') ? 'issues' : 'pullRequests'
       const matching = list.filter((node) => states.includes(node.state))
       const start = Number(variables.after ?? 0)
-      const nodes = matching.slice(start, start + state.pageSize)
+      const withChecks = text.includes('statusCheckRollup')
+      const nodes = matching
+        .slice(start, start + state.pageSize)
+        .map((node) => (withChecks ? { ...node, commits: { nodes: [rollup(node.id)] } } : node))
       const end = start + nodes.length
       const pageInfo = { hasNextPage: end < matching.length, endCursor: String(end) }
       return { repository: { [kind]: { pageInfo, nodes } } } as T
@@ -162,10 +166,25 @@ describe('Syncer', () => {
     expect(store.items.get('I1')?.updatedAt).toBe(state.issues[0].updatedAt)
   })
 
-  it("reads checks on open pull requests, since a finished run doesn't change their update time", async () => {
+  it('gets the checks with the open pull requests, and asks again only for a refresh', async () => {
     const { store, state, syncer } = await setup()
     state.checks.P2 = 'FAILURE'
     await syncer.sync()
+    expect(store.items.get('P2')?.checks).toBe('failure')
+    expect(state.calls).not.toContain('checks')
+    await syncer.sync(true)
+    expect(state.calls.filter((call) => call === 'checks')).toHaveLength(1)
+  })
+
+  it("reads checks on open pull requests every few minutes, since a finished run doesn't change their update time", async () => {
+    const { store, state, syncer } = await setup()
+    await syncer.sync()
+    state.checks.P2 = 'FAILURE'
+    const later = Date.now() + 6 * 60_000
+    vi.spyOn(Date, 'now').mockImplementation(() => later)
+    state.calls = []
+    await syncer.sync()
+    expect(state.calls).toEqual(['search', 'checks'])
     expect(store.items.get('P2')?.checks).toBe('failure')
     expect(store.items.get('P2')?.updatedAt).toBe(state.prs[0].updatedAt)
   })

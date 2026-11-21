@@ -155,7 +155,10 @@ export class Syncer {
       () => (manual || !this.cache.reposAt || started - this.cache.reposAt > REPOS_EVERY ? this.loadRepos() : null),
       () => this.loadOpen(),
       () => (first ? null : this.loadChanges(started)),
-      () => (manual || started - (this.cache.checksAt ?? 0) > CHECKS_EVERY ? this.loadChecks() : null),
+      () => {
+        const checked = this.cache.checksAt ?? 0
+        return (manual ? checked < started : started - checked > CHECKS_EVERY) ? this.loadChecks() : null
+      },
       () => {
         this.cache.syncedAt = Date.now()
         this.status.syncedAt = this.cache.syncedAt
@@ -251,6 +254,8 @@ export class Syncer {
   private async loadOpen() {
     const pending = [...this.store.repos.values()].filter((repo) => !this.cache.openDone.includes(repo.id))
     if (!pending.length) return
+    const startedAt = Date.now()
+    const all = pending.length === this.store.repos.size
     this.status.phase = 'open'
     this.status.done = 0
     this.status.total = pending.length
@@ -270,6 +275,8 @@ export class Syncer {
       this.status.done++
       this.saveSoon()
     })
+    // Open pull requests come with their checks and reviews, so once all of them are in, those are fresh too.
+    if (all && pending.every((repo) => this.cache.openDone.includes(repo.id))) this.cache.checksAt = startedAt
   }
 
   private async loadChanges(started: number) {
