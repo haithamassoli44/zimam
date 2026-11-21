@@ -130,7 +130,7 @@ const historyPercent = computed(() => {
             :aria-label="t('filters.clear')"
             @click="filters.q = ''"
           />
-          <UKbd v-else value="/" />
+          <UKbd v-else value="/" class="pointer-coarse:hidden" />
         </template>
       </UInput>
 
@@ -166,7 +166,7 @@ const historyPercent = computed(() => {
     </div>
 
     <div
-      class="flex [scrollbar-width:none] items-center gap-2 overflow-x-auto px-4 py-3 *:shrink-0 sm:flex-wrap sm:overflow-visible sm:px-6"
+      class="flex [scrollbar-width:none] items-center gap-2 overflow-x-auto px-4 py-3 *:shrink-0 sm:flex-wrap sm:overflow-visible sm:px-6 short:flex-nowrap short:overflow-x-auto"
     >
       <ChoiceGroup
         v-for="group in toggles"

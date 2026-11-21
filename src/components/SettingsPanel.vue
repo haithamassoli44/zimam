@@ -88,13 +88,14 @@ async function upload(event: Event) {
           />
         </div>
 
-        <fieldset class="space-y-2">
+        <fieldset class="space-y-2 pointer-coarse:space-y-0">
           <legend class="mb-3 text-sm font-medium text-highlighted">{{ t('settings.rows') }}</legend>
           <USwitch
             v-for="part in ROW_PARTS"
             :key="part"
             v-model="settings.show[part]"
             :label="t(`settings.parts.${part}`)"
+            :ui="{ root: 'items-center', label: 'pointer-coarse:py-3' }"
           />
         </fieldset>
 

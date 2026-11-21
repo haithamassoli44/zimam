@@ -32,9 +32,13 @@ export default defineConfig(({ command }) => ({
         popover: { slots: { content: 'rounded-lg' } },
         dropdownMenu: {
           slots: { content: 'rounded-lg', label: 'font-medium' },
-          variants: { size: { md: { itemLeadingIcon: 'size-4', itemTrailingIcon: 'size-4' } } },
+          variants: {
+            size: { md: { item: 'pointer-coarse:py-3', itemLeadingIcon: 'size-4', itemTrailingIcon: 'size-4' } },
+          },
         },
+        // Touch screens get room for a finger: see `tap` in style.css, and 16px inputs, which iOS doesn't zoom into.
         button: {
+          slots: { base: 'tap' },
           variants: {
             size: {
               md: { leadingIcon: 'size-4', trailingIcon: 'size-4' },
@@ -43,6 +47,7 @@ export default defineConfig(({ command }) => ({
           },
         },
         input: {
+          slots: { base: 'pointer-coarse:text-base' },
           variants: {
             size: {
               md: { leadingIcon: 'size-4', trailingIcon: 'size-4' },

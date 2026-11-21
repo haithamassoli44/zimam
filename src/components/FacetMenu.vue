@@ -87,7 +87,7 @@ function toggle(value: string) {
             <button
               type="button"
               :aria-pressed="model.includes(option.value)"
-              class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-start text-sm transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+              class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-start text-sm transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary pointer-coarse:h-11"
               @click="toggle(option.value)"
             >
               <span

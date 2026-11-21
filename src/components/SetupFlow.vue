@@ -212,12 +212,12 @@ function finish() {
 
         <section v-if="viewer" class="mt-8 space-y-4 border-t border-default pt-8">
           <h2 class="font-medium text-highlighted">{{ t('setup.sourcesStep') }}</h2>
-          <div class="grid gap-2 sm:grid-cols-2">
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               v-for="choice in choices"
               :key="`${choice.source.kind}:${choice.source.name}`"
               type="button"
-              class="flex items-center gap-3 rounded-lg border p-3 text-start transition-colors"
+              class="flex min-w-0 items-center gap-3 rounded-lg border p-3 text-start transition-colors"
               :class="
                 isPicked(choice.source)
                   ? 'border-primary bg-primary/5'
