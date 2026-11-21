@@ -143,6 +143,7 @@ export class Syncer {
 
     this.newsSince = this.cache.syncedAt === null ? Infinity : this.cache.syncedAt - OVERLAP
     const first = this.cache.watermark === null
+    const checkedAt = this.cache.checksAt
     if (first) {
       this.cache.watermark = started
       this.cache.reconciledAt = started
@@ -155,10 +156,11 @@ export class Syncer {
       () => (manual || !this.cache.reposAt || started - this.cache.reposAt > REPOS_EVERY ? this.loadRepos() : null),
       () => this.loadOpen(),
       () => (first ? null : this.loadChanges(started)),
-      () => {
-        const checked = this.cache.checksAt ?? 0
-        return (manual ? checked < started : started - checked > CHECKS_EVERY) ? this.loadChecks() : null
-      },
+      // Every few minutes or on a refresh, unless this run loaded all open pull requests: their checks came with them.
+      () =>
+        this.cache.checksAt === checkedAt && (manual || started - (checkedAt ?? 0) > CHECKS_EVERY)
+          ? this.loadChecks()
+          : null,
       () => {
         this.cache.syncedAt = Date.now()
         this.status.syncedAt = this.cache.syncedAt
