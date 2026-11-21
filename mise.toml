@@ -1,0 +1,17 @@
+min_version = "2026.4.10"
+
+[tools]
+bun = "1.4.4"
+node = "24.19.0"
+
+[tasks.dev]
+description = "Start the dev server on 127.0.0.1:5190"
+run = "bun run dev"
+
+[tasks.check]
+description = "Check formatting, lint, and types"
+run = ["bun run format:check", "bun run lint", "bun run typecheck"]
+
+[tasks.test]
+description = "Run unit tests"
+run = "bun run test"

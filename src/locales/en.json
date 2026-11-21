@@ -1,0 +1,213 @@
+{
+  "app": {
+    "name": "Zimam",
+    "about": "Named after the Abbasid Dīwān al-Zimām, the office that kept watch over every other office"
+  },
+  "setup": {
+    "title": "Take the reins",
+    "intro": "Zimam gathers the issues and pull requests of the repositories you choose into one list you can search and filter. It runs in your browser and talks to no one but GitHub.",
+    "tokenStep": "1. Your GitHub token",
+    "tokenLabel": "Personal access token",
+    "tokenHelp": "Read access is enough. The token stays in this browser and is only ever sent to api.github.com.",
+    "fineGrained": "Create a fine-grained token",
+    "fineGrainedHelp": "Pick the organization as the resource owner and give it all repositories",
+    "classic": "or a classic token, which works across all your organizations",
+    "useGh": "Use my gh CLI token",
+    "continue": "Continue",
+    "badToken": "GitHub didn't accept this token",
+    "offline": "Couldn't reach GitHub, check your connection",
+    "readingAs": "Reading as {login}",
+    "noPrivate": "This token can't read private repositories. Add the repo scope to see them.",
+    "sourcesStep": "2. Choose what to gather",
+    "yourAccount": "Your account",
+    "another": "Another account or repository",
+    "anotherPlaceholder": "owner, or owner/repository",
+    "add": "Add",
+    "notFound": "Couldn't find {name}",
+    "nameStep": "3. Name it",
+    "nameLabel": "Workspace name",
+    "open": "Open the workspace",
+    "cancel": "Cancel",
+    "save": "Save changes"
+  },
+  "nav": {
+    "views": "Views",
+    "newWorkspace": "New workspace",
+    "settings": "Settings",
+    "menu": "Menu"
+  },
+  "presets": {
+    "open": "Everything open",
+    "issues": "Open issues",
+    "prs": "Open pull requests",
+    "awaiting": "Awaiting review",
+    "quiet": "Gone quiet",
+    "archive": "Archived repositories"
+  },
+  "views": {
+    "save": "Save as a view",
+    "update": "Update “{name}”",
+    "saveTitle": "Save this view",
+    "renameTitle": "Rename view",
+    "name": "Name",
+    "namePlaceholder": "e.g. Bugs this week",
+    "saveButton": "Save",
+    "rename": "Rename",
+    "delete": "Delete",
+    "copyLink": "Copy link",
+    "copied": "Link copied",
+    "options": "Options for “{name}”",
+    "copyFailed": "Couldn't copy the link"
+  },
+  "filters": {
+    "search": "Search",
+    "find": "Find",
+    "nothing": "Nothing matches",
+    "clear": "Clear filters",
+    "sort": "Sort",
+    "kind": {
+      "title": "Type",
+      "issue": "Issues",
+      "pr": "Pull requests"
+    },
+    "state": {
+      "title": "State",
+      "open": "Open",
+      "closed": "Closed",
+      "merged": "Merged"
+    },
+    "status": {
+      "title": "Repositories",
+      "active": "Active",
+      "archived": "Archived"
+    },
+    "owner": {
+      "title": "Account"
+    },
+    "repo": {
+      "title": "Repository"
+    },
+    "label": {
+      "title": "Label",
+      "none": "No label"
+    },
+    "author": {
+      "title": "Author"
+    },
+    "assignee": {
+      "title": "Assignee",
+      "none": "Unassigned"
+    },
+    "review": {
+      "title": "Review",
+      "draft": "Draft",
+      "pending": "Awaiting review",
+      "approved": "Approved",
+      "changes": "Changes requested"
+    },
+    "checks": {
+      "title": "Checks",
+      "success": "Passing",
+      "failure": "Failing",
+      "pending": "Running"
+    },
+    "updated": {
+      "title": "Updated",
+      "day": "In the last day",
+      "week": "In the last week",
+      "month": "In the last month",
+      "quarter": "In the last 3 months",
+      "stale": "Quiet for 3+ months"
+    },
+    "sorts": {
+      "updated": "Recently updated",
+      "created": "Newest",
+      "oldest": "Oldest",
+      "comments": "Most discussed",
+      "quiet": "Longest quiet"
+    },
+    "more": "{n} more, type to narrow them down"
+  },
+  "results": {
+    "count": "No results | 1 result | {n} results",
+    "custom": "Unsaved view",
+    "historyLoading": "Older closed items are still arriving ({percent}%)",
+    "empty": "Nothing here",
+    "emptyHint": "Try fewer filters",
+    "allClear": "Nothing pending",
+    "allClearHint": "You hold the reins",
+    "gathering": "Gathering your repositories…"
+  },
+  "item": {
+    "by": "by {login}",
+    "updated": "updated {time}",
+    "opened": "Opened {time}",
+    "comments": "No comments | 1 comment | {n} comments",
+    "archived": "Archived",
+    "assignees": "Assigned to {names}",
+    "issueOpen": "Open issue",
+    "issueClosed": "Closed issue",
+    "issueNotPlanned": "Closed as not planned",
+    "prOpen": "Open pull request",
+    "prDraft": "Draft pull request",
+    "prMerged": "Merged pull request",
+    "prClosed": "Closed without merging"
+  },
+  "sync": {
+    "synced": "Updated {time}",
+    "never": "Not synced yet",
+    "refresh": "Refresh now",
+    "paused": "GitHub asked for a pause, back at {time}",
+    "rate": "{remaining} of {limit} GitHub requests left this hour",
+    "replaceToken": "Replace token",
+    "failedSources": "Couldn't read: {names}",
+    "phase": {
+      "repos": "Reading repositories…",
+      "open": "Fetching open items {done}/{total}",
+      "changes": "Checking for changes…",
+      "history": "Fetching history {done}/{total}"
+    },
+    "error": {
+      "auth": "GitHub no longer accepts this workspace's token",
+      "network": "Offline, showing what was saved",
+      "server": "GitHub is having trouble, trying again shortly",
+      "query": "Something went wrong while syncing"
+    },
+    "retry": "Try again"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "theme": "Theme",
+    "themes": {
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "density": "Density",
+    "densities": {
+      "comfortable": "Comfortable",
+      "compact": "Compact"
+    },
+    "rows": "Show in each row",
+    "parts": {
+      "labels": "Labels",
+      "author": "Author",
+      "assignees": "Assignees",
+      "comments": "Comments",
+      "checks": "Checks"
+    },
+    "workspace": "This workspace",
+    "editSources": "Edit sources and token",
+    "reload": "Fetch everything again",
+    "reloadHelp": "Clears what this browser saved for the workspace and loads it from GitHub again",
+    "delete": "Delete workspace",
+    "deleteConfirm": "Delete “{name}”? Its views go with it.",
+    "data": "Your settings",
+    "export": "Export",
+    "import": "Import",
+    "exportHelp": "Workspaces and views as a file, without tokens",
+    "imported": "Settings imported. Add a token to each workspace to use it.",
+    "importFailed": "That file isn't a Zimam settings file"
+  }
+}

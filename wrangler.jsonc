@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "zimam-web",
+  "account_id": "aaed7434338705aa46de5e4e3575e02b",
+  "compatibility_date": "2026-11-04",
+  "workers_dev": false,
+  "preview_urls": false,
+  // ieasybooks/infrastructure owns the zimam.ieasybooks.com custom domain. There is no Worker script.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+  },
+}

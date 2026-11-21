@@ -1,0 +1,116 @@
+@import 'tailwindcss';
+@import '@nuxt/ui';
+@import '@fontsource/ibm-plex-sans-arabic/400.css';
+@import '@fontsource/ibm-plex-sans-arabic/500.css';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+@import '@fontsource/aref-ruqaa/arabic-400.css';
+
+@theme {
+  --font-sans: 'IBM Plex Sans Arabic', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'IBM Plex Sans Arabic', ui-monospace, monospace;
+  --font-brand: 'Aref Ruqaa', 'IBM Plex Sans Arabic', serif;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  /* Nuxt UI's menus animate with --ease-out too. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --default-transition-duration: 160ms;
+  --default-transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Lapis, the blue of illuminated headings: selection, links, focus and fresh ink. Greys for everything else. */
+@theme static {
+  --color-lapis-50: oklch(97.2% 0.012 260);
+  --color-lapis-100: oklch(93.6% 0.03 260);
+  --color-lapis-200: oklch(87.5% 0.06 260);
+  --color-lapis-300: oklch(78.5% 0.1 260);
+  --color-lapis-400: oklch(68% 0.14 260);
+  --color-lapis-500: oklch(57.5% 0.17 260);
+  --color-lapis-600: oklch(49.5% 0.17 260);
+  --color-lapis-700: oklch(43% 0.155 260);
+  --color-lapis-800: oklch(37% 0.13 260);
+  --color-lapis-900: oklch(31% 0.1 260);
+  --color-lapis-950: oklch(23% 0.07 260);
+}
+
+/* The semantic colors are the shades that pass 4.5:1 as text in each theme. */
+:root {
+  --ui-primary: var(--ui-color-primary-700);
+  --ui-success: #15803d;
+  --ui-info: var(--ui-color-primary-700);
+  --ui-warning: #b45309;
+  --ui-error: #dc2626;
+  --merged: #8250df;
+
+  --ui-text-highlighted: #171717;
+  --ui-text: #171717;
+  --ui-text-toned: #525252;
+  --ui-text-muted: #737373;
+  --ui-text-dimmed: #737373;
+  --ui-text-inverted: #ffffff;
+
+  --ui-bg: #ffffff;
+  --ui-bg-muted: #fafafa;
+  --ui-bg-elevated: #f4f4f5;
+  --ui-bg-accented: #ebebed;
+  --ui-bg-inverted: #171717;
+
+  --ui-border: rgb(23 23 23 / 0.08);
+  --ui-border-muted: rgb(23 23 23 / 0.06);
+  --ui-border-accented: rgb(23 23 23 / 0.16);
+  --ui-border-inverted: #171717;
+}
+
+.dark {
+  --ui-primary: var(--ui-color-primary-400);
+  --ui-success: #4cc38a;
+  --ui-info: var(--ui-color-primary-400);
+  --ui-warning: #e0a43a;
+  --ui-error: #f06a6e;
+  --merged: #a371f7;
+
+  --ui-text-highlighted: #ededed;
+  --ui-text: #ededed;
+  --ui-text-toned: #a1a1a6;
+  --ui-text-muted: #85858b;
+  --ui-text-dimmed: #85858b;
+  --ui-text-inverted: #141415;
+
+  --ui-bg: #141415;
+  --ui-bg-muted: #0f0f10;
+  --ui-bg-elevated: #232325;
+  --ui-bg-accented: #2c2c2f;
+  --ui-bg-inverted: #ededed;
+
+  --ui-border: rgb(237 237 237 / 0.08);
+  --ui-border-muted: rgb(237 237 237 / 0.06);
+  --ui-border-accented: rgb(237 237 237 / 0.16);
+  --ui-border-inverted: #ededed;
+}
+
+@utility text-merged {
+  color: var(--merged);
+}
+
+#app {
+  isolation: isolate;
+}
+
+@keyframes arrived {
+  from {
+    background-color: color-mix(in oklab, var(--ui-primary) 12%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .arrived {
+    animation: arrived var(--fresh) var(--ease-out);
+  }
+}

@@ -1,0 +1,91 @@
+name: CI
+
+# Checks every pull request and push. A push to main by AliOsm, or a run he starts on main, then deploys
+# zimam.ieasybooks.com: the vault hands ZIMAM_WEB_DEPLOY_TOKEN only to this workflow's production job on main.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Main's runs go one at a time, in order, and never interrupt a deploy. Newer pull request runs replace older ones.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build
+      - run: bun run deploy:check
+
+  deploy:
+    name: Deploy zimam.ieasybooks.com
+    needs: check
+    if: >-
+      github.repository == 'ieasybooks/zimam' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'AliOsm' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - uses: ieasybooks/vault@1bce5652d3d2461b0c6d590c3358d8c877fe61c8 # v1.1.0
+        with:
+          secrets: ZIMAM_WEB_DEPLOY_TOKEN=CLOUDFLARE_API_TOKEN
+      - run: bun run deploy --message "$GITHUB_SHA"
+      # The zone adds Cloudflare's analytics script to HTML, so compare the build's hashed entry script, not the bytes.
+      - name: Check the site serves this build
+        run: |
+          entry=$(grep -o '/assets/index-[A-Za-z0-9_-]*\.js' dist/index.html)
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if curl -fsS https://zimam.ieasybooks.com/ | grep -qF "$entry"; then
+              echo "zimam.ieasybooks.com serves $GITHUB_SHA."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::zimam.ieasybooks.com doesn't serve this build ($entry) after two minutes."
+          exit 1

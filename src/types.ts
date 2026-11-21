@@ -1,0 +1,98 @@
+export const LOCALES = ['ar', 'en'] as const
+export const THEMES = ['system', 'light', 'dark'] as const
+export const DENSITIES = ['comfortable', 'compact'] as const
+export const ROW_PARTS = ['labels', 'author', 'assignees', 'comments', 'checks'] as const
+export const PRESETS = ['open', 'issues', 'prs', 'awaiting', 'quiet', 'archive'] as const
+
+export const ITEM_KINDS = ['issue', 'pr'] as const
+export const ITEM_STATES = ['open', 'closed', 'merged'] as const
+export const REVIEWS = ['draft', 'pending', 'approved', 'changes'] as const
+export const CHECKS = ['success', 'failure', 'pending'] as const
+
+export type Locale = (typeof LOCALES)[number]
+export type Theme = (typeof THEMES)[number]
+export type Density = (typeof DENSITIES)[number]
+export type RowPart = (typeof ROW_PARTS)[number]
+export type RowParts = Record<RowPart, boolean>
+export type Preset = (typeof PRESETS)[number]
+
+export type ItemKind = (typeof ITEM_KINDS)[number]
+export type ItemState = (typeof ITEM_STATES)[number]
+export type Review = (typeof REVIEWS)[number]
+export type Checks = (typeof CHECKS)[number]
+
+export type SourceKind = 'org' | 'user' | 'repo'
+
+export interface Source {
+  kind: SourceKind
+  /** A user or organization login, or `owner/name` for a single repository. */
+  name: string
+}
+
+export interface View {
+  id: string
+  /** A name the person typed. Views Zimam made have a `preset` instead, so they follow the language. */
+  name?: string
+  preset?: Preset
+  /** The filters, as the URL's search string. */
+  query: string
+}
+
+export interface Workspace {
+  id: string
+  name: string
+  token: string
+  sources: Source[]
+  views: View[]
+}
+
+export interface Settings {
+  locale: Locale
+  theme: Theme
+  density: Density
+  show: RowParts
+  workspaces: Workspace[]
+  activeWorkspaceId: string | null
+}
+
+export interface Repo {
+  id: string
+  owner: string
+  ownerAvatar: string
+  name: string
+  fullName: string
+  isArchived: boolean
+  openIssues: number
+  openPrs: number
+  issues: number
+  prs: number
+}
+
+export interface Person {
+  login: string
+  avatarUrl: string
+}
+
+export interface Label {
+  name: string
+  color: string
+}
+
+export interface Item {
+  id: string
+  kind: ItemKind
+  repoId: string
+  number: number
+  title: string
+  url: string
+  state: ItemState
+  notPlanned: boolean
+  author: Person | null
+  assignees: Person[]
+  labels: Label[]
+  comments: number
+  createdAt: string
+  updatedAt: string
+  review: Review | null
+  checks: Checks | null
+}
