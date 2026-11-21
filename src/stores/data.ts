@@ -37,10 +37,11 @@ export const people = computed(() => {
   return { avatars, colors }
 })
 
-/** How far the current step that has a known length has got, in percent. */
+/** How far loading has got, in percent: the open items while they load, then the closed history until it's all in. */
 export const progress = computed(() => {
-  const { phase, done, total } = status.value
-  return (phase === 'open' || phase === 'history') && total ? Math.round((done / total) * 100) : null
+  const { phase, done, total, history, historyDone } = status.value
+  if (phase === 'open') return total ? Math.round((done / total) * 100) : null
+  return !historyDone && history.total ? Math.round((history.done / history.total) * 100) : null
 })
 
 let syncer: Syncer | null = null

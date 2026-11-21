@@ -9,6 +9,9 @@ const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 
 export const TICK = MINUTE
+// The closed history can take many minutes to load, so it loads in slices this long, with a check for changes before
+// each one.
+const HISTORY_SLICE = 0.75 * TICK
 // GitHub's search lags behind a change by a little, so each check looks this far before the last one.
 const OVERLAP = 10 * MINUTE
 const REPOS_EVERY = 15 * MINUTE
@@ -22,9 +25,12 @@ const HISTORY_RESERVE = 0.15
 
 export interface SyncStatus {
   phase: 'idle' | 'repos' | 'open' | 'changes' | 'history'
+  /** Repositories whose open items are fetched, while `phase` is 'open'. */
   done: number
   total: number
   syncedAt: number | null
+  /** Repositories whose closed history is fetched, out of those that have one. */
+  history: { done: number; total: number }
   historyDone: boolean
   pausedUntil: number | null
   rate: RateLimit | null
@@ -39,6 +45,7 @@ export function idleStatus(): SyncStatus {
     done: 0,
     total: 0,
     syncedAt: null,
+    history: { done: 0, total: 0 },
     historyDone: false,
     pausedUntil: null,
     rate: null,
@@ -67,6 +74,7 @@ export class Syncer {
   private newsSince = Infinity
   private unsaved = false
   private settled = false
+  private sliced = false
 
   static async open(ws: Workspace, gh: GitHub, store: SyncStore, status: SyncStatus): Promise<Syncer> {
     const sources = sourcesKey(ws.sources)
@@ -104,7 +112,13 @@ export class Syncer {
   }
 
   sync(manual = false): Promise<void> {
-    this.current ??= this.withLock(manual).finally(() => (this.current = null))
+    this.current ??= this.withLock(manual).finally(() => {
+      this.current = null
+      const more = this.sliced
+      this.sliced = false
+      // The next slice of the history doesn't wait for a tick.
+      if (more && !this.stopped) setTimeout(() => void this.sync(), 0)
+    })
     return this.current
   }
 
@@ -185,7 +199,7 @@ export class Syncer {
     for (const repo of cache.repos) this.store.repos.set(repo.id, repo)
     for (const item of cache.items) this.store.items.set(item.id, item)
     this.status.syncedAt = cache.syncedAt
-    this.status.historyDone = cache.syncedAt !== null && this.historyLeft().length === 0
+    this.showHistory()
     this.store.changed([])
   }
 
@@ -322,18 +336,14 @@ export class Syncer {
   }
 
   private async loadHistory() {
-    const withHistory = [...this.store.repos.values()].filter(
-      (repo) => repo.issues + repo.prs > repo.openIssues + repo.openPrs,
-    )
-    const pending = this.historyLeft()
-    this.status.historyDone = pending.length === 0
+    const pending = this.showHistory()
     if (!pending.length || !this.hasBudget(HISTORY_RESERVE)) return
     this.status.phase = 'history'
-    this.status.total = withHistory.length
-    this.status.done = withHistory.length - pending.length
+    const until = Date.now() + HISTORY_SLICE
+    const more = () => !this.stopped && Date.now() < until && this.hasBudget(HISTORY_RESERVE)
     await pool(pending, 2, async (repo) => {
       for (const kind of this.historyKinds(repo)) {
-        if (this.stopped || !this.hasBudget(HISTORY_RESERVE)) return
+        if (!more()) return
         const entry = (this.cache.history[repo.id] ??= {})
         const key = kind === 'issues' ? 'issues' : 'prs'
         const saved = entry[key]
@@ -343,14 +353,25 @@ export class Syncer {
           this.put(page.items)
           entry[key] = page.cursor ?? true
           this.saveSoon()
-          if (!this.hasBudget(HISTORY_RESERVE)) return
+          if (!more()) return
         }
         if (this.stopped) return
         entry[key] = true
       }
-      this.status.done++
+      this.status.history.done++
     })
-    this.status.historyDone = this.historyLeft().length === 0
+    this.sliced = this.showHistory().length > 0 && !this.stopped && this.hasBudget(HISTORY_RESERVE)
+  }
+
+  /** Shows how much of the history is loaded, and returns the repositories with some of it left. */
+  private showHistory(): Repo[] {
+    const pending = this.historyLeft()
+    const total = [...this.store.repos.values()].filter(
+      (repo) => repo.issues + repo.prs > repo.openIssues + repo.openPrs,
+    ).length
+    this.status.history = { done: total - pending.length, total }
+    this.status.historyDone = this.cache.syncedAt !== null && pending.length === 0
+    return pending
   }
 
   private historyLeft(): Repo[] {

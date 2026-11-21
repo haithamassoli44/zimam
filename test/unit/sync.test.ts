@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GitHubError, type GitHub } from '@/lib/github'
 import { NODES, ORG_REPOS, PR_STATUS, SEARCH, type RawItem, type RawRepo } from '@/lib/queries'
@@ -28,6 +28,7 @@ function raw(id: string, state: RawItem['state'], updatedAt: string, pr = false)
 }
 
 const page = <T>(nodes: T[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes })
+const count = (nodes: RawItem[], state: RawItem['state']) => nodes.filter((node) => node.state === state).length
 
 // A GitHub with one repository: one open and one closed issue, one open and one merged pull request.
 function fakeGitHub() {
@@ -40,6 +41,8 @@ function fakeGitHub() {
     checks: {} as Record<string, string>,
     rateLimited: false,
     calls: [] as string[],
+    pageSize: Infinity,
+    onQuery: () => {},
   }
 
   const gh: GitHub = {
@@ -49,6 +52,7 @@ function fakeGitHub() {
       const call =
         { [ORG_REPOS]: 'repos', [SEARCH]: 'search', [NODES]: 'nodes', [PR_STATUS]: 'checks' }[text] ?? 'items'
       state.calls.push(call)
+      state.onQuery()
       if (state.rateLimited) throw new GitHubError('Rate limited', 'rate', Date.now() + 60_000)
       if (call === 'repos') {
         const repo: RawRepo = {
@@ -57,10 +61,10 @@ function fakeGitHub() {
           nameWithOwner: 'acme/web',
           isArchived: false,
           owner: { login: 'acme', avatarUrl: '' },
-          openIssues: { totalCount: 1 },
-          openPrs: { totalCount: 1 },
-          allIssues: { totalCount: 2 },
-          allPrs: { totalCount: 2 },
+          openIssues: { totalCount: count(state.issues, 'OPEN') },
+          openPrs: { totalCount: count(state.prs, 'OPEN') },
+          allIssues: { totalCount: state.issues.length },
+          allPrs: { totalCount: state.prs.length },
         }
         return { organization: { repositories: page([repo]) } } as T
       }
@@ -77,7 +81,12 @@ function fakeGitHub() {
       const states = variables.states as string[]
       const list = text.includes('issues(') ? state.issues : state.prs
       const kind = text.includes('issues(') ? 'issues' : 'pullRequests'
-      return { repository: { [kind]: page(list.filter((node) => states.includes(node.state))) } } as T
+      const matching = list.filter((node) => states.includes(node.state))
+      const start = Number(variables.after ?? 0)
+      const nodes = matching.slice(start, start + state.pageSize)
+      const end = start + nodes.length
+      const pageInfo = { hasNextPage: end < matching.length, endCursor: String(end) }
+      return { repository: { [kind]: { pageInfo, nodes } } } as T
     },
   }
   return { gh, state }
@@ -99,6 +108,7 @@ async function setup() {
 }
 
 beforeEach(() => localStorage.clear())
+afterEach(() => vi.restoreAllMocks())
 
 describe('Syncer', () => {
   it('loads open items, then the closed history, without marking any of it as news', async () => {
@@ -109,6 +119,28 @@ describe('Syncer', () => {
     expect(status.historyDone).toBe(true)
     expect(status.syncedAt).not.toBeNull()
     expect(fresh).toEqual([])
+  })
+
+  it('loads a long history in slices, and checks for changes before each one', async () => {
+    const { store, state, status, syncer } = await setup()
+    state.issues.push(...[10, 11, 12, 13, 14, 15].map((n) => raw(`I${n}`, 'CLOSED', ago(240))))
+    state.pageSize = 1
+    // Each request takes 20 seconds, so a slice of the history holds only a few pages.
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    state.onQuery = () => (now += 20_000)
+
+    await syncer.sync()
+    expect(status.historyDone).toBe(false)
+    expect(status.history).toEqual({ done: 0, total: 1 })
+    await vi.waitFor(() => expect(status.historyDone).toBe(true))
+    syncer.stop()
+
+    expect(store.items.size).toBe(10)
+    expect(status.history).toEqual({ done: 1, total: 1 })
+    const pages = state.calls.flatMap((call, index) => (call === 'items' ? [index] : []))
+    const searches = state.calls.flatMap((call, index) => (call === 'search' ? [index] : []))
+    expect(searches.filter((index) => index < pages.at(-1)!).length).toBeGreaterThanOrEqual(2)
   })
 
   it('picks up a change with one search, and marks it as news', async () => {

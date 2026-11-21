@@ -21,9 +21,9 @@ const alert = computed(() => {
 })
 
 const message = computed(() => {
-  const { phase, done, total, syncedAt } = status.value
+  const { phase, done, total, history, syncedAt } = status.value
   if (alert.value) return alert.value
-  if (phase !== 'idle') return t(`sync.phase.${phase}`, { done, total })
+  if (phase !== 'idle') return t(`sync.phase.${phase}`, phase === 'history' ? { ...history } : { done, total })
   return syncedAt ? t('sync.synced', { time: relativeTime(syncedAt, now.value) }) : t('sync.never')
 })
 

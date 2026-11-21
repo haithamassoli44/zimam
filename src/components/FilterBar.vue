@@ -12,7 +12,7 @@ import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import FacetMenu, { type Option } from '@/components/FacetMenu.vue'
 import { CHOICES, NONE, SORTS, toggleValue, type Facet } from '@/lib/filters'
 import { formatNumber } from '@/locale'
-import { displayRepo, owners, people, progress, status } from '@/stores/data'
+import { displayRepo, owners, people, status } from '@/stores/data'
 import {
   activeView,
   askToSave,
@@ -96,7 +96,8 @@ const title = computed(() => (activeView.value ? viewName(activeView.value) : t(
 const historyPercent = computed(() => {
   const wantsClosed = filters.state.length === 0 || filters.state.some((state) => state !== 'open')
   if (status.value.historyDone || !wantsClosed || !status.value.syncedAt) return null
-  return status.value.phase === 'history' ? (progress.value ?? 0) : 0
+  const { history } = status.value
+  return history.total ? Math.round((history.done / history.total) * 100) : 0
 })
 </script>
 
