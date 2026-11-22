@@ -170,6 +170,47 @@ describe('Syncer', () => {
     expect(new Set(left)).toEqual(new Set(['{}']))
   })
 
+  it('loads the history of active repositories first, the latest pushed first', async () => {
+    const repos = [
+      ['old', true, ago(1)],
+      ['quiet', false, ago(24 * 300)],
+      ['busy', false, ago(1)],
+      ['mid', false, ago(24 * 10)],
+      ['unknown', false, null],
+    ] as const
+    const started: string[] = []
+    const gh: GitHub = {
+      scopes: () => ['repo'],
+      rate: () => null,
+      async query<T>(text: string, variables: Record<string, unknown> = {}): Promise<T> {
+        if (text === ORG_REPOS) {
+          const nodes: RawRepo[] = repos.map(([name, isArchived, pushedAt]) => ({
+            id: name,
+            name,
+            nameWithOwner: `acme/${name}`,
+            description: null,
+            isPrivate: false,
+            isArchived,
+            pushedAt,
+            owner: { login: 'acme', avatarUrl: '' },
+            primaryLanguage: null,
+            openIssues: { totalCount: 0 },
+            openPrs: { totalCount: 0 },
+            allIssues: { totalCount: 1 },
+            allPrs: { totalCount: 0 },
+          }))
+          return { organization: { repositories: page(nodes) } } as T
+        }
+        started.push(variables.name as string)
+        return { repository: { issues: page([]) } } as T
+      },
+    }
+    const store: SyncStore = { repos: new Map(), items: new Map(), changed: () => {} }
+    const syncer = await Syncer.open(ws, gh, store, idleStatus())
+    await syncer.sync()
+    expect(started).toEqual(['busy', 'mid', 'quiet', 'unknown', 'old'])
+  })
+
   it('picks up a change with one search, and marks it as news', async () => {
     const { store, state, syncer, fresh } = await setup()
     await syncer.sync()

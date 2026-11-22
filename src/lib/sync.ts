@@ -404,8 +404,13 @@ export class Syncer {
     return pending
   }
 
+  // Repositories still worked on come first, the latest pushed first, so what people look at fills in soonest.
   private historyLeft(): Repo[] {
-    return [...this.store.repos.values()].filter((repo) => this.historyKinds(repo).length > 0)
+    return [...this.store.repos.values()]
+      .filter((repo) => this.historyKinds(repo).length > 0)
+      .toSorted(
+        (a, b) => Number(a.isArchived) - Number(b.isArchived) || (b.pushedAt ?? '').localeCompare(a.pushedAt ?? ''),
+      )
   }
 
   private historyKinds(repo: Repo): ('issues' | 'pullRequests')[] {
