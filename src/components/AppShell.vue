@@ -6,11 +6,13 @@ import { useI18n } from 'vue-i18n'
 import BrandMark from '@/components/BrandMark.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import ItemList from '@/components/ItemList.vue'
+import ReposPage from '@/components/ReposPage.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import SideBar from '@/components/SideBar.vue'
 import ViewDialog from '@/components/ViewDialog.vue'
 import { sides } from '@/locale'
 import { ui } from '@/stores/ui'
+import { page } from '@/stores/view'
 
 const { t } = useI18n()
 </script>
@@ -43,8 +45,11 @@ const { t } = useI18n()
         />
         <BrandMark />
       </header>
-      <FilterBar class="shrink-0" />
-      <ItemList class="min-h-0 flex-1" />
+      <ReposPage v-if="page === 'repos'" class="min-h-0 flex-1" />
+      <template v-else>
+        <FilterBar class="shrink-0" />
+        <ItemList class="min-h-0 flex-1" />
+      </template>
     </main>
 
     <SettingsPanel />

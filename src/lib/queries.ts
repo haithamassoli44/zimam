@@ -1,4 +1,4 @@
-import type { Checks, Item, Person, Repo, Review } from '@/types'
+import type { Checks, Item, Language, Person, Repo, Review } from '@/types'
 
 const PERSON = 'login avatarUrl(size: 64)'
 
@@ -17,7 +17,8 @@ const CHECKS = 'commits(last: 1) { nodes { commit { statusCheckRollup { state } 
 
 const REPO = `
   fragment RepoFields on Repository {
-    id name nameWithOwner isArchived owner { login avatarUrl(size: 64) }
+    id name nameWithOwner description isPrivate isArchived pushedAt owner { login avatarUrl(size: 64) }
+    primaryLanguage { name color }
     openIssues: issues(states: OPEN) { totalCount }
     openPrs: pullRequests(states: OPEN) { totalCount }
     allIssues: issues { totalCount }
@@ -100,8 +101,12 @@ export interface RawRepo {
   id: string
   name: string
   nameWithOwner: string
+  description: string | null
+  isPrivate: boolean
   isArchived: boolean
+  pushedAt: string | null
   owner: { login: string; avatarUrl: string }
+  primaryLanguage: Language | null
   openIssues: { totalCount: number }
   openPrs: { totalCount: number }
   allIssues: { totalCount: number }
@@ -115,7 +120,11 @@ export function toRepo(raw: RawRepo): Repo {
     ownerAvatar: raw.owner.avatarUrl,
     name: raw.name,
     fullName: raw.nameWithOwner,
+    description: raw.description,
+    language: raw.primaryLanguage,
+    isPrivate: raw.isPrivate,
     isArchived: raw.isArchived,
+    pushedAt: raw.pushedAt,
     openIssues: raw.openIssues.totalCount,
     openPrs: raw.openPrs.totalCount,
     issues: raw.allIssues.totalCount,

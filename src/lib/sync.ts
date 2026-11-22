@@ -83,6 +83,8 @@ export class Syncer {
       cache.sources = sources
       cache.reposAt = null
     }
+    // Repositories saved before they carried a description, language and last push are read again on the first sync.
+    if (cache.repos.some((repo) => repo.pushedAt === undefined)) cache.reposAt = null
     return new Syncer(ws, gh, store, status, cache)
   }
 

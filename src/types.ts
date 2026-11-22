@@ -61,11 +61,21 @@ export interface Repo {
   ownerAvatar: string
   name: string
   fullName: string
+  description: string | null
+  language: Language | null
+  isPrivate: boolean
   isArchived: boolean
+  /** The last push to any branch. */
+  pushedAt: string | null
   openIssues: number
   openPrs: number
   issues: number
   prs: number
+}
+
+export interface Language {
+  name: string
+  color: string | null
 }
 
 export interface Person {

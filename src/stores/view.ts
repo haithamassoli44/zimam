@@ -20,20 +20,56 @@ import { activeWorkspace, WORKSPACE_PARAM } from './settings'
 export const filters = reactive<Filters>(fromQuery(location.search))
 export const query = computed(() => toQuery(filters))
 
+/** The list of issues and pull requests, or the workspace's repositories. Each has its own address. */
+export type Page = 'items' | 'repos'
+
+const BASE = import.meta.env.BASE_URL
+const pageAt = (path: string): Page => (path.replace(/\/+$/, '') === `${BASE}repos` ? 'repos' : 'items')
+
+export const page = ref<Page>(pageAt(location.pathname))
+
 function address(ws: string | undefined, search: string): string {
   const params = new URLSearchParams(ws ? { [WORKSPACE_PARAM]: ws } : {})
   for (const [key, value] of new URLSearchParams(search)) params.append(key, value)
   return params.size ? `?${params}` : ''
 }
 
+// The list's address carries its filters. The repositories' address only names the workspace.
+function link(to: Page, ws: string | undefined, search: string): string {
+  return to === 'repos' ? `${BASE}repos${address(ws, '')}` : `${BASE}${address(ws, search)}`
+}
+
 watch(
-  [query, () => activeWorkspace.value?.id],
-  ([search, ws]) => {
-    const next = address(ws, search)
-    if (next !== location.search) history.replaceState(null, '', next || location.pathname)
+  [query, () => activeWorkspace.value?.id, page],
+  ([search, ws, current]) => {
+    const next = link(current, ws, search)
+    if (next !== location.pathname + location.search) history.replaceState(null, '', next)
   },
   { immediate: true },
 )
+
+/** Opens a page as a new entry in the browser's history, so Back returns to the one before. */
+export function go(to: Page) {
+  if (page.value === to) return
+  page.value = to
+  history.pushState(null, '', link(to, activeWorkspace.value?.id, query.value))
+}
+
+addEventListener('popstate', () => {
+  page.value = pageAt(location.pathname)
+  if (page.value === 'items') Object.assign(filters, fromQuery(location.search))
+})
+
+/** The address of the list with these filters, on top of the defaults. */
+export function itemsLink(picked: Partial<Filters>): string {
+  return link('items', activeWorkspace.value?.id, toQuery({ ...defaultFilters(), ...picked }))
+}
+
+/** Opens the list with these filters, on top of the defaults. */
+export function showItems(picked: Partial<Filters>) {
+  Object.assign(filters, defaultFilters(), picked)
+  go('items')
+}
 
 watch(
   () => activeWorkspace.value?.id,
@@ -77,6 +113,7 @@ export const viewDialog = reactive({ open: false, viewId: null as string | null,
 export function openView(view: View) {
   Object.assign(filters, fromQuery(view.query))
   lastViewId.value = view.id
+  go('items')
 }
 
 export function askToSave() {
@@ -112,5 +149,5 @@ export function deleteView(view: View) {
 }
 
 export function viewLink(view: View): string {
-  return `${location.origin}${location.pathname}${address(activeWorkspace.value?.id, view.query)}`
+  return `${location.origin}${link('items', activeWorkspace.value?.id, view.query)}`
 }

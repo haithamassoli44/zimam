@@ -13,11 +13,11 @@ import {
 
 import { normalize } from './text'
 
-const REPO_STATUSES = ['active', 'archived'] as const
+export const REPO_STATUSES = ['active', 'archived'] as const
 const RANGES = ['day', 'week', 'month', 'quarter', 'stale'] as const
 export const SORTS = ['updated', 'created', 'oldest', 'comments', 'quiet'] as const
 
-type RepoStatus = (typeof REPO_STATUSES)[number]
+export type RepoStatus = (typeof REPO_STATUSES)[number]
 type Range = (typeof RANGES)[number]
 export type Sort = (typeof SORTS)[number]
 

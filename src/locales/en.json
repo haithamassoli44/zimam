@@ -38,7 +38,8 @@
     "views": "Views",
     "newWorkspace": "New workspace",
     "settings": "Settings",
-    "menu": "Menu"
+    "menu": "Menu",
+    "repos": "Repositories"
   },
   "presets": {
     "open": "Everything open",
@@ -219,6 +220,32 @@
     "installVia": {
       "ios": "To install, open the Share menu and choose Add to Home Screen",
       "mac": "To install, choose File, then Add to Dock"
+    }
+  },
+  "repos": {
+    "count": "No repositories | 1 repository | {n} repositories",
+    "search": "Find a repository",
+    "private": "Private",
+    "onGitHub": "Open {name} on GitHub",
+    "opened": "Opened in the last 6 months: {n}",
+    "awaitingCount": "{n} awaiting review",
+    "failingCount": "{n} failing",
+    "columns": {
+      "name": "Repository",
+      "opened": "Opened each week",
+      "issues": "Open issues",
+      "prs": "Open pull requests",
+      "awaiting": "Awaiting review",
+      "failing": "Failing checks",
+      "activity": "Last activity"
+    },
+    "sorts": {
+      "activity": "Recent activity",
+      "name": "Name",
+      "issues": "Most open issues",
+      "prs": "Most open pull requests",
+      "awaiting": "Most awaiting review",
+      "failing": "Most failing checks"
     }
   }
 }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import UIcon from '@nuxt/ui/components/Icon.vue'
+
 import { formatNumber } from '@/locale'
 
-defineProps<{ label: string; count: number; active?: boolean }>()
+defineProps<{ label: string; count: number; active?: boolean; icon?: string }>()
 const emit = defineEmits<{ pick: [] }>()
 </script>
 
@@ -19,6 +21,7 @@ const emit = defineEmits<{ pick: [] }>()
       :aria-current="active ? 'page' : undefined"
       @click="emit('pick')"
     >
+      <UIcon v-if="icon" :name="icon" class="size-4 shrink-0 text-muted" />
       <span class="min-w-0 flex-1 truncate">{{ label }}</span>
       <span
         class="font-mono text-xs text-muted tabular-nums"

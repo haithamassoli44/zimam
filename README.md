@@ -15,6 +15,7 @@ Every issue and pull request across your GitHub organizations, in one fast, filt
 
 - **One list across sources.** A workspace mixes organizations, user accounts and single repositories. Keep as many workspaces as you like.
 - **Faceted filters with live counts.** Type, state, active or archived repository, account, repository, label, author, assignee, review, checks and last activity. Each value shows how many items picking it would give.
+- **Repositories page.** Every repository in the workspace with its open issues and pull requests, those awaiting review or failing checks, its last activity, and bars of what was opened each week over six months. Each count opens the list it counts.
 - **Views are URLs.** Save filter sets in the sidebar; every screen is a link you can share or bookmark.
 - **Near-live.** Changes appear within a minute while the tab is open, and the rows that changed are marked.
 - **Fast.** Opens from a local cache in under a second and scrolls thousands of rows with virtual rendering.

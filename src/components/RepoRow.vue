@@ -1,0 +1,192 @@
+<script lang="ts">
+// The repositories page's columns, shared by its header and rows. Below this width the rows stack instead.
+export const REPO_COLUMNS =
+  '@4xl:grid @4xl:grid-cols-[minmax(0,1fr)_6.5rem_5rem_6.5rem_6rem_5.5rem_7rem_1.5rem] @4xl:gap-x-3'
+</script>
+
+<script setup lang="ts">
+import UButton from '@nuxt/ui/components/Button.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
+import UTooltip from '@nuxt/ui/components/Tooltip.vue'
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import WeekBars from '@/components/WeekBars.vue'
+import type { Filters } from '@/lib/filters'
+import { statusOf, type RepoRow } from '@/lib/repos'
+import { formatNumber, fullDate, relativeTime } from '@/locale'
+import { now } from '@/stores/clock'
+import { displayRepo } from '@/stores/data'
+import { itemsLink, showItems } from '@/stores/view'
+
+const props = defineProps<{ row: RepoRow }>()
+const { t } = useI18n()
+
+const repo = computed(() => props.row.repo)
+const onGitHub = computed(() => `https://github.com/${repo.value.fullName}`)
+const opened = computed(() => t('repos.opened', { n: formatNumber(props.row.weeks.reduce((sum, n) => sum + n, 0)) }))
+const active = computed(() => (props.row.activeAt ? relativeTime(props.row.activeAt, now.value) : ''))
+
+const only = computed<Partial<Filters>>(() => ({ repo: [repo.value.fullName], status: [statusOf(repo.value)] }))
+// The name opens what is open in the repository. Nothing changes in an archived one, so it opens everything there.
+const everything = computed<Partial<Filters>>(() => ({ ...only.value, ...(repo.value.isArchived && { state: [] }) }))
+
+interface Count {
+  key: 'issues' | 'prs' | 'awaiting' | 'failing'
+  icon?: string
+  count: number
+  filters: Partial<Filters>
+}
+
+// Each count opens the list of what it counts.
+const counts = computed<Count[]>(() => [
+  {
+    key: 'issues',
+    icon: 'i-octicon-issue-opened-16',
+    count: repo.value.openIssues,
+    filters: { ...only.value, kind: ['issue'] },
+  },
+  {
+    key: 'prs',
+    icon: 'i-octicon-git-pull-request-16',
+    count: repo.value.openPrs,
+    filters: { ...only.value, kind: ['pr'] },
+  },
+  { key: 'awaiting', count: props.row.awaiting, filters: { ...only.value, kind: ['pr'], review: ['pending'] } },
+  { key: 'failing', count: props.row.failing, filters: { ...only.value, kind: ['pr'], checks: ['failure'] } },
+])
+
+// A click opens the list in place. With a modifier key or the middle button, the browser opens the link itself.
+function follow(event: MouseEvent, filters: Partial<Filters>) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  showItems(filters)
+}
+
+const label = (count: Count) => `${t(`repos.columns.${count.key}`)}: ${formatNumber(count.count)}`
+const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-primary'
+</script>
+
+<template>
+  <div
+    class="border-b border-default px-4 py-3 transition-colors hover:bg-elevated/60 sm:px-6 @4xl:items-center @4xl:py-2.5"
+    :class="REPO_COLUMNS"
+  >
+    <div class="min-w-0">
+      <div class="flex min-w-0 items-center gap-2">
+        <a
+          :href="itemsLink(everything)"
+          class="min-w-0 truncate rounded-sm text-[15px] leading-6 font-medium text-highlighted transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"
+          @click="follow($event, everything)"
+          ><bdi>{{ displayRepo(repo.fullName) }}</bdi></a
+        >
+        <UTooltip v-if="repo.isPrivate" :text="t('repos.private')">
+          <UIcon name="i-octicon-lock-16" class="size-4 shrink-0 text-muted" />
+        </UTooltip>
+        <span v-if="repo.isPrivate" class="sr-only">{{ t('repos.private') }}</span>
+        <span
+          v-if="repo.isArchived"
+          class="inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
+          >{{ t('item.archived') }}</span
+        >
+        <UButton
+          :href="onGitHub"
+          target="_blank"
+          rel="noopener"
+          icon="i-octicon-link-external-16"
+          color="neutral"
+          variant="ghost"
+          size="xs"
+          class="ms-auto @4xl:hidden"
+          :aria-label="t('repos.onGitHub', { name: repo.fullName })"
+          :ui="{ leadingIcon: 'text-muted' }"
+        />
+      </div>
+      <div
+        v-if="repo.description || repo.language"
+        class="mt-0.5 flex min-w-0 items-center gap-3 text-[13px] leading-5 text-muted"
+      >
+        <span v-if="repo.description" class="truncate" dir="auto">{{ repo.description }}</span>
+        <span v-if="repo.language" class="hidden shrink-0 items-center gap-1.5 sm:inline-flex">
+          <span
+            class="size-2 rounded-full ring-1 ring-black/10 ring-inset dark:ring-white/15"
+            :style="{ background: repo.language.color ?? 'currentColor' }"
+          />
+          <bdi>{{ repo.language.name }}</bdi>
+        </span>
+      </div>
+
+      <!-- Narrow screens: the counts under the name, the weeks at the end. -->
+      <div class="mt-2 flex items-end gap-4 @4xl:hidden">
+        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[13px] leading-5 text-muted">
+          <a
+            v-for="count in counts.slice(0, 2)"
+            :key="count.key"
+            :href="itemsLink(count.filters)"
+            class="inline-flex items-center gap-1.5 text-toned"
+            :class="LINK"
+            :aria-label="label(count)"
+            @click="follow($event, count.filters)"
+          >
+            <UIcon :name="count.icon!" class="size-4 text-muted" />
+            <span class="font-mono tabular-nums">{{ formatNumber(count.count) }}</span>
+          </a>
+          <template v-for="count in counts.slice(2)" :key="count.key">
+            <a
+              v-if="count.count"
+              :href="itemsLink(count.filters)"
+              :class="[LINK, count.key === 'failing' ? 'text-error' : 'text-highlighted']"
+              @click="follow($event, count.filters)"
+              >{{ t(`repos.${count.key}Count`, { n: formatNumber(count.count) }) }}</a
+            >
+          </template>
+          <UTooltip v-if="active" :text="fullDate(row.activeAt)">
+            <span>{{ active }}</span>
+          </UTooltip>
+        </div>
+        <UTooltip :text="opened">
+          <span class="flex" :aria-label="opened" role="img"><WeekBars :weeks="row.weeks" /></span>
+        </UTooltip>
+      </div>
+    </div>
+
+    <!-- Wide screens: one column each. -->
+    <UTooltip :text="opened">
+      <span class="hidden @4xl:flex" :aria-label="opened" role="img"><WeekBars :weeks="row.weeks" /></span>
+    </UTooltip>
+    <template v-for="count in counts" :key="count.key">
+      <a
+        v-if="count.count"
+        :href="itemsLink(count.filters)"
+        class="hidden justify-self-end font-mono text-[13px] tabular-nums @4xl:block"
+        :class="[
+          LINK,
+          count.key === 'failing' ? 'text-error' : count.key === 'awaiting' ? 'text-highlighted' : 'text-toned',
+        ]"
+        :aria-label="label(count)"
+        @click="follow($event, count.filters)"
+        >{{ formatNumber(count.count) }}</a
+      >
+      <span v-else class="hidden justify-self-end font-mono text-[13px] text-muted opacity-60 @4xl:block">
+        <span aria-hidden="true">–</span>
+        <span class="sr-only">{{ label(count) }}</span>
+      </span>
+    </template>
+    <UTooltip v-if="active" :text="fullDate(row.activeAt)">
+      <span class="hidden justify-self-end text-[13px] whitespace-nowrap text-muted @4xl:block">{{ active }}</span>
+    </UTooltip>
+    <span v-else class="hidden @4xl:block" />
+    <UButton
+      :href="onGitHub"
+      target="_blank"
+      rel="noopener"
+      icon="i-octicon-link-external-16"
+      color="neutral"
+      variant="ghost"
+      size="xs"
+      class="hidden justify-self-end @4xl:inline-flex"
+      :aria-label="t('repos.onGitHub', { name: repo.fullName })"
+      :ui="{ leadingIcon: 'text-muted' }"
+    />
+  </div>
+</template>
