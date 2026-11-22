@@ -158,7 +158,8 @@ const failed = computed(() => empty.value && status.value.error)
       </div>
     </div>
 
-    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto">
+    <!-- Relative, so what's placed absolutely in the list, like the hidden announcement, can't stretch the window. -->
+    <div ref="scroller" class="relative min-h-0 flex-1 overflow-y-auto">
       <div v-if="gathering" aria-busy="true">
         <p class="px-4 py-3 text-sm text-muted sm:px-6">{{ t('results.gathering') }}</p>
         <div
