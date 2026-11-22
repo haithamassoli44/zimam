@@ -11,6 +11,7 @@ import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import { languageName, sides } from '@/locale'
+import { install, installed, installPrompt, manualInstall } from '@/pwa'
 import { deleteWorkspace, reloadWorkspace } from '@/stores/data'
 import { activeWorkspace, exportSettings, importSettings, settings, updateWorkspace } from '@/stores/settings'
 import { openSetup, ui } from '@/stores/ui'
@@ -151,6 +152,23 @@ async function upload(event: Event) {
             </UButton>
           </div>
         </section>
+
+        <template v-if="!installed && (installPrompt || manualInstall)">
+          <USeparator />
+          <section class="space-y-2">
+            <h3 class="font-medium text-highlighted">{{ t('settings.app') }}</h3>
+            <p class="text-xs text-muted">{{ t('settings.installHelp') }}</p>
+            <UButton
+              v-if="installPrompt"
+              color="neutral"
+              variant="outline"
+              icon="i-octicon-download-16"
+              :label="t('settings.install')"
+              @click="install"
+            />
+            <p v-else class="text-sm">{{ t(`settings.installVia.${manualInstall}`) }}</p>
+          </section>
+        </template>
       </div>
     </template>
   </USlideover>

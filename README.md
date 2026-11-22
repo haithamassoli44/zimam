@@ -18,6 +18,7 @@ Every issue and pull request across your GitHub organizations, in one fast, filt
 - **Views are URLs.** Save filter sets in the sidebar; every screen is a link you can share or bookmark.
 - **Near-live.** Changes appear within a minute while the tab is open, and the rows that changed are marked.
 - **Fast.** Opens from a local cache in under a second and scrolls thousands of rows with virtual rendering.
+- **Installable.** Install it as an app on a computer or phone. It opens without a network and shows what was saved.
 - **Arabic and English.** Right-to-left layout, Arabic plural forms, and search that folds Arabic spelling variants (hamza, tā' marbūṭa, diacritics).
 - Light and dark themes, comfortable or compact rows.
 
@@ -29,6 +30,7 @@ Zimam is a static single-page app with no backend: the browser calls GitHub's Gr
 - **Updates.** Every minute, one search query per eight sources finds everything updated since the last check (`updated:>=`, with a 10-minute overlap for the search index's lag). Rows that changed are marked for a few seconds.
 - **What search can't see.** A finished CI run doesn't change a pull request's `updatedAt`, so open pull requests' checks and reviews are polled every 5 minutes. Deleted and transferred items are caught by refetching the open items every 6 hours.
 - **Rate limits.** GitHub's hourly allowance is shared by every tool on your account. Zimam leaves 2% of it for the others, loads history only while more than 15% remains, and pauses until the reset time GitHub reports.
+- **Offline.** A service worker keeps the app's own files, never GitHub's responses, so the app opens without a network and shows the cached list. Syncing resumes as soon as the connection is back. A new version waits until you reload.
 - **Storage.** Each workspace's items are cached in IndexedDB, settings and views in `localStorage`. With several tabs open, one tab syncs (Web Locks) and the others pick up its cache (BroadcastChannel).
 - **Filtering** is one pass over the cached items, so results and counts update as you click. Filters live in the URL's query string.
 

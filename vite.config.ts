@@ -6,6 +6,7 @@ import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import ui from '@nuxt/ui/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig, type Plugin } from 'vite'
+import { VitePWA } from 'vite-plugin-pwa'
 
 import { DEV_TOKEN_PATH } from './src/dev.ts'
 import { uiIcons } from './src/ui-icons.ts'
@@ -64,6 +65,54 @@ export default defineConfig(({ command }) => ({
       experimental: { componentDetection: command === 'build' },
     }),
     VueI18nPlugin({ include: fileURLToPath(new URL('./src/locales/*.json', import.meta.url)) }),
+    VitePWA({
+      // A new version waits until the reader reloads: src/pwa.ts offers it.
+      registerType: 'prompt',
+      injectRegister: false,
+      // The precache below takes the icons with every other file.
+      includeManifestIcons: false,
+      manifest: {
+        id: '/',
+        name: 'Zimam',
+        short_name: 'Zimam',
+        description: 'Every issue and pull request across your GitHub organizations, in one fast, filterable list.',
+        lang: 'en',
+        start_url: '/',
+        scope: '/',
+        display: 'standalone',
+        background_color: '#ffffff',
+        theme_color: '#ffffff',
+        icons: [
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+        // The install dialogs of Chrome and Edge show these.
+        screenshots: [
+          {
+            src: '/screenshots/wide.webp',
+            sizes: '1440x900',
+            type: 'image/webp',
+            form_factor: 'wide',
+            label: 'Every open issue and pull request of an organization, with filters and counts',
+          },
+          {
+            src: '/screenshots/narrow.webp',
+            sizes: '780x1688',
+            type: 'image/webp',
+            form_factor: 'narrow',
+            label: 'The same list on a phone',
+          },
+        ],
+      },
+      workbox: {
+        // The app itself, so it opens offline. GitHub's API is never cached: the list's own cache is IndexedDB.
+        globPatterns: ['**/*.{html,js,css,woff2,svg,ico,png}'],
+        globIgnores: ['og.png', 'screenshots/**'],
+        // Cloudflare serves these, like the analytics endpoint; they aren't pages of the app.
+        navigateFallbackDenylist: [/^\/cdn-cgi\//],
+      },
+    }),
     devGitHubToken(),
   ],
 }))

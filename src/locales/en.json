@@ -1,7 +1,9 @@
 {
   "app": {
     "name": "Zimam",
-    "about": "Named after the Abbasid Dīwān al-Zimām, the office that kept watch over every other office"
+    "about": "Named after the Abbasid Dīwān al-Zimām, the office that kept watch over every other office",
+    "updateReady": "A new version of Zimam is ready",
+    "reload": "Reload"
   },
   "setup": {
     "title": "Take the reins",
@@ -208,6 +210,13 @@
     "import": "Import",
     "exportHelp": "Workspaces and views as a file, without tokens",
     "imported": "Settings imported. Add a token to each workspace to use it.",
-    "importFailed": "That file isn't a Zimam settings file"
+    "importFailed": "That file isn't a Zimam settings file",
+    "app": "App",
+    "install": "Install Zimam",
+    "installHelp": "Opens like any other app, and shows what was saved even offline",
+    "installVia": {
+      "ios": "To install, open the Share menu and choose Add to Home Screen",
+      "mac": "To install, choose File, then Add to Dock"
+    }
   }
 }

@@ -37,8 +37,10 @@
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
     "vite": "8.3.5",
+    "vite-plugin-pwa": "2.0.0",
     "vitest": "5.0.5",
     "vue-tsc": "3.3.13",
+    "workbox-window": "7.4.1",
     "wrangler": "4.158.0"
   },
   "packageManager": "bun@1.4.4"

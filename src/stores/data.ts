@@ -129,3 +129,5 @@ setInterval(tick, TICK)
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && Date.now() - lastTick > TICK / 2) tick()
 })
+// Back online: catch up now, not at the next tick.
+addEventListener('online', tick)
