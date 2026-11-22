@@ -7,16 +7,24 @@ import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import { defineShortcuts } from '@nuxt/ui/composables'
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
+import { useReorder } from '@/components/reorder'
 import RepoRow, { REPO_COLUMN_WIDTHS, REPO_COLUMNS } from '@/components/RepoRow.vue'
 import { REPO_STATUSES, type RepoStatus } from '@/lib/filters'
-import { COUNT_KEYS, defaultRepoFilters, REPO_SORTS, toggleStatus, type RepoSort } from '@/lib/repos'
+import {
+  COUNT_KEYS,
+  defaultRepoFilters,
+  REPO_SORTS,
+  toggleStatus,
+  type RepoRow as Row,
+  type RepoSort,
+} from '@/lib/repos'
 import { formatNumber } from '@/locale'
-import { loaded, repos, status, syncNow } from '@/stores/data'
-import { repoFilters, repoResult } from '@/stores/repos'
+import { displayRepo, loaded, repos, status, syncNow } from '@/stores/data'
+import { arrangePinned, repoFilters, repoResult } from '@/stores/repos'
 import { openSetup } from '@/stores/ui'
 
 const { t } = useI18n()
@@ -25,7 +33,29 @@ const scroller = useTemplateRef<HTMLElement>('scroller')
 
 defineShortcuts({ '/': () => search.value?.inputRef?.focus() })
 
-const rows = computed(() => repoResult.value.rows)
+const shown = computed(() => repoResult.value.pinned.length + repoResult.value.rest.length)
+
+// Pinned repositories stay on top in the order they were put in, whatever the sort. Their handles move them.
+const shownPinned = () => repoResult.value.pinned.map((row) => row.repo.id)
+const reorder = useReorder(() => scroller.value, shownPinned, arrangePinned)
+const pinned = computed(() => {
+  const rows = repoResult.value.pinned
+  const draft = reorder.draft.value
+  if (!draft) return rows
+  const byId = new Map(rows.map((row) => [row.repo.id, row]))
+  return draft.flatMap((id) => byId.get(id) ?? [])
+})
+const moved = ref('')
+
+async function step(row: Row, by: -1 | 1) {
+  const to = await reorder.step(row.repo.id, by)
+  if (to === null) return
+  moved.value = t('repos.moved', {
+    name: displayRepo(row.repo.fullName),
+    n: formatNumber(to + 1),
+    total: formatNumber(pinned.value.length),
+  })
+}
 
 const statuses = computed(() =>
   REPO_STATUSES.map((value) => ({
@@ -55,6 +85,8 @@ const COLUMNS: { key: string; sort?: RepoSort; start?: boolean }[] = [
   { key: 'activity', sort: 'activity' },
 ]
 
+const GROUP = 'border-b border-default bg-muted px-4 py-1.5 text-xs leading-4 font-medium text-muted sm:px-6'
+
 const filtered = computed(() => repoFilters.q.trim() !== '' || repoFilters.status.join() !== 'active')
 
 function clear() {
@@ -82,10 +114,8 @@ const failed = computed(() => empty.value && status.value.error)
           class="flex min-w-0 flex-1 items-baseline gap-2 text-2xl font-medium text-highlighted lg:text-[28px] lg:leading-9"
         >
           <span class="truncate">{{ t('nav.repos') }}</span>
-          <span class="shrink-0 font-normal text-muted tabular-nums" aria-hidden="true">{{
-            formatNumber(rows.length)
-          }}</span>
-          <span class="sr-only">{{ t('repos.count', { n: formatNumber(rows.length) }, rows.length) }}</span>
+          <span class="shrink-0 font-normal text-muted tabular-nums" aria-hidden="true">{{ formatNumber(shown) }}</span>
+          <span class="sr-only">{{ t('repos.count', { n: formatNumber(shown) }, shown) }}</span>
         </h1>
 
         <UInput
@@ -162,7 +192,7 @@ const failed = computed(() => empty.value && status.value.error)
         />
       </div>
 
-      <div v-else-if="!rows.length" class="flex flex-col items-center justify-center gap-2 px-6 py-24 text-center">
+      <div v-else-if="!shown" class="flex flex-col items-center justify-center gap-2 px-6 py-24 text-center">
         <p class="text-xl font-medium text-highlighted">{{ filtered ? t('filters.nothing') : t('results.empty') }}</p>
         <UButton
           v-if="filtered"
@@ -197,8 +227,23 @@ const failed = computed(() => empty.value && status.value.error)
             <span v-else class="text-balance">{{ t(`repos.columns.${column.key}`) }}</span>
           </template>
         </div>
-        <RepoRow v-for="row in rows" :key="row.repo.id" :row="row" />
+        <template v-if="pinned.length">
+          <h2 :class="GROUP">{{ t('repos.pinned') }}</h2>
+          <RepoRow
+            v-for="row in pinned"
+            :key="row.repo.id"
+            :row="row"
+            :data-reorder="row.repo.id"
+            :class="reorder.dragged.value === row.repo.id && 'z-1 bg-elevated shadow-md'"
+            :style="reorder.dragged.value === row.repo.id && { transform: `translateY(${reorder.shift.value}px)` }"
+            @grab="reorder.start($event, row.repo.id)"
+            @step="step(row, $event)"
+          />
+          <h2 v-if="repoResult.rest.length" :class="GROUP">{{ t('repos.rest') }}</h2>
+        </template>
+        <RepoRow v-for="row in repoResult.rest" :key="row.repo.id" :row="row" />
       </template>
+      <p class="sr-only" aria-live="polite">{{ moved }}</p>
     </div>
   </div>
 </template>

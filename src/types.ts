@@ -28,12 +28,15 @@ export type Checks = (typeof CHECKS)[number]
 export type Merge = (typeof MERGES)[number]
 export type Involvement = (typeof INVOLVEMENTS)[number]
 
-export type SourceKind = 'org' | 'user' | 'repo'
+export const SOURCE_KINDS = ['org', 'user', 'repo'] as const
+export type SourceKind = (typeof SOURCE_KINDS)[number]
 
 export interface Source {
   kind: SourceKind
   /** A user or organization login, or `owner/name` for a single repository. */
   name: string
+  /** The ids of the only repositories an account brings. Without it, it brings all of them, new ones too. */
+  only?: string[]
 }
 
 export interface View {
@@ -51,6 +54,8 @@ export interface Workspace {
   token: string
   sources: Source[]
   views: View[]
+  /** Repositories kept at the top of the repositories page, by id, in the order they were put in. */
+  pinned: string[]
 }
 
 export interface Settings {

@@ -15,7 +15,7 @@ import {
   type RawItem,
   type RawStatus,
 } from './queries'
-import { belongsTo, qualifier, reposOf, sourcesKey } from './sources'
+import { brings, qualifier, reposOf, sourcesKey } from './sources'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -125,6 +125,8 @@ export class Syncer {
   private askedRequested = false
   // How many times in a row GitHub hasn't known whether a pull request conflicts.
   private unknownMerge = new Map<string, number>()
+  // Repositories the search finds changes in that the workspace doesn't hold, such as those left out of a source.
+  private outside = new Set<string>()
 
   static async open(ws: Workspace, gh: GitHub, store: SyncStore, status: SyncStatus): Promise<Syncer> {
     const sources = sourcesKey(ws.sources)
@@ -132,6 +134,10 @@ export class Syncer {
     if (cache.sources !== sources) {
       cache.sources = sources
       cache.reposAt = null
+      // What the sources no longer bring goes now, rather than once the repositories have loaded again.
+      cache.repos = cache.repos.filter((repo) => ws.sources.some((source) => brings(source, repo)))
+      const kept = new Set(cache.repos.map((repo) => repo.id))
+      cache.items = cache.items.filter((item) => kept.has(item.repoId))
     }
     return new Syncer(ws, gh, store, status, cache)
   }
@@ -288,7 +294,7 @@ export class Syncer {
     const failed: Source[] = []
     for (const source of this.ws.sources) {
       try {
-        for (const repo of await reposOf(this.gh, source)) repos.set(repo.id, repo)
+        for (const repo of await reposOf(this.gh, source)) if (brings(source, repo)) repos.set(repo.id, repo)
       } catch (error) {
         if (!(error instanceof GitHubError) || error.kind !== 'query') throw error
         failed.push(source)
@@ -297,12 +303,14 @@ export class Syncer {
     this.status.failedSources = failed.map((source) => source.name)
     // A source GitHub couldn't read this time keeps its repositories, so one bad answer doesn't empty the list.
     for (const repo of this.store.repos.values()) {
-      if (!repos.has(repo.id) && failed.some((source) => belongsTo(repo, source))) repos.set(repo.id, repo)
+      if (!repos.has(repo.id) && failed.some((source) => brings(source, repo))) repos.set(repo.id, repo)
     }
     for (const item of this.store.items.values()) if (!repos.has(item.repoId)) this.store.items.delete(item.id)
     this.store.repos.clear()
     for (const [id, repo] of repos) this.store.repos.set(id, repo)
+    // A repository that comes back, such as one picked again, loads its items again.
     this.cache.openDone = this.cache.openDone.filter((id) => repos.has(id))
+    for (const id of Object.keys(this.cache.history)) if (!repos.has(id)) delete this.cache.history[id]
     this.cache.reposAt = Date.now()
     this.showProgress()
     this.changed([])
@@ -360,12 +368,12 @@ export class Syncer {
       this.cache.reconciledAt = started
       await this.loadOpen()
     }
-    const newRepo = found.some((item) => !this.store.repos.has(item.repoId))
-    this.busy = this.put(found) || tooMany
-    if (newRepo) {
-      await this.loadRepos()
-      await this.loadOpen()
-    }
+    // A change in a repository the workspace doesn't hold may be in a new one, or in one it leaves out.
+    const unknown = found.filter((item) => !this.store.repos.has(item.repoId) && !this.outside.has(item.repoId))
+    if (unknown.length) await this.loadRepos()
+    for (const item of unknown) if (!this.store.repos.has(item.repoId)) this.outside.add(item.repoId)
+    this.busy = this.put(found.filter((item) => this.store.repos.has(item.repoId))) || tooMany
+    if (unknown.length) await this.loadOpen()
     this.searchedAt = started
     this.cache.watermark = started
   }
@@ -405,7 +413,7 @@ export class Syncer {
         continue
       }
       for (const repo of this.store.repos.values())
-        if (belongsTo(repo, source) && !repo.isArchived) probes.push({ path: `/repos/${repo.fullName}/${list}` })
+        if (brings(source, repo) && !repo.isArchived) probes.push({ path: `/repos/${repo.fullName}/${list}` })
     }
     const usable = probes.length <= PROBE_LIMIT && !probes.some((probe) => this.unprobeable.has(probe.path))
     return usable ? probes : null

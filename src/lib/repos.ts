@@ -137,8 +137,11 @@ const ORDER = {
   ...Object.fromEntries(COUNT_KEYS.map((key) => [key, most((row) => row.counts[key])])),
 } as Record<RepoSort, (a: RepoRow, b: RepoRow) => number>
 
-/** The rows the filters keep, in their order, with how many rows the search finds in each status. */
-export function pickRows(rows: RepoRow[], filters: RepoFilters) {
+/**
+ * The rows the filters keep, with how many rows the search finds in each status. The pinned ones come first, in the
+ * order of `pinned`, and the rest in the filters' order.
+ */
+export function pickRows(rows: RepoRow[], filters: RepoFilters, pinned: string[] = []) {
   const terms = normalize(filters.q).split(/\s+/).filter(Boolean)
   const counts: Record<RepoStatus, number> = { active: 0, archived: 0 }
   const picked: RepoRow[] = []
@@ -148,11 +151,24 @@ export function pickRows(rows: RepoRow[], filters: RepoFilters) {
     counts[status]++
     if (!filters.status.length || filters.status.includes(status)) picked.push(row)
   }
-  return { rows: picked.toSorted(ORDER[filters.sort]), counts }
+  const place = new Map(pinned.map((id, index) => [id, index]))
+  const at = (row: RepoRow) => place.get(row.repo.id) ?? -1
+  return {
+    pinned: picked.filter((row) => at(row) >= 0).toSorted((a, b) => at(a) - at(b)),
+    rest: picked.filter((row) => at(row) < 0).toSorted(ORDER[filters.sort]),
+    counts,
+  }
+}
+
+/** Puts the pinned repositories shown in the order given. Those a search hides keep their places. */
+export function arrange(pinned: string[], shown: string[]): string[] {
+  const moving = new Set(shown)
+  const next = shown.values()
+  return pinned.map((id) => (moving.has(id) ? (next.next().value ?? id) : id))
 }
 
 /** Picks or unpicks a status. Picking both is the same as picking none. */
-export function toggleStatus(filters: RepoFilters, status: RepoStatus) {
+export function toggleStatus(filters: Pick<RepoFilters, 'status'>, status: RepoStatus) {
   const current = filters.status
   const next = !current.length
     ? [status]

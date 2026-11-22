@@ -8,10 +8,12 @@ import {
   INVOLVEMENTS,
   LOCALES,
   ROW_PARTS,
+  SOURCE_KINDS,
   THEMES,
   type Preset,
   type Settings,
   type Source,
+  type SourceKind,
   type View,
   type Workspace,
 } from '@/types'
@@ -42,6 +44,11 @@ const isWorkspace = (ws: Partial<Workspace>): ws is Workspace =>
 const isView = (view: Partial<View> | null): view is View =>
   typeof view?.id === 'string' && typeof view.query === 'string'
 
+const isSource = (source: Partial<Source> | null): source is Source =>
+  SOURCE_KINDS.includes(source?.kind as SourceKind) && typeof source?.name === 'string'
+
+const isIds = (ids: unknown): ids is string[] => Array.isArray(ids) && ids.every((id) => typeof id === 'string')
+
 const pick = <T>(known: readonly T[], value: T | undefined, fallback: T) =>
   value !== undefined && known.includes(value) ? value : fallback
 
@@ -52,6 +59,9 @@ function parse(raw: unknown): Settings {
   const workspaces = (Array.isArray(data.workspaces) ? data.workspaces : []).filter(isWorkspace)
   for (const ws of workspaces) {
     ws.views = ws.views.filter(isView)
+    ws.sources = ws.sources.filter(isSource)
+    if (!isIds(ws.pinned)) ws.pinned = []
+    for (const source of ws.sources) if (source.only !== undefined && !isIds(source.only)) delete source.only
     upgrade(ws, typeof data.version === 'number' ? data.version : 1)
   }
   return {
@@ -179,7 +189,7 @@ export function createWorkspace(fields: WorkspaceFields) {
     preset,
     query: presetQuery(preset),
   }))
-  const ws: Workspace = { id: randomId(), ...fields, name: nameFor(fields.name, fields.sources), views }
+  const ws: Workspace = { id: randomId(), ...fields, name: nameFor(fields.name, fields.sources), views, pinned: [] }
   settings.workspaces.push(ws)
   settings.activeWorkspaceId = ws.id
 }

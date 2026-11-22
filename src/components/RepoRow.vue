@@ -11,11 +11,11 @@ const LOOKS: Record<Count, { icon?: string; tone: string; width: string }> = {
   conflicts: { tone: 'text-highlighted', width: '4.5rem' },
 }
 
-// The repositories page's columns, shared by its header and rows: the name, the weeks, the counts, the last activity
-// and the link. The page sets the widths for both. Below this width the rows stack instead.
+// The repositories page's columns, shared by its header and rows: the name, the weeks, the counts, the last activity,
+// and the pin and the link. The page sets the widths for both. Below this width the rows stack instead.
 export const REPO_COLUMNS = '@4xl:grid @4xl:grid-cols-(--repo-columns) @4xl:gap-x-3'
 export const REPO_COLUMN_WIDTHS = {
-  '--repo-columns': ['minmax(0,1fr)', '6.5rem', ...COUNT_KEYS.map((key) => LOOKS[key].width), '6rem', '1.5rem'].join(
+  '--repo-columns': ['minmax(0,1fr)', '6.5rem', ...COUNT_KEYS.map((key) => LOOKS[key].width), '6rem', '3.25rem'].join(
     ' ',
   ),
 }
@@ -34,13 +34,15 @@ import { COUNTS, statusOf, TALLIED, type RepoRow } from '@/lib/repos'
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { displayRepo } from '@/stores/data'
+import { isPinned, togglePin } from '@/stores/repos'
 import { itemsLink, showItems } from '@/stores/view'
 
 const props = defineProps<{ row: RepoRow }>()
+const emit = defineEmits<{ grab: [event: PointerEvent]; step: [by: -1 | 1] }>()
 const { t } = useI18n()
 
 const repo = computed(() => props.row.repo)
-const onGitHub = computed(() => `https://github.com/${repo.value.fullName}`)
+const pinned = computed(() => isPinned(repo.value.id))
 const opened = computed(() =>
   t(props.row.weeksLoading ? 'repos.openedSoFar' : 'repos.opened', {
     n: formatNumber(props.row.weeks.reduce((sum, n) => sum + n, 0)),
@@ -76,13 +78,54 @@ function follow(event: MouseEvent, filters: Partial<Filters>) {
 const label = (count: Shown) =>
   `${t(`repos.columns.${count.key}`)}: ${count.loading ? t('repos.loading') : formatNumber(count.count)}`
 const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-primary'
+
+// The pin and the link to GitHub sit by the name on narrow screens, and in a column of their own on wide ones. An
+// unpinned repository shows its pin on hover, and always on a touch screen. A pinned one's handle sits with them on
+// narrow screens, away from the edge, where a swipe would go back a page, and at the start of the row on wide ones.
+const BUTTON = { color: 'neutral', variant: 'ghost', size: 'xs' } as const
+const pin = computed(() => ({
+  ...BUTTON,
+  icon: 'i-octicon-pin-16',
+  class: !pinned.value && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+  'aria-label': t('repos.pinLabel', { name: repo.value.fullName }),
+  'aria-pressed': pinned.value,
+  ui: { leadingIcon: pinned.value ? 'text-highlighted' : 'text-muted' },
+  onClick: () => togglePin(repo.value.id),
+}))
+const handle = computed(() => ({
+  'aria-label': t('repos.move', { name: repo.value.fullName }),
+  onPointerdown: (event: PointerEvent) => emit('grab', event),
+  onKeydown: (event: KeyboardEvent) => {
+    const by = ({ ArrowUp: -1, ArrowDown: 1 } as const)[event.key as 'ArrowUp' | 'ArrowDown']
+    if (!by) return
+    event.preventDefault()
+    emit('step', by)
+  },
+}))
+const link = computed(() => ({
+  ...BUTTON,
+  href: `https://github.com/${repo.value.fullName}`,
+  target: '_blank',
+  rel: 'noopener',
+  icon: 'i-octicon-link-external-16',
+  'aria-label': t('repos.onGitHub', { name: repo.value.fullName }),
+  ui: { leadingIcon: 'text-muted' },
+}))
 </script>
 
 <template>
   <div
-    class="border-b border-default px-4 py-3 transition-colors hover:bg-elevated/60 sm:px-6 @4xl:items-center @4xl:py-2.5"
+    class="group relative border-b border-default px-4 py-3 transition-colors hover:bg-elevated/60 sm:px-6 @4xl:items-center @4xl:py-2.5"
     :class="REPO_COLUMNS"
   >
+    <button
+      v-if="pinned"
+      v-bind="handle"
+      type="button"
+      class="absolute inset-y-0 start-0 hidden w-6 cursor-grab touch-none items-center justify-center text-dimmed transition-colors hover:text-toned focus-visible:text-highlighted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary @4xl:flex"
+    >
+      <UIcon name="i-octicon-grabber-16" class="size-4" />
+    </button>
     <div class="min-w-0">
       <div class="flex min-w-0 items-center gap-2">
         <a
@@ -100,18 +143,17 @@ const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:o
           class="inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
           >{{ t('item.archived') }}</span
         >
-        <UButton
-          :href="onGitHub"
-          target="_blank"
-          rel="noopener"
-          icon="i-octicon-link-external-16"
-          color="neutral"
-          variant="ghost"
-          size="xs"
-          class="ms-auto @4xl:hidden"
-          :aria-label="t('repos.onGitHub', { name: repo.fullName })"
-          :ui="{ leadingIcon: 'text-muted' }"
-        />
+        <div class="ms-auto flex shrink-0 items-center gap-0.5 @4xl:hidden">
+          <UButton
+            v-if="pinned"
+            v-bind="{ ...BUTTON, ...handle }"
+            icon="i-octicon-grabber-16"
+            class="cursor-grab touch-none"
+            :ui="{ leadingIcon: 'text-muted' }"
+          />
+          <UTooltip :text="pinned ? t('repos.unpin') : t('repos.pin')"><UButton v-bind="pin" /></UTooltip>
+          <UButton v-bind="link" />
+        </div>
       </div>
       <div
         v-if="repo.description || repo.language"
@@ -196,17 +238,9 @@ const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:o
       <span class="hidden justify-self-end text-[13px] whitespace-nowrap text-muted @4xl:block">{{ active }}</span>
     </UTooltip>
     <span v-else class="hidden @4xl:block" />
-    <UButton
-      :href="onGitHub"
-      target="_blank"
-      rel="noopener"
-      icon="i-octicon-link-external-16"
-      color="neutral"
-      variant="ghost"
-      size="xs"
-      class="hidden justify-self-end @4xl:inline-flex"
-      :aria-label="t('repos.onGitHub', { name: repo.fullName })"
-      :ui="{ leadingIcon: 'text-muted' }"
-    />
+    <div class="hidden items-center gap-0.5 justify-self-end @4xl:flex">
+      <UTooltip :text="pinned ? t('repos.unpin') : t('repos.pin')"><UButton v-bind="pin" /></UTooltip>
+      <UButton v-bind="link" />
+    </div>
   </div>
 </template>

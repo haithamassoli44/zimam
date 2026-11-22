@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { defaultRepoFilters, pickRows, repoRows, toggleStatus, WEEKS } from '@/lib/repos'
+import { arrange, defaultRepoFilters, pickRows, repoRows, toggleStatus, WEEKS } from '@/lib/repos'
 import type { Left } from '@/lib/sync'
 import { noOne, type Item, type Repo } from '@/types'
 
@@ -167,8 +167,10 @@ describe('pickRows', () => {
     [],
     NOW,
   )
-  const names = (filters: Partial<ReturnType<typeof defaultRepoFilters>>) =>
-    pickRows(rows, { ...defaultRepoFilters(), ...filters }).rows.map((row) => row.repo.name)
+  const names = (filters: Partial<ReturnType<typeof defaultRepoFilters>>, pinned: string[] = []) => {
+    const picked = pickRows(rows, { ...defaultRepoFilters(), ...filters }, pinned)
+    return [...picked.pinned, ...picked.rest].map((row) => row.repo.name)
+  }
 
   it('shows active repositories by default, the most recently active first', () => {
     expect(names({})).toEqual(['web', 'api'])
@@ -188,9 +190,32 @@ describe('pickRows', () => {
     expect(names({ q: 'اَلْمَوْقِع' })).toEqual(['web'])
   })
 
+  it('puts pinned repositories first in their own order, whatever the sort', () => {
+    expect(names({}, ['api', 'web'])).toEqual(['api', 'web'])
+    expect(names({ sort: 'name' }, ['web'])).toEqual(['web', 'api'])
+    const picked = pickRows(rows, { ...defaultRepoFilters(), status: [] }, ['old', 'gone', 'web'])
+    expect(picked.pinned.map((row) => row.repo.name)).toEqual(['old', 'web'])
+    expect(picked.rest.map((row) => row.repo.name)).toEqual(['api'])
+  })
+
+  it('keeps pinned repositories to what the search and statuses show', () => {
+    expect(names({ q: 'api' }, ['web', 'api'])).toEqual(['api'])
+    expect(pickRows(rows, defaultRepoFilters(), ['old']).pinned).toEqual([])
+  })
+
   it('counts what the search finds in each status, whichever is picked', () => {
     expect(pickRows(rows, { ...defaultRepoFilters(), q: 'o' }).counts).toEqual({ active: 0, archived: 1 })
     expect(pickRows(rows, defaultRepoFilters()).counts).toEqual({ active: 2, archived: 1 })
+  })
+})
+
+describe('arrange', () => {
+  it('puts the pinned repositories shown in the new order', () => {
+    expect(arrange(['a', 'b', 'c'], ['c', 'a', 'b'])).toEqual(['c', 'a', 'b'])
+  })
+
+  it('keeps the places of those a search hides', () => {
+    expect(arrange(['a', 'b', 'c', 'd'], ['d', 'a', 'c'])).toEqual(['d', 'b', 'a', 'c'])
   })
 })
 

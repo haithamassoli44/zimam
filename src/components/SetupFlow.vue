@@ -6,14 +6,16 @@ import UFormField from '@nuxt/ui/components/FormField.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import BrandMark from '@/components/BrandMark.vue'
+import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import LanguageSwitch from '@/components/LanguageSwitch.vue'
+import RepoPicker from '@/components/RepoPicker.vue'
 import SetupPreview from '@/components/SetupPreview.vue'
 import { DEV_TOKEN_PATH } from '@/dev'
-import { createGitHub, GitHubError } from '@/lib/github'
+import { createGitHub, GitHubError, type GitHub } from '@/lib/github'
 import { findSource, findViewer, sameSource, type SourceChoice, type Viewer } from '@/lib/sources'
 import { activeWorkspace, createWorkspace, updateWorkspace } from '@/stores/settings'
 import { ui } from '@/stores/ui'
@@ -32,6 +34,7 @@ const FINE_GRAINED =
 const CLASSIC = 'https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam'
 
 const token = ref(activeWorkspace.value?.token ?? '')
+const gh = shallowRef<GitHub | null>(null)
 const viewer = ref<Viewer | null>(null)
 const scopes = ref<string[] | null>(null)
 const checking = ref(false)
@@ -79,15 +82,17 @@ async function check() {
   checking.value = true
   tokenError.value = ''
   try {
-    const gh = createGitHub(token.value.trim())
-    viewer.value = await findViewer(gh)
-    scopes.value = gh.scopes()
+    const client = createGitHub(token.value.trim())
+    viewer.value = await findViewer(client)
+    scopes.value = client.scopes()
+    gh.value = client
     if (!picked.value.length) {
       const org = viewer.value.organizations[0]
       picked.value = [org ? { kind: 'org', name: org.login } : { kind: 'user', name: viewer.value.login }]
     }
   } catch (error) {
     viewer.value = null
+    gh.value = null
     tokenError.value =
       error instanceof GitHubError && error.kind === 'network' ? t('setup.offline') : t('setup.badToken')
   } finally {
@@ -113,6 +118,26 @@ function toggle(source: Source) {
   picked.value = isPicked(source)
     ? picked.value.filter((other) => !sameSource(other, source))
     : [...picked.value, source]
+}
+
+// An account brings all its repositories, new ones too, or only those picked.
+const accounts = computed(() => picked.value.filter((source) => source.kind !== 'repo'))
+const unpicked = computed(() => picked.value.some((source) => source.only?.length === 0))
+const BRINGS = ['all', 'some'] as const
+
+function bringOnly(source: Source, only: string[] | undefined) {
+  picked.value = picked.value.map((other) =>
+    sameSource(other, source) ? { kind: other.kind, name: other.name, ...(only && { only }) } : other,
+  )
+}
+
+// What each account had picked before switching to all, so switching back brings it back.
+const pickedBefore = new Map<string, string[]>()
+
+function bring(source: Source, which: string) {
+  const key = `${source.kind}:${source.name.toLowerCase()}`
+  if (which === 'all' && source.only) pickedBefore.set(key, source.only)
+  bringOnly(source, which === 'some' ? (source.only ?? pickedBefore.get(key) ?? []) : undefined)
 }
 
 async function addAnother() {
@@ -260,6 +285,36 @@ function finish() {
               <UIcon v-if="isPicked(choice.source)" name="i-octicon-check-16" class="size-4 shrink-0 text-primary" />
             </button>
           </div>
+          <div
+            v-for="source in accounts"
+            :key="`${source.kind}:${source.name}`"
+            class="rounded-lg border border-default"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-3">
+              <span class="min-w-0">
+                <i18n-t keypath="setup.which" tag="span" scope="global" class="block text-sm text-highlighted">
+                  <template #name>
+                    <bdi class="font-mono text-[13px]">{{ source.name }}</bdi>
+                  </template>
+                </i18n-t>
+                <span class="block text-xs text-muted">{{ t(source.only ? 'setup.someHelp' : 'setup.allHelp') }}</span>
+              </span>
+              <ChoiceGroup
+                :label="t('setup.which', { name: source.name })"
+                :choices="BRINGS.map((value) => ({ value, label: t(`setup.${value}`) }))"
+                :picked="(value) => (value === 'some') === !!source.only"
+                @pick="bring(source, $event)"
+              />
+            </div>
+            <RepoPicker
+              v-if="source.only && gh"
+              :gh="gh"
+              :source="source"
+              :only="source.only"
+              class="border-t border-default"
+              @update:only="bringOnly(source, $event)"
+            />
+          </div>
           <form class="space-y-2" @submit.prevent="addAnother">
             <label for="another" class="text-sm text-toned">{{ t('setup.another') }}</label>
             <div class="flex gap-2">
@@ -303,7 +358,7 @@ function finish() {
             v-if="viewer"
             color="neutral"
             size="lg"
-            :disabled="!picked.length"
+            :disabled="!picked.length || unpicked"
             :label="workspace ? t('setup.save') : t('setup.open')"
             trailing-icon="i-octicon-arrow-right-16"
             :ui="{ base: 'h-11 px-5', trailingIcon: 'rtl:rotate-180' }"

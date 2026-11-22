@@ -21,6 +21,35 @@ describe('importSettings', () => {
     expect(settings.workspaces.map((ws) => ws.id)).toEqual(['a'])
   })
 
+  it('keeps the repositories picked and pinned, and drops sources and lists that would break the app', () => {
+    importSettings(
+      JSON.stringify({
+        workspaces: [
+          {
+            id: 'a',
+            name: 'Acme',
+            token: '',
+            sources: [
+              { kind: 'org', name: 'acme', only: ['R1', 'R2'] },
+              { kind: 'user', name: 'ali', only: 'R3' },
+              { kind: 'team', name: 'x' },
+              null,
+            ],
+            views: [],
+            pinned: ['R2', 'R1'],
+          },
+          { id: 'b', name: 'Old', token: '', sources: [], views: [], pinned: [7] },
+        ],
+      }),
+    )
+    expect(settings.workspaces[0].sources).toEqual([
+      { kind: 'org', name: 'acme', only: ['R1', 'R2'] },
+      { kind: 'user', name: 'ali' },
+    ])
+    expect(settings.workspaces[0].pinned).toEqual(['R2', 'R1'])
+    expect(settings.workspaces[1].pinned).toEqual([])
+  })
+
   it('refuses a file without workspaces', () => {
     expect(() => importSettings('{"theme":"light"}')).toThrow()
   })

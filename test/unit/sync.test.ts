@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { emptyCache } from '@/lib/cache'
+import { emptyCache, type Cache } from '@/lib/cache'
 import { GitHubError, type Answer, type GitHub, type Probe, type QueryError } from '@/lib/github'
 import {
   NODES,
@@ -14,7 +14,14 @@ import {
 } from '@/lib/queries'
 import { sourcesKey } from '@/lib/sources'
 import { idleStatus, Syncer, type SyncStore } from '@/lib/sync'
-import type { Item, Repo, Workspace } from '@/types'
+import { noOne, type Item, type Repo, type Workspace } from '@/types'
+
+// What IndexedDB would keep for the workspace between syncers. jsdom has no IndexedDB, so by default nothing.
+const saved = vi.hoisted(() => ({ cache: null as Cache | null }))
+vi.mock('@/lib/cache', async (original) => ({
+  ...(await original<typeof import('@/lib/cache')>()),
+  readCache: async () => saved.cache,
+}))
 
 const MINUTE = 60_000
 const HOUR = 3_600_000
@@ -63,6 +70,10 @@ function fakeGitHub() {
     hidden: [] as string[],
     archived: false,
     hiddenStatus: [] as string[],
+    // More repositories in the organization, by name, each with the same items as the first, and the repositories
+    // whose items were asked for.
+    more: [] as string[],
+    itemsOf: [] as string[],
     probes: {} as Record<string, Probe>,
     probed: [] as string[],
     seen: new Set<string>(),
@@ -128,7 +139,8 @@ function fakeGitHub() {
         allIssues: { totalCount: state.issues.length },
         allPrs: { totalCount: state.prs.length },
       }
-      return done({ organization: { repositories: page([repo]) } })
+      const more = state.more.map((name) => ({ ...repo, id: name, name, nameWithOwner: `acme/${name}` }))
+      return done({ organization: { repositories: page([repo, ...more]) } })
     }
     if (call === 'search')
       return done({ search: { issueCount: state.searchResults.length, ...page(state.searchResults) } })
@@ -152,6 +164,8 @@ function fakeGitHub() {
       })
     }
     state.firsts.push(variables.first as number)
+    const name = variables.name as string
+    state.itemsOf.push(name)
     if (state.serverErrors > 0) {
       state.serverErrors--
       throw new GitHubError('GitHub answered 502', 'server')
@@ -167,6 +181,7 @@ function fakeGitHub() {
     const nodes = matching
       .slice(start, start + state.pageSize)
       .map((node) => (withChecks ? { ...node, ...status(node.id) } : node))
+      .map((node) => (name === 'web' ? node : { ...node, id: `${name}-${node.id}`, repository: { id: name } }))
     const end = start + nodes.length
     const pageInfo = { hasNextPage: end < matching.length, endCursor: String(end) }
     return done({ repository: { [kind]: { pageInfo, nodes } } })
@@ -174,9 +189,16 @@ function fakeGitHub() {
   return { gh, state }
 }
 
-const ws: Workspace = { id: 'ws', name: 'acme', token: 't', sources: [{ kind: 'org', name: 'acme' }], views: [] }
+const ws: Workspace = {
+  id: 'ws',
+  name: 'acme',
+  token: 't',
+  sources: [{ kind: 'org', name: 'acme' }],
+  views: [],
+  pinned: [],
+}
 
-async function setup() {
+async function setup(workspace = ws) {
   const fake = fakeGitHub()
   const fresh: string[] = []
   const store: SyncStore = {
@@ -186,11 +208,14 @@ async function setup() {
     changed: (ids) => fresh.push(...ids),
   }
   const status = idleStatus()
-  const syncer = await Syncer.open(ws, fake.gh, store, status)
+  const syncer = await Syncer.open(workspace, fake.gh, store, status)
   return { ...fake, store, status, syncer, fresh }
 }
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  saved.cache = null
+})
 afterEach(() => vi.restoreAllMocks())
 
 describe('Syncer', () => {
@@ -579,6 +604,71 @@ describe('Syncer after review', () => {
     await syncer.start()
     expect(state.calls).toContain('requested')
     expect(store.me).toEqual({ login: 'ali', requested: new Set() })
+  })
+})
+
+// The workspace with only these repositories of the organization picked, and an item changed just now in one.
+const picking = (...only: string[]): Workspace => ({ ...ws, sources: [{ kind: 'org', name: 'acme', only }] })
+const change = (id: string, repo: string) => ({
+  ...raw(id, 'OPEN', new Date().toISOString()),
+  repository: { id: repo },
+})
+
+describe('Syncer with only some repositories picked', () => {
+  it('reads only the repositories picked', async () => {
+    const { store, state, syncer } = await setup(picking('R1'))
+    state.more = ['api']
+    await syncer.sync()
+    expect([...store.repos.keys()]).toEqual(['R1'])
+    expect(new Set(state.itemsOf)).toEqual(new Set(['web']))
+  })
+
+  it('drops changes in repositories left out, and reads the repositories again for them only once', async () => {
+    const { store, state, syncer, fresh } = await setup(picking('R1'))
+    state.more = ['api']
+    await syncer.sync()
+    state.searchResults = [change('I9', 'api')]
+    state.calls = []
+    await syncer.sync()
+    expect(state.calls).toEqual(['search', 'repos'])
+    state.calls = []
+    await syncer.sync()
+    expect(state.calls).not.toContain('repos')
+    expect(store.items.has('I9')).toBe(false)
+    expect(fresh).toEqual([])
+  })
+
+  it('still adds a new repository of an account that brings all of them', async () => {
+    const { store, state, syncer } = await setup()
+    await syncer.sync()
+    state.more = ['api']
+    state.searchResults = [change('I9', 'api')]
+    await syncer.sync()
+    expect(store.repos.has('api')).toBe(true)
+    expect(store.items.has('I9')).toBe(true)
+  })
+
+  it('drops what the sources no longer bring as soon as the workspace opens, and reloads it all when picked again', async () => {
+    const { gh, state } = fakeGitHub()
+    state.more = ['api']
+    saved.cache = emptyCache(ws.id, '')
+    const open = async (...only: string[]) => {
+      const store: SyncStore = { repos: new Map(), items: new Map(), me: noOne(), changed: () => {} }
+      const status = idleStatus()
+      const syncer = await Syncer.open(picking(...only), gh, store, status)
+      let shown: string[] | null = null
+      state.onQuery = () => (shown ??= [...store.repos.keys()])
+      await syncer.start()
+      syncer.stop()
+      expect(status.historyDone).toBe(true)
+      return { store, shown }
+    }
+    expect([...(await open('R1')).store.items.keys()].toSorted()).toEqual(['I1', 'I3', 'P2', 'P4'])
+    const other = await open('api')
+    expect(other.shown).toEqual([])
+    expect([...other.store.items.keys()].toSorted()).toEqual(['api-I1', 'api-I3', 'api-P2', 'api-P4'])
+    // Its closed history too, which it had loaded before it was left out.
+    expect([...(await open('R1')).store.items.keys()].toSorted()).toEqual(['I1', 'I3', 'P2', 'P4'])
   })
 })
 

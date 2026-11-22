@@ -28,6 +28,11 @@ export function belongsTo(repo: Repo, source: Source): boolean {
   return source.kind === 'repo' ? repo.fullName.toLowerCase() === name : repo.owner.toLowerCase() === name
 }
 
+/** Whether a source brings a repository into its workspace: it belongs to the source, and was picked if any were. */
+export function brings(source: Source, repo: Repo): boolean {
+  return belongsTo(repo, source) && (!source.only || source.only.includes(repo.id))
+}
+
 /** The search qualifier that finds a source's issues and pull requests, such as `org:acme`. */
 export function qualifier(source: Source): string {
   return `${source.kind}:${source.name}`
