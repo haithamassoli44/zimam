@@ -16,10 +16,12 @@ import CheckRuns from '@/components/CheckRuns.vue'
 import { CHECK_LOOKS } from '@/components/looks'
 import { formatList, formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
+import { repos } from '@/stores/data'
 import { settings } from '@/stores/settings'
+import { showIssue } from '@/stores/view'
 import type { Item } from '@/types'
 
-const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fresh?: boolean }>()
+const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fresh?: boolean; opened?: boolean }>()
 const { t } = useI18n()
 
 const compact = computed(() => settings.density === 'compact')
@@ -67,19 +69,39 @@ const LABELS = 3
 const labels = computed(() => props.item.labels.slice(0, LABELS))
 const moreLabels = computed(() => props.item.labels.slice(LABELS).map((label) => label.name))
 
+// An issue opens in Zimam's issue panel. A pull request, or an issue clicked with a key held or the middle button, opens
+// on GitHub in a new tab.
+function read(event: MouseEvent): boolean {
+  const repo = repos.value.get(props.item.repoId)
+  if (props.item.kind !== 'issue' || !repo || event.button !== 0) return false
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
+  showIssue({ repo: repo.fullName, number: props.item.number })
+  return true
+}
+
 // The row holds a button, so it can't be one link. The title is the link, and a click elsewhere on the row follows it,
 // unless it ends a text selection.
 function follow(event: MouseEvent) {
   if (event.button > 1 || (event.target as Element).closest('a, button')) return
   if (getSelection()?.toString()) return
-  window.open(props.item.url, '_blank', 'noopener')
+  if (!read(event)) window.open(props.item.url, '_blank', 'noopener')
+}
+
+function clickTitle(event: MouseEvent) {
+  if (read(event)) event.preventDefault()
 }
 </script>
 
 <template>
   <div
-    class="group relative flex cursor-pointer gap-3 border-b border-default px-4 transition-colors hover:bg-elevated/60 has-[a[data-row]:focus-visible]:bg-elevated has-[a[data-row]:focus-visible]:outline-2 has-[a[data-row]:focus-visible]:-outline-offset-2 has-[a[data-row]:focus-visible]:outline-primary sm:px-6"
-    :class="[compact ? 'items-center py-2' : 'py-3', fresh && 'arrived']"
+    class="group relative flex cursor-pointer gap-3 border-b border-default px-4 transition-colors has-[a[data-row]:focus-visible]:bg-elevated has-[a[data-row]:focus-visible]:outline-2 has-[a[data-row]:focus-visible]:-outline-offset-2 has-[a[data-row]:focus-visible]:outline-primary sm:px-6"
+    :class="[
+      compact ? 'items-center py-2' : 'py-3',
+      fresh && 'arrived',
+      opened
+        ? 'bg-elevated before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary'
+        : 'hover:bg-elevated/60',
+    ]"
     @click="follow"
     @auxclick="follow"
   >
@@ -112,9 +134,11 @@ function follow(event: MouseEvent) {
           target="_blank"
           rel="noopener"
           data-row
+          :aria-current="opened || undefined"
           class="text-[15px] leading-6 font-medium text-highlighted transition-colors group-hover:text-primary focus-visible:outline-none"
           :class="compact && 'truncate'"
           :dir="compact ? 'auto' : undefined"
+          @click="clickTitle"
           ><span class="sr-only" dir="auto">{{ stateText }}: </span><template v-if="compact">{{ item.title }}</template
           ><bdi v-else>{{ item.title }}</bdi></a
         >

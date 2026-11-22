@@ -3,6 +3,7 @@ import { computed, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 import { deleteCache } from '@/lib/cache'
 import { readCheckRuns, type CheckRuns } from '@/lib/checks'
 import { createGitHub, type GitHub } from '@/lib/github'
+import { readIssue, readMoreComments, type IssueRef, type Thread } from '@/lib/issue'
 import { idleStatus, syncKey, Syncer, TICK, type SyncStatus, type SyncStore } from '@/lib/sync'
 import { noOne, type Item, type Me, type Repo, type Workspace } from '@/types'
 
@@ -105,6 +106,18 @@ export function syncNow(manual = false) {
 export function checkRuns(item: Item): Promise<CheckRuns> {
   if (!github) return Promise.reject(new Error('No workspace'))
   return readCheckRuns(github, item)
+}
+
+/** An issue and its first comments, read from GitHub with the open workspace's token when it's opened. */
+export function issueThread(issue: IssueRef, version?: string): Promise<Thread> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  return readIssue(github, issue, version)
+}
+
+/** The issue with its next comments added. */
+export function moreComments(thread: Thread): Promise<Thread> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  return readMoreComments(github, thread)
 }
 
 /** Drops what this browser saved for the open workspace and fetches it again. */

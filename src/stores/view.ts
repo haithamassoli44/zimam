@@ -9,6 +9,7 @@ import {
   type Context,
   type Filters,
 } from '@/lib/filters'
+import { formatRef, parseRef, sameRef, type IssueRef } from '@/lib/issue'
 import { randomId } from '@/lib/text'
 import { i18n } from '@/locale'
 import type { View } from '@/types'
@@ -28,22 +29,30 @@ const pageAt = (path: string): Page => (path.replace(/\/+$/, '') === `${BASE}rep
 
 export const page = ref<Page>(pageAt(location.pathname))
 
-function address(ws: string | undefined, search: string): string {
+const ISSUE_PARAM = 'issue'
+const issueAt = (search: string) => parseRef(new URLSearchParams(search).get(ISSUE_PARAM))
+
+/** The issue read beside the list. The list's address names it too. */
+export const openIssue = ref<IssueRef | null>(page.value === 'items' ? issueAt(location.search) : null)
+
+function address(ws: string | undefined, search: string, issue: IssueRef | null = null): string {
   const params = new URLSearchParams(ws ? { [WORKSPACE_PARAM]: ws } : {})
   for (const [key, value] of new URLSearchParams(search)) params.append(key, value)
+  if (issue) params.set(ISSUE_PARAM, formatRef(issue))
   return params.size ? `?${params}` : ''
 }
 
-// The list's address carries its filters. The repositories' address only names the workspace.
-function link(to: Page, ws: string | undefined, search: string): string {
-  return to === 'repos' ? `${BASE}repos${address(ws, '')}` : `${BASE}${address(ws, search)}`
+// The list's address carries its filters and the open issue. The repositories' address only names the workspace.
+function link(to: Page, ws: string | undefined, search: string, issue: IssueRef | null = null): string {
+  return to === 'repos' ? `${BASE}repos${address(ws, '')}` : `${BASE}${address(ws, search, issue)}`
 }
 
+// Keeps the entry's state, which says whether opening the issue added the entry: see closeIssue().
 watch(
-  [query, () => activeWorkspace.value?.id, page],
-  ([search, ws, current]) => {
-    const next = link(current, ws, search)
-    if (next !== location.pathname + location.search) history.replaceState(null, '', next)
+  [query, () => activeWorkspace.value?.id, page, openIssue],
+  ([search, ws, current, issue]) => {
+    const next = link(current, ws, search, issue)
+    if (next !== location.pathname + location.search) history.replaceState(history.state, '', next)
   },
   { immediate: true },
 )
@@ -52,12 +61,56 @@ watch(
 export function go(to: Page) {
   if (page.value === to) return
   page.value = to
+  openIssue.value = null
   history.pushState(null, '', link(to, activeWorkspace.value?.id, query.value))
 }
 
+// What an entry added by opening an issue remembers: the page load that added it, and the filters it was opened over.
+// An entry outlives a reload, but the one before it then belongs to the page that was, and going back loads the app.
+const OPENED = 'zimamIssue'
+const PAGE_LOAD = randomId()
+// Set while going back over that entry, until the browser gets there.
+let closing = false
+
+/**
+ * Opens an issue beside the list, as a new entry in the browser's history, so Back closes it. One opened in its place
+ * takes over that entry, so Back doesn't step through every issue read.
+ */
+export function showIssue(issue: IssueRef) {
+  if (closing || sameRef(openIssue.value, issue)) return
+  const next = link('items', activeWorkspace.value?.id, query.value, issue)
+  if (openIssue.value) history.replaceState(history.state, '', next)
+  else history.pushState({ [OPENED]: { load: PAGE_LOAD, over: query.value } }, '', next)
+  openIssue.value = issue
+}
+
+/**
+ * Closes the issue. When this page load added the entry by opening it, and the filters are as they were, it goes back
+ * over the entry, so Back doesn't open the issue again. Otherwise the entry stays, without the issue.
+ */
+export function closeIssue() {
+  if (!openIssue.value || closing) return
+  const opened = history.state?.[OPENED]
+  if (opened?.load !== PAGE_LOAD || opened.over !== query.value) {
+    openIssue.value = null
+    history.replaceState(history.state, '', link('items', activeWorkspace.value?.id, query.value))
+    return
+  }
+  closing = true
+  history.back()
+  // Should the browser not get there, the issue closes all the same.
+  setTimeout(() => {
+    if (!closing) return
+    closing = false
+    openIssue.value = null
+  }, 1000)
+}
+
 addEventListener('popstate', () => {
+  closing = false
   page.value = pageAt(location.pathname)
   if (page.value === 'items') Object.assign(filters, fromQuery(location.search))
+  openIssue.value = page.value === 'items' ? issueAt(location.search) : null
 })
 
 /** The address of the list with these filters, on top of the defaults. */
@@ -74,7 +127,10 @@ export function showItems(picked: Partial<Filters>) {
 watch(
   () => activeWorkspace.value?.id,
   (id, previous) => {
-    if (previous && id !== previous) resetFilters()
+    if (previous && id !== previous) {
+      resetFilters()
+      openIssue.value = null
+    }
   },
 )
 
