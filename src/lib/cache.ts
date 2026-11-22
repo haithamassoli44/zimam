@@ -1,7 +1,7 @@
 import type { Item, Repo } from '@/types'
 
 // Bump when Item, Repo or this shape changes: an older cache is then dropped and fetched again.
-const VERSION = 3
+const VERSION = 4
 
 /** What a workspace has fetched so far, and how far each step got. */
 export interface Cache {
@@ -13,13 +13,18 @@ export interface Cache {
   /** Changes since this time haven't been fetched yet. */
   watermark: number | null
   reposAt: number | null
-  checksAt: number | null
+  /** When each open pull request's checks, review and conflicts were last read. */
+  checkedAt: Record<string, number>
   reconciledAt: number | null
   syncedAt: number | null
   /** Repositories whose open items are loaded. */
   openDone: string[]
   /** Each repository's closed history: a cursor to resume from, or `true` once complete. */
   history: Record<string, { issues?: string | true; prs?: string | true }>
+  /** Whose token reads the workspace, and the open pull requests that ask them for a review. */
+  login: string | null
+  requested: string[]
+  requestedAt: number | null
 }
 
 export function emptyCache(ws: string, sources: string): Cache {
@@ -31,11 +36,14 @@ export function emptyCache(ws: string, sources: string): Cache {
     items: [],
     watermark: null,
     reposAt: null,
-    checksAt: null,
+    checkedAt: {},
     reconciledAt: null,
     syncedAt: null,
     openDone: [],
     history: {},
+    login: null,
+    requested: [],
+    requestedAt: null,
   }
 }
 

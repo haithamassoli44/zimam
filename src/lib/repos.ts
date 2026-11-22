@@ -1,6 +1,6 @@
 import type { Item, Repo } from '@/types'
 
-import { REPO_STATUSES, type RepoStatus } from './filters'
+import { defaultFilters, matcher, REPO_STATUSES, type Context, type Filters, type RepoStatus } from './filters'
 import type { Left } from './sync'
 import { normalize } from './text'
 
@@ -8,21 +8,41 @@ const WEEK = 7 * 86_400_000
 /** How many weeks of new issues and pull requests each repository shows: about six months. */
 export const WEEKS = 26
 
-export const REPO_SORTS = ['activity', 'name', 'issues', 'prs', 'awaiting', 'failing'] as const
+interface CountOf {
+  /** The list that shows what it counts. */
+  filters: Partial<Filters>
+  /** GitHub's own total. Without one, the count tallies the items read so far that match the filters. */
+  total?: (repo: Repo) => number
+}
 
-export type RepoSort = (typeof REPO_SORTS)[number]
+/** What each repository counts, in the order of its columns. */
+export const COUNTS = {
+  issues: { filters: { kind: ['issue'] }, total: (repo) => repo.openIssues },
+  prs: { filters: { kind: ['pr'] }, total: (repo) => repo.openPrs },
+  awaiting: { filters: { kind: ['pr'], review: ['required'] } },
+  failing: { filters: { kind: ['pr'], checks: ['failure'] } },
+  conflicts: { filters: { kind: ['pr'], merge: ['conflicts'] } },
+} satisfies Record<string, CountOf>
+
+export type Count = keyof typeof COUNTS
+
+export const COUNT_KEYS = Object.keys(COUNTS) as Count[]
+
+/** The counts that come from the items read so far, rather than from GitHub's totals. */
+export const TALLIED = COUNT_KEYS.filter((key) => !(COUNTS[key] as CountOf).total)
+
+export type RepoSort = 'activity' | 'name' | Count
+
+export const REPO_SORTS: readonly RepoSort[] = ['activity', 'name', ...COUNT_KEYS]
 
 export interface RepoRow {
   repo: Repo
-  /** Open pull requests waiting for a review, as the Awaiting review view counts them. */
-  awaiting: number
-  /** Open pull requests whose checks fail. */
-  failing: number
+  counts: Record<Count, number>
   /** The last push, or the last change to one of its issues or pull requests, whichever came later. */
   activeAt: number
   /** Issues and pull requests opened in each of the last WEEKS weeks, oldest first. The last week ends now. */
   weeks: number[]
-  /** Its open pull requests haven't loaded yet, so `awaiting` and `failing` aren't known. */
+  /** Its open pull requests haven't loaded yet, so the tallied counts aren't known. */
   countsLoading: boolean
   /** Some of what was opened in it over the last WEEKS weeks may not have loaded yet. */
   weeksLoading: boolean
@@ -41,20 +61,18 @@ export function defaultRepoFilters(): RepoFilters {
 
 export const statusOf = (repo: Repo): RepoStatus => (repo.isArchived ? 'archived' : 'active')
 
-/** `left` is what each repository still has to load, as the sync shows it. */
-export function repoRows(
-  repos: Iterable<Repo>,
-  items: Iterable<Item>,
-  now: number,
-  left: Record<string, Left[]> = {},
-): RepoRow[] {
+/** Counted as the list counts, in `ctx`. `left` is what each repository still has to load, as the sync shows it. */
+export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<string, Left[]> = {}): RepoRow[] {
+  const { now } = ctx
   const tallies = new Map<string, { row: RepoRow; oldestClosed: Record<Item['kind'], number> }>()
-  for (const repo of repos) {
+  for (const repo of ctx.repos.values()) {
     const pushedAt = repo.pushedAt ? Date.parse(repo.pushedAt) : 0
+    const counts = Object.fromEntries(
+      COUNT_KEYS.map((key) => [key, (COUNTS[key] as CountOf).total?.(repo) ?? 0]),
+    ) as Record<Count, number>
     const row: RepoRow = {
       repo,
-      awaiting: 0,
-      failing: 0,
+      counts,
       activeAt: pushedAt,
       weeks: Array<number>(WEEKS).fill(0),
       countsLoading: false,
@@ -62,6 +80,10 @@ export function repoRows(
     }
     tallies.set(repo.id, { row, oldestClosed: { issue: Infinity, pr: Infinity } })
   }
+  // In an archived repository too, so the counts don't depend on the list's default of active ones.
+  const tallied = TALLIED.map(
+    (key) => [key, matcher({ ...defaultFilters(), status: [], ...COUNTS[key].filters }, ctx)] as const,
+  )
   for (const item of items) {
     const tally = tallies.get(item.repoId)
     if (!tally) continue
@@ -74,9 +96,7 @@ export function repoRows(
       tally.oldestClosed[item.kind] = Math.min(tally.oldestClosed[item.kind], updatedAt)
       continue
     }
-    if (item.kind !== 'pr') continue
-    if (item.review === 'pending') row.awaiting++
-    if (item.checks === 'failure') row.failing++
+    for (const [key, counts] of tallied) if (counts(item)) row.counts[key]++
   }
   // The closed history loads the latest change first. Nothing changes before it is opened, so once it reaches a change
   // from before the first week shown, all that was opened since is in.
@@ -111,14 +131,11 @@ const byName = (a: RepoRow, b: RepoRow) => a.repo.fullName.localeCompare(b.repo.
 const most = (count: (row: RepoRow) => number) => (a: RepoRow, b: RepoRow) =>
   count(b) - count(a) || b.activeAt - a.activeAt || byName(a, b)
 
-const ORDER: Record<RepoSort, (a: RepoRow, b: RepoRow) => number> = {
+const ORDER = {
   activity: most((row) => row.activeAt),
   name: byName,
-  issues: most((row) => row.repo.openIssues),
-  prs: most((row) => row.repo.openPrs),
-  awaiting: most((row) => row.awaiting),
-  failing: most((row) => row.failing),
-}
+  ...Object.fromEntries(COUNT_KEYS.map((key) => [key, most((row) => row.counts[key])])),
+} as Record<RepoSort, (a: RepoRow, b: RepoRow) => number>
 
 /** The rows the filters keep, in their order, with how many rows the search finds in each status. */
 export function pickRows(rows: RepoRow[], filters: RepoFilters) {

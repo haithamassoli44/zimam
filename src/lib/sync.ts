@@ -1,21 +1,48 @@
-import type { Item, Repo, Source, Workspace } from '@/types'
+import type { Item, Me, Repo, Source, Workspace } from '@/types'
 
 import { emptyCache, readCache, setMarker, syncedMarker, writeCache, type Cache } from './cache'
 import { GitHubError, type ErrorKind, type GitHub, type RateLimit } from './github'
-import { NODES, PR_STATUS, repoItems, SEARCH, toChecks, toItem, toReview, type Page, type RawItem } from './queries'
+import {
+  NODES,
+  PR_STATUS,
+  repoItems,
+  REVIEW_REQUESTED,
+  SEARCH,
+  STATUS_FIELDS,
+  toItem,
+  toStatus,
+  type Page,
+  type RawItem,
+  type RawStatus,
+} from './queries'
 import { belongsTo, qualifier, reposOf, sourcesKey } from './sources'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 
 export const TICK = MINUTE
+// Runs start a few seconds apart from one tick to the next, so a step due every few minutes is due this much early.
+const SLACK = TICK / 4
 // The closed history can take many minutes to load, so it loads in slices this long, with a check for changes before
 // each one.
 const HISTORY_SLICE = 0.75 * TICK
 // GitHub's search lags behind a change by a little, so each check looks this far before the last one.
 const OVERLAP = 10 * MINUTE
 const REPOS_EVERY = 15 * MINUTE
-const CHECKS_EVERY = 5 * MINUTE
+// How often an open pull request's checks, review and conflicts are read again: running checks soon, failing ones in a
+// while, the rest now and then. A conflict GitHub is still working out is asked again a few times at the shortest.
+const CHECKS_EVERY = { running: MINUTE, failing: 5 * MINUTE, settled: 15 * MINUTE }
+const UNKNOWN_TRIES = 3
+// Reading the checks of 100 pull requests takes GitHub 5 to 10 seconds, close to its 10-second limit, so they are read
+// fewer at a time. Each read costs a point however few it holds.
+const STATUS_BATCH = 50
+const REQUESTED_EVERY = 5 * MINUTE
+// When nothing has changed, the search for changes still runs this often, in case a change got past the free checks.
+const SEARCH_AT_LEAST = 5 * MINUTE
+// Search lags behind a change by a little, so after a free check sees one, the search keeps running for this long.
+const SETTLE = 3 * MINUTE
+// Beyond this many free checks a minute, the search alone is simpler on GitHub.
+const PROBE_LIMIT = 50
 // Search can't report what disappeared, such as deleted or transferred issues, so open items are refetched now and then.
 const RECONCILE_EVERY = 6 * HOUR
 const RECONCILE_MANUAL = 10 * MINUTE
@@ -64,6 +91,7 @@ export function idleStatus(): SyncStatus {
 export interface SyncStore {
   repos: Map<string, Repo>
   items: Map<string, Item>
+  me: Me
   changed(fresh: string[]): void
 }
 
@@ -83,6 +111,20 @@ export class Syncer {
   private sliced = false
   // Repositories whose open items have loaded at least once.
   private opened = new Set<string>()
+  // When this syncer last searched for changes, and whether that search found any.
+  private searchedAt = 0
+  private busy = false
+  private settleUntil = 0
+  // Organizations whose issue list this token can't read, so their repositories are checked one by one, and
+  // repositories it can't read either, which only the search can watch.
+  private noOrgProbe = new Set<string>()
+  private unprobeable = new Set<string>()
+  // When the current run started. What it reads counts as read then.
+  private runStartedAt = 0
+  // The review requests are asked for once per syncer, since a new one may come with a new token, and so a new person.
+  private askedRequested = false
+  // How many times in a row GitHub hasn't known whether a pull request conflicts.
+  private unknownMerge = new Map<string, number>()
 
   static async open(ws: Workspace, gh: GitHub, store: SyncStore, status: SyncStatus): Promise<Syncer> {
     const sources = sourcesKey(ws.sources)
@@ -91,8 +133,6 @@ export class Syncer {
       cache.sources = sources
       cache.reposAt = null
     }
-    // Repositories saved before they carried a description, language and last push are read again on the first sync.
-    if (cache.repos.some((repo) => repo.pushedAt === undefined)) cache.reposAt = null
     return new Syncer(ws, gh, store, status, cache)
   }
 
@@ -146,6 +186,7 @@ export class Syncer {
 
   private async run(manual: boolean) {
     const started = Date.now()
+    this.runStartedAt = started
     if (this.stopped || (this.status.pausedUntil ?? 0) > started) return
     this.status.pausedUntil = null
     const peerJustSynced = (await this.adoptStored()) && started - syncedMarker(this.ws.id) < 0.75 * TICK
@@ -153,7 +194,6 @@ export class Syncer {
 
     this.newsSince = this.cache.syncedAt === null ? Infinity : this.cache.syncedAt - OVERLAP
     const first = this.cache.watermark === null
-    const checkedAt = this.cache.checksAt
     if (first) {
       this.cache.watermark = started
       this.cache.reconciledAt = started
@@ -165,11 +205,11 @@ export class Syncer {
     const steps = [
       () => (manual || !this.cache.reposAt || started - this.cache.reposAt > REPOS_EVERY ? this.loadRepos() : null),
       () => this.loadOpen(),
-      () => (first ? null : this.loadChanges(started)),
-      // Every few minutes or on a refresh, unless this run loaded all open pull requests: their checks came with them.
+      () => (first ? null : this.loadChanges(started, manual)),
+      () => this.loadChecks(started, manual),
       () =>
-        this.cache.checksAt === checkedAt && (manual || started - (checkedAt ?? 0) > CHECKS_EVERY)
-          ? this.loadChecks()
+        manual || !this.askedRequested || started - (this.cache.requestedAt ?? 0) >= REQUESTED_EVERY - SLACK
+          ? this.loadRequested()
           : null,
       () => {
         this.cache.syncedAt = Date.now()
@@ -213,6 +253,8 @@ export class Syncer {
     this.store.items.clear()
     for (const repo of cache.repos) this.store.repos.set(repo.id, repo)
     for (const item of cache.items) this.store.items.set(item.id, item)
+    this.store.me.login = cache.login
+    this.store.me.requested = new Set(cache.requested)
     this.status.syncedAt = cache.syncedAt
     // Once a sync has finished, every repository's open items have loaded. Until then, only those in `openDone` have.
     this.opened = new Set(cache.syncedAt === null ? cache.openDone : cache.repos.map((repo) => repo.id))
@@ -269,21 +311,26 @@ export class Syncer {
   private async loadOpen() {
     const pending = [...this.store.repos.values()].filter((repo) => !this.cache.openDone.includes(repo.id))
     if (!pending.length) return
-    const startedAt = Date.now()
-    const all = pending.length === this.store.repos.size
     this.status.phase = 'open'
     this.status.done = 0
     this.status.total = pending.length
     await pool(pending, 4, async (repo) => {
       if (this.stopped || !this.hasBudget(RESERVE)) return
       const fetched: Item[] = []
-      if (repo.openIssues) for await (const page of this.pages(repo, 'issues', ['OPEN'])) fetched.push(...page.items)
-      if (repo.openPrs) for await (const page of this.pages(repo, 'pullRequests', ['OPEN'])) fetched.push(...page.items)
+      const hidden = new Set<Item['kind']>()
+      for (const kind of ['issues', 'pullRequests'] as const) {
+        if (!(kind === 'issues' ? repo.openIssues : repo.openPrs)) continue
+        for await (const page of this.pages(repo, kind, ['OPEN'])) {
+          if (!page) hidden.add(kind === 'issues' ? 'issue' : 'pr')
+          else fetched.push(...page.items)
+        }
+      }
       if (this.stopped) return
       this.put(fetched)
+      // What GitHub didn't show this time, such as a repository behind an organization's SAML sign-on, keeps its items.
       const seen = new Set(fetched.map((item) => item.id))
       const missing = [...this.store.items.values()].filter(
-        (item) => item.repoId === repo.id && item.state === 'open' && !seen.has(item.id),
+        (item) => item.repoId === repo.id && item.state === 'open' && !hidden.has(item.kind) && !seen.has(item.id),
       )
       if (missing.length) await this.refetch(missing.map((item) => item.id))
       this.cache.openDone.push(repo.id)
@@ -292,32 +339,21 @@ export class Syncer {
       this.status.done++
       this.saveSoon()
     })
-    // Open pull requests come with their checks and reviews, so once all of them are in, those are fresh too.
-    if (all && pending.every((repo) => this.cache.openDone.includes(repo.id))) this.cache.checksAt = startedAt
   }
 
-  private async loadChanges(started: number) {
+  private async loadChanges(started: number, manual: boolean) {
     if (!this.hasBudget(RESERVE)) return
     this.status.phase = 'changes'
+    if (!manual && (await this.unchanged(started))) return
     const since = new Date((this.cache.watermark ?? started) - OVERLAP).toISOString().replace(/\.\d+Z$/, 'Z')
     const found: Item[] = []
     let tooMany = false
-    // Several qualifiers in one search are OR'ed, and a query holds about eight before GitHub refuses it.
-    for (const group of chunk(this.ws.sources, 8)) {
+    type Found = { search: Page<RawItem | Record<string, never>> & { issueCount: number } }
+    for await (const data of this.search<Found>(SEARCH, `updated:>=${since}`)) {
+      // Search stops at 1,000 results. After a long absence, refetching the open items is cheaper and complete.
+      tooMany = data.search.issueCount > 1000
       if (tooMany) break
-      const q = `${group.map(qualifier).join(' ')} updated:>=${since}`
-      let after: string | null = null
-      do {
-        const data: { search: Page<RawItem | Record<string, never>> & { issueCount: number } } = await this.gh.query(
-          SEARCH,
-          { q, after },
-        )
-        // Search stops at 1,000 results. After a long absence, refetching the open items is cheaper and complete.
-        if (data.search.issueCount > 1000) tooMany = true
-        if (tooMany) break
-        for (const node of data.search.nodes) if (node && 'id' in node) found.push(toItem(node as RawItem))
-        after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null
-      } while (after)
+      for (const node of data.search.nodes) if (node && 'id' in node) found.push(toItem(node as RawItem))
     }
     if (tooMany) {
       this.cache.openDone = []
@@ -325,38 +361,146 @@ export class Syncer {
       await this.loadOpen()
     }
     const newRepo = found.some((item) => !this.store.repos.has(item.repoId))
-    this.put(found)
+    this.busy = this.put(found) || tooMany
     if (newRepo) {
       await this.loadRepos()
       await this.loadOpen()
     }
+    this.searchedAt = started
     this.cache.watermark = started
   }
 
-  // A finished CI run doesn't change a pull request's update time, so open pull requests' checks are asked for apart.
-  private async loadChecks() {
-    const open = [...this.store.items.values()].filter((item) => item.kind === 'pr' && item.state === 'open')
+  /**
+   * Whether GitHub says nothing changed in any source since the last time it was asked, so the search can wait. The
+   * answer is free when nothing changed. Busy workspaces skip asking: their searches keep finding something anyway.
+   */
+  private async unchanged(started: number): Promise<boolean> {
+    if (this.busy || started < this.settleUntil || started - this.searchedAt >= SEARCH_AT_LEAST - SLACK) return false
+    const probes = this.probes()
+    if (!probes) return false
+    const results = await Promise.all(probes.map((probe) => this.gh.probe(probe.path)))
+    let same = true
+    results.forEach((result, index) => {
+      const { org, path } = probes[index]
+      if (result === 'unsupported') {
+        if (org) this.noOrgProbe.add(org)
+        else this.unprobeable.add(path)
+      }
+      if (result === 'changed') this.settleUntil = started + SETTLE
+      if (result !== 'same') same = false
+    })
+    return same
+  }
+
+  // Each address lists issues and pull requests, the latest updated first, so its first one changes with any of them.
+  // An organization's list covers every repository in it, when the token may read it. Otherwise each repository that
+  // can still change gets its own.
+  private probes(): { path: string; org?: string }[] | null {
+    if (this.status.failedSources.length) return null
+    const list = 'issues?state=all&sort=updated&direction=desc&per_page=1'
+    const probes: { path: string; org?: string }[] = []
+    for (const source of this.ws.sources) {
+      if (source.kind === 'org' && !this.noOrgProbe.has(source.name)) {
+        probes.push({ path: `/orgs/${source.name}/${list}&filter=all`, org: source.name })
+        continue
+      }
+      for (const repo of this.store.repos.values())
+        if (belongsTo(repo, source) && !repo.isArchived) probes.push({ path: `/repos/${repo.fullName}/${list}` })
+    }
+    const usable = probes.length <= PROBE_LIMIT && !probes.some((probe) => this.unprobeable.has(probe.path))
+    return usable ? probes : null
+  }
+
+  // A finished CI run doesn't change a pull request's update time, and neither does its base branch moving on, so open
+  // pull requests' checks and conflicts are asked for apart, each as often as it is likely to change.
+  private async loadChecks(started: number, manual: boolean) {
+    for (const id of Object.keys(this.cache.checkedAt)) {
+      const item = this.store.items.get(id)
+      if (item?.kind !== 'pr' || item.state !== 'open') delete this.cache.checkedAt[id]
+    }
+    // Nothing runs or moves in an archived repository, so its pull requests keep what they had.
+    const due = [...this.store.items.values()].filter(
+      (item) =>
+        item.kind === 'pr' &&
+        item.state === 'open' &&
+        !this.store.repos.get(item.repoId)?.isArchived &&
+        this.checksDue(item, started, manual),
+    )
     for (const ids of chunk(
-      open.map((item) => item.id),
-      100,
+      due.map((item) => item.id),
+      STATUS_BATCH,
     )) {
       if (this.stopped || !this.hasBudget(RESERVE)) return
       const data = await this.gh.query<{
-        nodes: (Pick<RawItem, 'id' | 'isDraft' | 'reviewDecision' | 'commits'> | null)[]
+        nodes: ((RawStatus & { id: string }) | null)[]
       }>(PR_STATUS, { ids })
+      // Pull requests GitHub doesn't return, such as those behind SAML sign-on, wait their turn like the rest.
+      for (const id of ids) this.cache.checkedAt[id] = started
       let patched = false
       for (const node of data.nodes) {
         const item = node && this.store.items.get(node.id)
         if (!node || !item) continue
-        const review = toReview(node)
-        const checks = toChecks(node)
-        if (review === item.review && checks === item.checks) continue
-        this.store.items.set(item.id, { ...item, review, checks })
+        const status = toStatus(node, true)
+        if (status.merge) this.unknownMerge.delete(item.id)
+        else this.unknownMerge.set(item.id, (this.unknownMerge.get(item.id) ?? 0) + 1)
+        const next = keepMerge({ ...item, ...status }, item)
+        if (sameStatus(next, item)) continue
+        this.store.items.set(item.id, next)
         patched = true
       }
       if (patched) this.changed([])
     }
-    this.cache.checksAt = Date.now()
+  }
+
+  private checksDue(item: Item, started: number, manual: boolean): boolean {
+    const checkedAt = this.cache.checkedAt[item.id] ?? 0
+    // A refresh reads them all again, except those this run has just read.
+    if (manual) return checkedAt < started
+    // Unknown until the first answer, or since GitHub last answered "unknown", as it does after the base branch moves.
+    const tries = this.unknownMerge.get(item.id)
+    const unknown = (item.merge === null || tries !== undefined) && (tries ?? 0) < UNKNOWN_TRIES
+    const every =
+      item.checks === 'pending' || unknown
+        ? CHECKS_EVERY.running
+        : item.checks === 'failure'
+          ? CHECKS_EVERY.failing
+          : CHECKS_EVERY.settled
+    return started - checkedAt >= every - SLACK
+  }
+
+  // A request for a review can go to a team, which the pull request names instead of its members, so GitHub's search,
+  // which knows the viewer's teams, finds them. The answer names the viewer too.
+  private async loadRequested() {
+    if (!this.hasBudget(RESERVE)) return
+    let login: string | null = null
+    const requested: string[] = []
+    type Found = { viewer: { login: string }; search: Page<{ id?: string } | null> }
+    for await (const data of this.search<Found>(REVIEW_REQUESTED, 'is:pr is:open review-requested:@me')) {
+      login = data.viewer.login
+      for (const node of data.search.nodes) if (node?.id) requested.push(node.id)
+    }
+    const { me } = this.store
+    const changed =
+      login !== me.login || requested.length !== me.requested.size || requested.some((id) => !me.requested.has(id))
+    this.askedRequested = true
+    this.cache.requestedAt = Date.now()
+    me.login = login
+    me.requested = new Set(requested)
+    if (changed) this.changed([])
+  }
+
+  // Several qualifiers in one search are OR'ed, and a query holds about eight before GitHub refuses it, so the sources
+  // are searched eight at a time. Yields every page of every search.
+  private async *search<T extends { search: Page<unknown> }>(query: string, terms: string): AsyncGenerator<T> {
+    for (const group of chunk(this.ws.sources, 8)) {
+      const q = `${group.map(qualifier).join(' ')} ${terms}`
+      let after: string | null = null
+      do {
+        const data: T = await this.gh.query(query, { q, after })
+        yield data
+        after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null
+      } while (after)
+    }
   }
 
   private async loadHistory() {
@@ -374,6 +518,8 @@ export class Syncer {
         const resume = typeof saved === 'string' ? saved : null
         const states = kind === 'issues' ? ['CLOSED'] : ['CLOSED', 'MERGED']
         for await (const page of this.pages(repo, kind, states, resume)) {
+          // A repository GitHub won't show has no history to load.
+          if (!page) break
           this.put(page.items)
           entry[key] = page.cursor ?? true
           this.saveSoon()
@@ -421,12 +567,17 @@ export class Syncer {
     return kinds
   }
 
-  // GitHub times out on heavy pages, open pull requests with their checks most of all, so those start smaller and
-  // any page that times out is asked for again at half the size.
-  private async *pages(repo: Repo, kind: 'issues' | 'pullRequests', states: string[], after: string | null = null) {
+  // GitHub times out on heavy pages, so any page that times out is asked for again at half the size. A repository
+  // GitHub doesn't show, because it is gone or the token may no longer read it, gives one null.
+  private async *pages(
+    repo: Repo,
+    kind: 'issues' | 'pullRequests',
+    states: string[],
+    after: string | null = null,
+  ): AsyncGenerator<{ items: Item[]; cursor: string | null } | null> {
     const open = states.includes('OPEN')
-    const query = repoItems(kind, open)
-    let first = kind === 'pullRequests' && open ? 50 : 100
+    const { query, size } = repoItems(kind, open)
+    let first = size
     while (!this.stopped) {
       let page: Page<RawItem | null> | undefined
       try {
@@ -445,7 +596,10 @@ export class Syncer {
         }
         throw error
       }
-      if (!page) return
+      if (!page) {
+        yield null
+        return
+      }
       const cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null
       yield { items: page.nodes.filter((node): node is RawItem => node !== null).map(toItem), cursor }
       if (!cursor) return
@@ -455,12 +609,19 @@ export class Syncer {
 
   private async refetch(ids: string[]) {
     for (const group of chunk(ids, 100)) {
-      const data = await this.gh.query<{ nodes: (RawItem | null)[] }>(NODES, { ids: group })
+      const { data, errors } = await this.gh.request<{ nodes: (RawItem | null)[] }>(NODES, { ids: group })
+      // Only what GitHub says doesn't exist goes. What it won't show, such as items behind an organization's SAML
+      // sign-on, stays until it can be read again.
+      const gone = new Set(
+        errors
+          .filter((error) => error.type === 'NOT_FOUND' && error.path?.[0] === 'nodes')
+          .map((error) => error.path?.[1]),
+      )
       const found: Item[] = []
       let deleted = false
       data.nodes.forEach((node, index) => {
         if (node && 'id' in node) found.push(toItem(node))
-        else deleted = this.store.items.delete(group[index]) || deleted
+        else if (gone.has(index)) deleted = this.store.items.delete(group[index]) || deleted
       })
       if (!this.put(found) && deleted) this.changed([])
     }
@@ -470,10 +631,13 @@ export class Syncer {
   private put(items: Item[]): boolean {
     const fresh: string[] = []
     let changed = false
-    for (const item of items) {
-      const old = this.store.items.get(item.id)
-      if (old && old.updatedAt > item.updatedAt) continue
-      if (old && old.updatedAt === item.updatedAt && old.checks === item.checks && old.review === item.review) continue
+    for (const incoming of items) {
+      const old = this.store.items.get(incoming.id)
+      if (old && old.updatedAt > incoming.updatedAt) continue
+      const item = keepMerge(incoming, old)
+      // Open pull requests always come with their checks.
+      if (item.kind === 'pr' && item.state === 'open') this.cache.checkedAt[item.id] = this.runStartedAt
+      if (old && old.updatedAt === item.updatedAt && sameStatus(old, item)) continue
       this.store.items.set(item.id, item)
       changed = true
       if (old?.updatedAt !== item.updatedAt && Date.parse(item.updatedAt) > this.newsSince) fresh.push(item.id)
@@ -496,11 +660,19 @@ export class Syncer {
     this.unsaved = false
     this.cache.repos = [...this.store.repos.values()]
     this.cache.items = [...this.store.items.values()]
+    this.cache.login = this.store.me.login
+    this.cache.requested = [...this.store.me.requested]
     if (!(await writeCache(this.cache)) || !announce) return
     setMarker(this.ws.id, this.cache.syncedAt)
     this.channel?.postMessage({ ws: this.ws.id })
   }
 }
+
+// While GitHub works out whether an open pull request conflicts, it answers "unknown": the last answer stands until then.
+const keepMerge = (next: Item, old: Item | undefined): Item =>
+  next.state === 'open' && next.merge === null && old?.merge ? { ...next, merge: old.merge } : next
+
+const sameStatus = (a: Item, b: Item) => STATUS_FIELDS.every((field) => a[field] === b[field])
 
 function chunk<T>(list: T[], size: number): T[][] {
   const chunks: T[][] = []

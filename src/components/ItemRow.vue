@@ -7,10 +7,13 @@ export const ROW_HEIGHT = { compact: 41, comfortable: 73 } as const
 import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UAvatarGroup from '@nuxt/ui/components/AvatarGroup.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
+import UPopover from '@nuxt/ui/components/Popover.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import CheckRuns from '@/components/CheckRuns.vue'
+import { CHECK_LOOKS } from '@/components/looks'
 import { formatList, formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { settings } from '@/stores/settings'
@@ -20,6 +23,7 @@ const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fr
 const { t } = useI18n()
 
 const compact = computed(() => settings.density === 'compact')
+const open = computed(() => props.item.state === 'open')
 
 // GitHub's glyphs already tell the state by shape.
 const STATES = {
@@ -40,28 +44,44 @@ const state = computed<keyof typeof STATES>(() => {
   return review === 'draft' ? 'prDraft' : 'prOpen'
 })
 
-const CHECKS = {
-  success: { icon: 'i-octicon-check-16', color: 'text-muted' },
-  failure: { icon: 'i-octicon-x-16', color: 'text-error' },
-  pending: { icon: 'i-octicon-dot-fill-16', color: 'text-warning' },
+const conflicts = computed(() => props.item.merge === 'conflicts')
+const stateText = computed(() =>
+  conflicts.value ? t('item.conflicting', { state: t(`item.${state.value}`) }) : t(`item.${state.value}`),
+)
+
+// A draft says so by its icon, and a review no branch rule asks for says nothing.
+const REVIEWS = {
+  approved: { icon: 'i-octicon-check-circle-16', color: 'text-success' },
+  changes: { icon: 'i-octicon-file-diff-16', color: 'text-error' },
+  required: { icon: 'i-octicon-code-review-16', color: 'text-muted' },
 }
 
-const checks = computed(() => (props.item.state === 'open' ? props.item.checks : null))
-const review = computed(() =>
-  props.item.state === 'open' && (props.item.review === 'approved' || props.item.review === 'changes')
-    ? props.item.review
-    : null,
-)
+const review = computed(() => {
+  const value = props.item.review
+  return open.value && value && value in REVIEWS ? (value as keyof typeof REVIEWS) : null
+})
+const diff = computed(() => (open.value && settings.show.size ? props.item.diff : null))
 const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), now.value))
+
+const LABELS = 3
+const labels = computed(() => props.item.labels.slice(0, LABELS))
+const moreLabels = computed(() => props.item.labels.slice(LABELS).map((label) => label.name))
+
+// The row holds a button, so it can't be one link. The title is the link, and a click elsewhere on the row follows it,
+// unless it ends a text selection.
+function follow(event: MouseEvent) {
+  if (event.button > 1 || (event.target as Element).closest('a, button')) return
+  if (getSelection()?.toString()) return
+  window.open(props.item.url, '_blank', 'noopener')
+}
 </script>
 
 <template>
-  <a
-    :href="item.url"
-    target="_blank"
-    rel="noopener"
-    class="group relative flex gap-3 border-b border-default px-4 transition-colors hover:bg-elevated/60 focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary sm:px-6"
+  <div
+    class="group relative flex cursor-pointer gap-3 border-b border-default px-4 transition-colors hover:bg-elevated/60 has-[a[data-row]:focus-visible]:bg-elevated has-[a[data-row]:focus-visible]:outline-2 has-[a[data-row]:focus-visible]:-outline-offset-2 has-[a[data-row]:focus-visible]:outline-primary sm:px-6"
     :class="[compact ? 'items-center py-2' : 'py-3', fresh && 'arrived']"
+    @click="follow"
+    @auxclick="follow"
   >
     <span
       v-if="fresh"
@@ -70,8 +90,14 @@ const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), no
       aria-hidden="true"
     />
 
-    <UTooltip :text="t(`item.${state}`)">
-      <UIcon :name="STATES[state].icon" class="size-4 shrink-0" :class="[STATES[state].color, !compact && 'mt-1']" />
+    <UTooltip :text="stateText">
+      <span class="relative flex shrink-0" :class="!compact && 'mt-1'">
+        <UIcon :name="STATES[state].icon" class="size-4" :class="STATES[state].color" />
+        <span
+          v-if="conflicts"
+          class="absolute -end-0.5 -bottom-0.5 size-2 rounded-full bg-error ring-2 ring-(--ui-bg) transition-colors group-hover:ring-(--ui-bg-elevated)"
+        />
+      </span>
     </UTooltip>
 
     <div class="min-w-0 flex-1">
@@ -79,16 +105,22 @@ const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), no
         <span v-if="compact" class="shrink-0 font-mono text-xs text-muted" dir="ltr"
           >{{ repoName }}#{{ item.number }}</span
         >
-        <span class="sr-only">{{ t(`item.${state}`) }}</span>
-        <span
-          class="text-[15px] leading-6 font-medium text-highlighted transition-colors group-hover:text-primary"
+        <!-- A compact title takes its direction from its own words. The hidden state text has a direction of its own, so it
+             doesn't count, and neither would a title in <bdi>. -->
+        <a
+          :href="item.url"
+          target="_blank"
+          rel="noopener"
+          data-row
+          class="text-[15px] leading-6 font-medium text-highlighted transition-colors group-hover:text-primary focus-visible:outline-none"
           :class="compact && 'truncate'"
           :dir="compact ? 'auto' : undefined"
-          ><bdi>{{ item.title }}</bdi></span
+          ><span class="sr-only" dir="auto">{{ stateText }}: </span><template v-if="compact">{{ item.title }}</template
+          ><bdi v-else>{{ item.title }}</bdi></a
         >
         <template v-if="settings.show.labels">
           <span
-            v-for="label in item.labels"
+            v-for="label in labels"
             :key="label.name"
             class="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
           >
@@ -98,6 +130,12 @@ const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), no
             />
             <bdi>{{ label.name }}</bdi>
           </span>
+          <UTooltip v-if="moreLabels.length" :text="formatList(moreLabels)">
+            <span class="inline-flex h-5 shrink-0 items-center font-mono text-xs text-muted tabular-nums">
+              <span aria-hidden="true">+{{ formatNumber(moreLabels.length) }}</span>
+              <span class="sr-only">{{ t('item.moreLabels', { names: formatList(moreLabels) }) }}</span>
+            </span>
+          </UTooltip>
         </template>
       </div>
 
@@ -117,18 +155,38 @@ const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), no
         <UTooltip :text="t('item.opened', { time: fullDate(item.createdAt) })">
           <span>{{ t('item.updated', { time: updated }) }}</span>
         </UTooltip>
-        <span v-if="review" :class="review === 'approved' ? 'text-success' : 'text-error'">{{
-          t(`filters.review.${review}`)
-        }}</span>
+        <span v-if="diff" class="font-mono text-xs tabular-nums" dir="ltr">
+          <span aria-hidden="true">+{{ formatNumber(diff.additions) }} −{{ formatNumber(diff.deletions) }}</span>
+          <span class="sr-only">{{
+            t('item.diff', { added: formatNumber(diff.additions), removed: formatNumber(diff.deletions) })
+          }}</span>
+        </span>
       </div>
     </div>
 
     <div class="flex shrink-0 items-center gap-4 text-xs text-muted" :class="!compact && 'h-6 self-start'">
-      <span v-if="settings.show.checks" class="flex w-4 justify-center">
-        <UTooltip v-if="checks" :text="t(`filters.checks.${checks}`)">
-          <UIcon :name="CHECKS[checks].icon" class="size-4" :class="CHECKS[checks].color" />
+      <span v-if="settings.show.review" class="flex w-4 justify-center" :class="!review && 'max-sm:hidden'">
+        <UTooltip v-if="review" :text="t(`filters.review.${review}`)">
+          <UIcon :name="REVIEWS[review].icon" class="size-4" :class="REVIEWS[review].color" />
         </UTooltip>
-        <span v-if="checks" class="sr-only">{{ t(`filters.checks.${checks}`) }}</span>
+        <span v-if="review" class="sr-only">{{ t(`filters.review.${review}`) }}</span>
+      </span>
+      <span v-if="settings.show.checks" class="flex w-4 justify-center">
+        <!-- Modal, so the click that closes it doesn't also open the row it lands on. -->
+        <UPopover v-if="item.checks" modal :content="{ align: 'end' }">
+          <UTooltip :text="t(`filters.checks.${item.checks}`)">
+            <button
+              type="button"
+              class="tap flex rounded-sm transition-colors hover:text-highlighted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              :aria-label="t('checks.show', { state: t(`filters.checks.${item.checks}`) })"
+            >
+              <UIcon :name="CHECK_LOOKS[item.checks].icon" class="size-4" :class="CHECK_LOOKS[item.checks].color" />
+            </button>
+          </UTooltip>
+          <template #content>
+            <CheckRuns :item="item" />
+          </template>
+        </UPopover>
       </span>
       <span v-if="settings.show.assignees" class="hidden w-14 justify-end sm:flex">
         <UTooltip
@@ -148,5 +206,5 @@ const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), no
         </template>
       </span>
     </div>
-  </a>
+  </div>
 </template>

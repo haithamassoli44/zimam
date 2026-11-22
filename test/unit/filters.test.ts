@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyFilters, defaultFilters, fromQuery, NONE, toQuery, type Context } from '@/lib/filters'
-import type { Item, Repo } from '@/types'
+import { applyFilters, defaultFilters, fromQuery, NONE, parseSearch, toQuery, type Context } from '@/lib/filters'
+import { noOne, type Item, type Repo } from '@/types'
 
 const NOW = Date.parse('2026-11-21T12:00:00Z')
 const DAY = 86_400_000
@@ -43,6 +43,8 @@ function item(id: string, overrides: Partial<Item> = {}): Item {
     updatedAt: new Date(NOW - DAY).toISOString(),
     review: null,
     checks: null,
+    merge: null,
+    diff: null,
     ...overrides,
   }
 }
@@ -53,6 +55,7 @@ const ctx: Context = {
     ['old', repo('old', true)],
   ]),
   now: NOW,
+  me: noOne(),
 }
 
 describe('toQuery and fromQuery', () => {
@@ -83,9 +86,9 @@ describe('toQuery and fromQuery', () => {
     expect(toQuery(all)).toBe('state=')
     const reviews = {
       ...defaultFilters(),
-      review: ['draft' as const, 'pending' as const, 'approved' as const, 'changes' as const],
+      review: ['draft' as const, 'required' as const, 'optional' as const, 'approved' as const, 'changes' as const],
     }
-    expect(fromQuery(toQuery(reviews)).review).toHaveLength(4)
+    expect(fromQuery(toQuery(reviews)).review).toHaveLength(5)
   })
 
   it('writes the same query whatever order values were picked in', () => {
@@ -110,7 +113,7 @@ describe('toQuery and fromQuery', () => {
 describe('applyFilters', () => {
   const items = [
     item('issue', { labels: [{ name: 'bug', color: 'ff0000' }] }),
-    item('pr', { kind: 'pr', review: 'pending' }),
+    item('pr', { kind: 'pr', review: 'required' }),
     item('closed', { state: 'closed' }),
     item('archived', { repoId: 'old' }),
   ]
@@ -133,7 +136,7 @@ describe('applyFilters', () => {
   })
 
   it('leaves issues out when a pull-request-only filter is set', () => {
-    const { items: shown } = applyFilters(items, { ...defaultFilters(), review: ['pending'] }, ctx)
+    const { items: shown } = applyFilters(items, { ...defaultFilters(), review: ['required'] }, ctx)
     expect(shown.map((i) => i.id)).toEqual(['pr'])
   })
 
@@ -168,5 +171,151 @@ describe('applyFilters', () => {
       ctx,
     )
     expect(found.items).toHaveLength(1)
+  })
+})
+
+describe('typed filters', () => {
+  const me = { login: 'Ali', requested: new Set(['asks']) }
+  const context: Context = { ...ctx, me }
+  const items = [
+    item('bug', { author: { login: 'renovate', avatarUrl: '' }, labels: [{ name: 'bug', color: '' }] }),
+    item('docs', {
+      labels: [
+        { name: 'Good first issue', color: '' },
+        { name: 'docs', color: '' },
+      ],
+    }),
+    item('mine', { assignees: [{ login: 'ali', avatarUrl: '' }] }),
+    item('asks', { kind: 'pr', review: 'required', author: { login: 'omar', avatarUrl: '' } }),
+    item('draft', { kind: 'pr', review: 'draft', merge: 'conflicts', author: { login: 'omar', avatarUrl: '' } }),
+    item('old', { repoId: 'old', state: 'closed' }),
+  ]
+  const ids = (q: string, filters = { ...defaultFilters(), state: [], status: [] }) =>
+    applyFilters(items, { ...filters, q }, context).items.map((each) => each.id)
+
+  it('keeps items with any of the values, and leaves out those with a minus', () => {
+    expect(ids('label:bug,docs')).toEqual(['bug', 'docs'])
+    expect(ids('-author:renovate -author:omar')).toEqual(['docs', 'mine', 'old'])
+    expect(ids('-label:bug -label:docs').toSorted()).toEqual(['asks', 'draft', 'mine', 'old'])
+  })
+
+  it('reads quoted values, any case, and words beside qualifiers', () => {
+    expect(ids('label:"good first issue"')).toEqual(['docs'])
+    expect(ids('LABEL:BUG')).toEqual(['bug'])
+    expect(ids('docs is:issue')).toEqual(['docs'])
+    expect(parseSearch('fix "two words" label:a').terms).toEqual(['fix', 'two words'])
+  })
+
+  it('matches a repository by its full name or its name alone, and accounts by org, user or owner', () => {
+    expect(ids('repo:old')).toEqual(['old'])
+    expect(ids('-repo:acme/web')).toEqual(['old'])
+    expect(ids('org:acme').length).toBe(6)
+    expect(ids('user:someone')).toEqual([])
+  })
+
+  it('understands is:, no: and @me', () => {
+    expect(ids('is:closed')).toEqual(['old'])
+    expect(ids('is:draft')).toEqual(['draft'])
+    expect(ids('is:conflicting')).toEqual(['draft'])
+    expect(ids('is:pr -is:draft')).toEqual(['asks'])
+    expect(ids('is:archived')).toEqual(['old'])
+    expect(ids('is:nonsense')).toEqual([])
+    expect(ids('no:assignee is:pr')).toEqual(['asks', 'draft'])
+    expect(ids('no:label').toSorted()).toEqual(['asks', 'draft', 'mine', 'old'])
+    expect(ids('assignee:@me')).toEqual(['mine'])
+  })
+
+  it('takes unknown keys, links and numbers as words', () => {
+    expect(parseSearch('http://x.y nope:value #42')).toEqual({
+      terms: ['http://x.y', 'nope:value', '#42'],
+      qualifiers: [],
+    })
+  })
+
+  it("doesn't trip on words every object has, typed or in an address", () => {
+    for (const q of ['constructor:x', 'is:constructor', 'no:constructor', 'review:constructor', '-toString:a'])
+      expect(() => ids(q)).not.toThrow()
+    expect(ids('is:constructor')).toEqual([])
+    expect(fromQuery('review=constructor&review=hasOwnProperty').review).toEqual([])
+  })
+
+  it('takes involves:@me as anything that involves the person', () => {
+    // Items opened by Ali by default, the one assigned to them and the one asking them for a review.
+    expect(ids('involves:@me')).toEqual(['docs', 'mine', 'asks', 'old'])
+    expect(ids('-involves:@me')).toEqual(['bug', 'draft'])
+  })
+
+  it('reads the old name of a review value', () => {
+    expect(ids('review:pending')).toEqual(['asks'])
+    expect(fromQuery('review=pending').review).toEqual(['required'])
+  })
+
+  it('narrows the counts as a search does', () => {
+    const { counts } = applyFilters(items, { ...defaultFilters(), q: '-author:omar' }, context)
+    expect(counts.kind.get('pr')).toBeUndefined()
+    expect(counts.kind.get('issue')).toBe(3)
+  })
+})
+
+describe('what involves me', () => {
+  const me = { login: 'ali', requested: new Set(['asks', 'closed-ask']) }
+  const items = [
+    item('asks', { kind: 'pr', author: null }),
+    item('closed-ask', { kind: 'pr', state: 'closed', author: null }),
+    item('assigned', { assignees: [{ login: 'ALI', avatarUrl: '' }], author: null }),
+    item('authored', { author: { login: 'ali', avatarUrl: '' } }),
+    item('other', { author: { login: 'omar', avatarUrl: '' } }),
+  ]
+  const run = (picked: ('review' | 'assigned' | 'authored')[], login: string | null = 'ali') =>
+    applyFilters(items, { ...defaultFilters(), state: [], me: picked }, { ...ctx, me: { ...me, login } })
+
+  it('finds review requests, assignments and what the person opened', () => {
+    expect(run(['review']).items.map((each) => each.id)).toEqual(['asks'])
+    expect(run(['assigned']).items.map((each) => each.id)).toEqual(['assigned'])
+    expect(run(['review', 'assigned', 'authored']).items.map((each) => each.id)).toEqual([
+      'asks',
+      'assigned',
+      'authored',
+    ])
+  })
+
+  it('finds nothing before the login is known', () => {
+    expect(run(['authored'], null).items).toEqual([])
+  })
+})
+
+const pr = (id: string, overrides: Partial<Item> = {}) =>
+  item(id, { kind: 'pr', review: 'optional', checks: 'success', merge: 'clean', ...overrides })
+
+describe('the ready to merge order', () => {
+  it('puts approved and passing first, drafts and other items last', () => {
+    const items = [
+      item('issue'),
+      pr('draft', { review: 'draft' }),
+      pr('failing', { review: 'approved', checks: 'failure' }),
+      pr('conflicts', { review: 'approved', merge: 'conflicts' }),
+      pr('changes', { review: 'changes' }),
+      pr('required', { review: 'required' }),
+      pr('running', { review: 'approved', checks: 'pending' }),
+      pr('waiting', { review: 'required', checks: 'pending' }),
+      pr('optional', { checks: null }),
+      pr('approved', { review: 'approved', merge: null }),
+      pr('merged', { state: 'merged', review: 'approved' }),
+    ]
+    const sorted = applyFilters(items, { ...defaultFilters(), state: [], sort: 'ready' }, ctx).items
+    expect(sorted.slice(0, 5).map((each) => each.id)).toEqual([
+      'approved',
+      'optional',
+      'running',
+      'waiting',
+      'required',
+    ])
+    expect(sorted.at(-3)?.id).toBe('draft')
+  })
+
+  it('keeps the latest updated first among equals', () => {
+    const items = [pr('older', { updatedAt: new Date(NOW - 2 * DAY).toISOString() }), pr('newer')]
+    const sorted = applyFilters(items, { ...defaultFilters(), sort: 'ready' }, ctx).items
+    expect(sorted.map((each) => each.id)).toEqual(['newer', 'older'])
   })
 })

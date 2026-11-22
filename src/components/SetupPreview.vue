@@ -7,7 +7,7 @@ import ItemRow from '@/components/ItemRow.vue'
 import NavRow from '@/components/NavRow.vue'
 import { formatNumber } from '@/locale'
 import { settings } from '@/stores/settings'
-import type { Checks, Item, ItemKind, Preset } from '@/types'
+import type { Checks, Item, ItemKind, Merge, Preset, Review } from '@/types'
 
 const { t } = useI18n()
 const MINUTE = 60_000
@@ -22,6 +22,9 @@ interface Sample {
   ago: number
   labels: [string, string][]
   checks?: Checks
+  review?: Review
+  merge?: Merge
+  diff?: [number, number]
   comments?: number
   fresh?: boolean
 }
@@ -36,6 +39,8 @@ const SAMPLES: Sample[] = [
     ago: 2,
     labels: [['performance', 'fbca04']],
     checks: 'pending',
+    review: 'required',
+    diff: [84, 12],
     fresh: true,
   },
   {
@@ -57,6 +62,9 @@ const SAMPLES: Sample[] = [
     ago: 180,
     labels: [['dependencies', '0366d6']],
     checks: 'failure',
+    review: 'optional',
+    merge: 'conflicts',
+    diff: [3, 3],
   },
   {
     kind: 'issue',
@@ -77,6 +85,7 @@ const SAMPLES: Sample[] = [
     ago: 4320,
     labels: [],
     checks: 'success',
+    diff: [210, 95],
   },
 ]
 
@@ -104,8 +113,10 @@ function toItem(sample: Sample): Item {
     comments: sample.comments ?? 0,
     createdAt: at,
     updatedAt: at,
-    review: sample.kind === 'draft' ? 'draft' : sample.kind === 'pr' ? 'pending' : null,
+    review: sample.kind === 'draft' ? 'draft' : (sample.review ?? null),
     checks: sample.checks ?? null,
+    merge: sample.merge ?? null,
+    diff: sample.diff ? { additions: sample.diff[0], deletions: sample.diff[1] } : null,
   }
 }
 

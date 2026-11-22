@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { defaultRepoFilters, pickRows, repoRows, toggleStatus, WEEKS } from '@/lib/repos'
-import type { Item, Repo } from '@/types'
+import type { Left } from '@/lib/sync'
+import { noOne, type Item, type Repo } from '@/types'
 
 const NOW = Date.parse('2026-11-21T12:00:00Z')
 const DAY = 86_400_000
@@ -45,35 +46,56 @@ function item(id: string, repoId: string, overrides: Partial<Item> = {}): Item {
     updatedAt: at(1),
     review: null,
     checks: null,
+    merge: null,
+    diff: null,
     ...overrides,
   }
 }
 
 const pr = (id: string, repoId: string, overrides: Partial<Item> = {}) =>
-  item(id, repoId, { kind: 'pr', review: 'pending', checks: 'success', ...overrides })
+  item(id, repoId, { kind: 'pr', review: 'required', checks: 'success', merge: 'clean', ...overrides })
+
+// The repositories as a workspace holds them, counted at NOW unless said otherwise.
+const rowsOf = (repos: Repo[], items: Item[], now = NOW, left: Record<string, Left[]> = {}) =>
+  repoRows(items, { repos: new Map(repos.map((each) => [each.id, each])), now, me: noOne() }, left)
 
 describe('repoRows', () => {
-  const [web] = repoRows(
+  const [web] = rowsOf(
     [repo('web', { pushedAt: at(3) })],
     [
       pr('waiting', 'web', { createdAt: at(2), updatedAt: at(2) }),
       pr('failing', 'web', { review: 'approved', checks: 'failure', createdAt: at(9), updatedAt: at(9) }),
-      pr('draft', 'web', { review: 'draft', createdAt: at(400), updatedAt: at(400) }),
-      pr('merged', 'web', { state: 'merged', checks: 'failure', createdAt: at(30), updatedAt: at(0.5) }),
+      pr('draft', 'web', { review: 'draft', merge: 'conflicts', createdAt: at(400), updatedAt: at(400) }),
+      pr('optional', 'web', { review: 'optional', merge: null, createdAt: at(400), updatedAt: at(400) }),
+      pr('merged', 'web', {
+        state: 'merged',
+        checks: 'failure',
+        merge: 'conflicts',
+        createdAt: at(30),
+        updatedAt: at(0.5),
+      }),
       item('issue', 'web', { createdAt: at(8), updatedAt: at(5) }),
       item('elsewhere', 'other'),
     ],
     NOW,
   )
 
-  it('counts open pull requests waiting for a review or failing their checks', () => {
-    expect(web.awaiting).toBe(1)
-    expect(web.failing).toBe(1)
+  it('counts open pull requests waiting for a review, failing their checks or conflicting', () => {
+    expect(web.counts).toMatchObject({ awaiting: 1, failing: 1, conflicts: 1 })
+  })
+
+  it("takes open issues and pull requests from GitHub's totals, and counts archived repositories too", () => {
+    const [old] = rowsOf(
+      [repo('old', { isArchived: true, openIssues: 7, openPrs: 3 })],
+      [pr('waiting', 'old'), pr('closed', 'old', { state: 'closed' })],
+      NOW,
+    )
+    expect(old.counts).toEqual({ issues: 7, prs: 3, awaiting: 1, failing: 0, conflicts: 0 })
   })
 
   it('takes the last push or the last change, whichever is later', () => {
     expect(web.activeAt).toBe(NOW - 0.5 * DAY)
-    expect(repoRows([repo('quiet', { pushedAt: at(3) })], [], NOW)[0].activeAt).toBe(NOW - 3 * DAY)
+    expect(rowsOf([repo('quiet', { pushedAt: at(3) })], [], NOW)[0].activeAt).toBe(NOW - 3 * DAY)
   })
 
   it('counts what was opened each week, oldest first, leaving out anything older', () => {
@@ -89,7 +111,7 @@ const closed = (id: string, repoId: string, kind: Item['kind'], days: number) =>
   item(id, repoId, { kind, state: kind === 'pr' ? 'merged' : 'closed', createdAt: at(days), updatedAt: at(days) })
 
 describe('repoRows while loading', () => {
-  const rows = repoRows(
+  const rows = rowsOf(
     [
       repo('web', { openIssues: 1, openPrs: 1 }),
       repo('quiet', { openIssues: 0, openPrs: 0 }),
@@ -136,7 +158,7 @@ describe('repoRows while loading', () => {
 })
 
 describe('pickRows', () => {
-  const rows = repoRows(
+  const rows = rowsOf(
     [
       repo('web', { description: 'الموقع العام', openIssues: 5, pushedAt: at(1) }),
       repo('api', { openIssues: 9, pushedAt: at(2) }),

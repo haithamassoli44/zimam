@@ -1,9 +1,10 @@
 import { computed, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 
 import { deleteCache } from '@/lib/cache'
-import { createGitHub } from '@/lib/github'
+import { readCheckRuns, type CheckRuns } from '@/lib/checks'
+import { createGitHub, type GitHub } from '@/lib/github'
 import { idleStatus, syncKey, Syncer, TICK, type SyncStatus, type SyncStore } from '@/lib/sync'
-import type { Item, Repo, Workspace } from '@/types'
+import { noOne, type Item, type Me, type Repo, type Workspace } from '@/types'
 
 import { activeWorkspace, removeWorkspace } from './settings'
 
@@ -14,6 +15,8 @@ document.documentElement.style.setProperty('--fresh', `${FRESH_MS}ms`)
 // Each opened workspace gets its own maps and status, so a syncer that is still finishing can't touch the next one's.
 export const repos = shallowRef(new Map<string, Repo>())
 export const items = shallowRef(new Map<string, Item>())
+/** Whose token reads the open workspace, and the open pull requests that ask them for a review. */
+export const me = shallowRef<Me>(noOne())
 export const status = shallowRef<SyncStatus>(reactive(idleStatus()))
 export const highlighted = shallowRef(new Set<string>())
 export const loaded = ref(false)
@@ -45,21 +48,25 @@ export const progress = computed(() => {
 })
 
 let syncer: Syncer | null = null
+let github: GitHub | null = null
 let opening = 0
 
 function session(): SyncStore {
   const store: SyncStore = {
     repos: new Map(),
     items: new Map(),
+    me: noOne(),
     changed(fresh) {
       if (repos.value !== store.repos) return
       triggerRef(repos)
       triggerRef(items)
+      triggerRef(me)
       if (fresh.length) markFresh(fresh)
     },
   }
   repos.value = store.repos
   items.value = store.items
+  me.value = store.me
   status.value = reactive(idleStatus())
   return store
 }
@@ -68,12 +75,15 @@ async function open(ws: Workspace | null) {
   const ticket = ++opening
   syncer?.stop()
   syncer = null
+  github = null
   loaded.value = false
   const store = session()
   if (!ws) return
-  const next = await Syncer.open(ws, createGitHub(ws.token), store, status.value)
+  const gh = createGitHub(ws.token)
+  const next = await Syncer.open(ws, gh, store, status.value)
   if (ticket !== opening) return
   syncer = next
+  github = gh
   loaded.value = true
   void next.start()
 }
@@ -89,6 +99,12 @@ watch(
 export function syncNow(manual = false) {
   if (!syncer || status.value.error === 'auth') return Promise.resolve()
   return syncer.sync(manual)
+}
+
+/** The checks on an open pull request's last commit, read from GitHub when asked for. */
+export function checkRuns(item: Item): Promise<CheckRuns> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  return readCheckRuns(github, item)
 }
 
 /** Drops what this browser saved for the open workspace and fetches it again. */

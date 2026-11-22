@@ -4,6 +4,7 @@ import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
+import UPopover from '@nuxt/ui/components/Popover.vue'
 import { defineShortcuts } from '@nuxt/ui/composables'
 import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -59,8 +60,10 @@ const menus = computed(() => {
         avatar: people.value.avatars.get(value),
       })),
     ],
+    ['me', options('me', named('me'))],
     ['review', options('review', named('review'))],
     ['checks', options('checks', named('checks'))],
+    ['merge', options('merge', named('merge'))],
     ['updated', options('updated', named('updated'))],
   ]
   // Accounts only matter when the workspace covers more than one, or one is already picked.
@@ -89,6 +92,25 @@ const sortItems = computed<DropdownMenuItem[]>(() =>
     onSelect: () => (filters.sort = sort),
   })),
 )
+
+// Each example's description is the locale string under its key.
+const SYNTAX = [
+  ['author', 'author:name'],
+  ['assignee', 'assignee:name'],
+  ['label', 'label:bug,docs'],
+  ['repo', 'repo:name'],
+  ['is', 'is:draft'],
+  ['no', 'no:assignee'],
+  ['me', 'author:@me'],
+  ['minus', '-author:renovate'],
+  ['quotes', 'label:"good first issue"'],
+] as const
+
+function addToSearch(example: string) {
+  const q = filters.q.trim()
+  filters.q = q ? `${q} ${example}` : example
+  search.value?.inputRef?.focus()
+}
 
 const total = computed(() => result.value.items.length)
 const title = computed(() => (activeView.value ? viewName(activeView.value) : t('results.custom')))
@@ -121,6 +143,34 @@ const historyPercent = computed(() => {
         :ui="{ trailing: 'pe-1.5' }"
       >
         <template #trailing>
+          <!-- The popover gives focus back to its button as it closes. Picking an example leaves it in the search instead. -->
+          <UPopover :content="{ align: 'end', onCloseAutoFocus: (event: Event) => event.preventDefault() }">
+            <UButton
+              icon="i-octicon-question-16"
+              color="neutral"
+              variant="link"
+              size="sm"
+              :aria-label="t('filters.syntax.button')"
+              :ui="{ leadingIcon: 'text-dimmed' }"
+            />
+            <template #content="{ close }">
+              <div class="w-80 max-w-[calc(100vw-2rem)] p-1">
+                <p class="px-2 pt-2 pb-1 text-sm font-medium text-highlighted">{{ t('filters.syntax.title') }}</p>
+                <ul>
+                  <li v-for="[key, example] in SYNTAX" :key="key">
+                    <button
+                      type="button"
+                      class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-start transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                      @click="(close(), addToSearch(example))"
+                    >
+                      <code class="font-mono text-xs text-highlighted" dir="ltr">{{ example }}</code>
+                      <span class="text-xs text-muted">{{ t(`filters.syntax.${key}`) }}</span>
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </template>
+          </UPopover>
           <UButton
             v-if="filters.q"
             icon="i-octicon-x-16"

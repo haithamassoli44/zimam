@@ -11,9 +11,9 @@ import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
-import RepoRow, { REPO_COLUMNS } from '@/components/RepoRow.vue'
+import RepoRow, { REPO_COLUMN_WIDTHS, REPO_COLUMNS } from '@/components/RepoRow.vue'
 import { REPO_STATUSES, type RepoStatus } from '@/lib/filters'
-import { defaultRepoFilters, REPO_SORTS, toggleStatus, type RepoSort } from '@/lib/repos'
+import { COUNT_KEYS, defaultRepoFilters, REPO_SORTS, toggleStatus, type RepoSort } from '@/lib/repos'
 import { formatNumber } from '@/locale'
 import { loaded, repos, status, syncNow } from '@/stores/data'
 import { repoFilters, repoResult } from '@/stores/repos'
@@ -51,10 +51,7 @@ const sortItems = computed<DropdownMenuItem[]>(() =>
 const COLUMNS: { key: string; sort?: RepoSort; start?: boolean }[] = [
   { key: 'name', sort: 'name', start: true },
   { key: 'opened', start: true },
-  { key: 'issues', sort: 'issues' },
-  { key: 'prs', sort: 'prs' },
-  { key: 'awaiting', sort: 'awaiting' },
-  { key: 'failing', sort: 'failing' },
+  ...COUNT_KEYS.map((key) => ({ key, sort: key })),
   { key: 'activity', sort: 'activity' },
 ]
 
@@ -78,7 +75,7 @@ const failed = computed(() => empty.value && status.value.error)
 </script>
 
 <template>
-  <div class="@container flex flex-col">
+  <div class="@container flex flex-col" :style="REPO_COLUMN_WIDTHS">
     <div class="shrink-0 border-b border-default">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-3 px-4 pt-4 sm:px-6 lg:h-16 lg:flex-nowrap lg:pt-0">
         <h1

@@ -1,16 +1,32 @@
 import { computed, reactive, watch } from 'vue'
 
-import { defaultFilters, toQuery, type Filters } from '@/lib/filters'
+import { defaultFilters, fromQuery, toQuery, type Filters } from '@/lib/filters'
+import { COUNTS } from '@/lib/repos'
 import { randomId } from '@/lib/text'
-import { DENSITIES, LOCALES, ROW_PARTS, THEMES, type Preset, type Settings, type Source, type Workspace } from '@/types'
+import {
+  DENSITIES,
+  INVOLVEMENTS,
+  LOCALES,
+  ROW_PARTS,
+  THEMES,
+  type Preset,
+  type Settings,
+  type Source,
+  type View,
+  type Workspace,
+} from '@/types'
 
 const STORAGE_KEY = 'zimam:settings'
 
 export const WORKSPACE_PARAM = 'w'
 
+// Settings saved before a version are brought up to date by `upgrade`.
+const VERSION = 2
+
 function defaults(): Settings {
   const arabic = globalThis.navigator?.languages?.some((language) => language.startsWith('ar')) ?? false
   return {
+    version: VERSION,
     locale: arabic ? 'ar' : 'en',
     theme: 'system',
     density: 'comfortable',
@@ -23,6 +39,9 @@ function defaults(): Settings {
 const isWorkspace = (ws: Partial<Workspace>): ws is Workspace =>
   typeof ws?.id === 'string' && Array.isArray(ws.sources) && Array.isArray(ws.views)
 
+const isView = (view: Partial<View> | null): view is View =>
+  typeof view?.id === 'string' && typeof view.query === 'string'
+
 const pick = <T>(known: readonly T[], value: T | undefined, fallback: T) =>
   value !== undefined && known.includes(value) ? value : fallback
 
@@ -30,13 +49,50 @@ const pick = <T>(known: readonly T[], value: T | undefined, fallback: T) =>
 function parse(raw: unknown): Settings {
   const data = (raw ?? {}) as Partial<Settings>
   const base = defaults()
+  const workspaces = (Array.isArray(data.workspaces) ? data.workspaces : []).filter(isWorkspace)
+  for (const ws of workspaces) {
+    ws.views = ws.views.filter(isView)
+    upgrade(ws, typeof data.version === 'number' ? data.version : 1)
+  }
   return {
+    version: VERSION,
     locale: pick(LOCALES, data.locale, base.locale),
     theme: pick(THEMES, data.theme, base.theme),
     density: pick(DENSITIES, data.density, base.density),
     show: Object.fromEntries(ROW_PARTS.map((part) => [part, data.show?.[part] ?? true])) as Settings['show'],
-    workspaces: (Array.isArray(data.workspaces) ? data.workspaces : []).filter(isWorkspace),
+    workspaces,
     activeWorkspaceId: typeof data.activeWorkspaceId === 'string' ? data.activeWorkspaceId : null,
+  }
+}
+
+// The repositories page counts what the first views hold, and opens them from its counts.
+const PRESET_FILTERS: Record<Preset, Partial<Filters>> = {
+  open: {},
+  issues: COUNTS.issues.filters,
+  prs: { ...COUNTS.prs.filters, sort: 'ready' },
+  awaiting: COUNTS.awaiting.filters,
+  mine: { me: [...INVOLVEMENTS] },
+  quiet: { updated: ['stale'], sort: 'quiet' },
+  archive: { state: [], status: ['archived'] },
+}
+
+function presetQuery(preset: Preset): string {
+  return toQuery({ ...defaultFilters(), ...PRESET_FILTERS[preset] })
+}
+
+// Version 2 split "awaiting review" into reviews GitHub requires and those it doesn't, sorted open pull requests by how
+// ready they are, and added a view of what involves the person.
+function upgrade(ws: Workspace, from: number) {
+  if (from >= 2) return
+  const plainPrs = toQuery({ ...defaultFilters(), kind: ['pr'] })
+  for (const view of ws.views) {
+    // Written again as today's filters would write it, so renamed values match their views.
+    view.query = view.preset === 'prs' && view.query === plainPrs ? presetQuery('prs') : toQuery(fromQuery(view.query))
+  }
+  if (ws.views.some((view) => view.preset) && !ws.views.some((view) => view.preset === 'mine')) {
+    const awaiting = ws.views.findIndex((view) => view.preset === 'awaiting')
+    const at = awaiting === -1 ? ws.views.length : awaiting + 1
+    ws.views.splice(at, 0, { id: randomId(), preset: 'mine', query: presetQuery('mine') })
   }
 }
 
@@ -55,29 +111,32 @@ try {
   // Private windows can refuse storage. Zimam still works until the tab closes.
 }
 
-export const settings = reactive<Settings>(read(stored) ?? defaults())
-
-const requested = new URLSearchParams(globalThis.location?.search).get(WORKSPACE_PARAM)
-if (requested && settings.workspaces.some((ws) => ws.id === requested)) settings.activeWorkspaceId = requested
+const loaded = read(stored)
+export const settings = reactive<Settings>(loaded ?? defaults())
 
 // What this tab last wrote or took from another tab. Writing that back would bounce between tabs that have
 // different workspaces open.
 let known = stored
 
-watch(
-  settings,
-  () => {
-    const json = JSON.stringify(settings)
-    if (json === known) return
-    known = json
-    try {
-      localStorage.setItem(STORAGE_KEY, json)
-    } catch {
-      // As above: without storage, settings last until the tab closes.
-    }
-  },
-  { deep: true },
-)
+function save() {
+  const json = JSON.stringify(settings)
+  if (json === known) return
+  known = json
+  try {
+    localStorage.setItem(STORAGE_KEY, json)
+  } catch {
+    // As above: without storage, settings last until the tab closes.
+  }
+}
+
+// Settings an older version saved are saved again as they are now, so their upgrade happens once. Settings that
+// couldn't be read are left alone.
+if (loaded) save()
+
+const requested = new URLSearchParams(globalThis.location?.search).get(WORKSPACE_PARAM)
+if (requested && settings.workspaces.some((ws) => ws.id === requested)) settings.activeWorkspaceId = requested
+
+watch(settings, save, { deep: true })
 
 // Another tab saved its settings: take them, but keep the workspace this tab has open.
 globalThis.addEventListener?.('storage', (event) => {
@@ -105,15 +164,6 @@ export const activeWorkspace = computed<Workspace | null>(
   () => settings.workspaces.find((ws) => ws.id === settings.activeWorkspaceId) ?? settings.workspaces[0] ?? null,
 )
 
-const PRESET_FILTERS: Record<Preset, Partial<Filters>> = {
-  open: {},
-  issues: { kind: ['issue'] },
-  prs: { kind: ['pr'] },
-  awaiting: { kind: ['pr'], review: ['pending'] },
-  quiet: { updated: ['stale'], sort: 'quiet' },
-  archive: { state: [], status: ['archived'] },
-}
-
 interface WorkspaceFields {
   name: string
   token: string
@@ -124,10 +174,10 @@ interface WorkspaceFields {
 const nameFor = (name: string, sources: Source[]) => name.trim() || sources[0]?.name || 'Zimam'
 
 export function createWorkspace(fields: WorkspaceFields) {
-  const views = Object.entries(PRESET_FILTERS).map(([preset, filters]) => ({
+  const views = (Object.keys(PRESET_FILTERS) as Preset[]).map((preset) => ({
     id: randomId(),
-    preset: preset as Preset,
-    query: toQuery({ ...defaultFilters(), ...filters }),
+    preset,
+    query: presetQuery(preset),
   }))
   const ws: Workspace = { id: randomId(), ...fields, name: nameFor(fields.name, fields.sources), views }
   settings.workspaces.push(ws)

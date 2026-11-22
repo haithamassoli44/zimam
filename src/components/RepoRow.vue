@@ -1,7 +1,24 @@
 <script lang="ts">
-// The repositories page's columns, shared by its header and rows. Below this width the rows stack instead.
-export const REPO_COLUMNS =
-  '@4xl:grid @4xl:grid-cols-[minmax(0,1fr)_6.5rem_5rem_6.5rem_6rem_5.5rem_7rem_1.5rem] @4xl:gap-x-3'
+import { COUNT_KEYS, type Count } from '@/lib/repos'
+
+// Totals stay quiet with an icon of what they count. What waits on someone reads clearly, and failing checks alone
+// are red. Each count has a column of its own width on wide screens.
+const LOOKS: Record<Count, { icon?: string; tone: string; width: string }> = {
+  issues: { icon: 'i-octicon-issue-opened-16', tone: 'text-toned', width: '4.5rem' },
+  prs: { icon: 'i-octicon-git-pull-request-16', tone: 'text-toned', width: '5rem' },
+  awaiting: { tone: 'text-highlighted', width: '5rem' },
+  failing: { tone: 'text-error', width: '4.5rem' },
+  conflicts: { tone: 'text-highlighted', width: '4.5rem' },
+}
+
+// The repositories page's columns, shared by its header and rows: the name, the weeks, the counts, the last activity
+// and the link. The page sets the widths for both. Below this width the rows stack instead.
+export const REPO_COLUMNS = '@4xl:grid @4xl:grid-cols-(--repo-columns) @4xl:gap-x-3'
+export const REPO_COLUMN_WIDTHS = {
+  '--repo-columns': ['minmax(0,1fr)', '6.5rem', ...COUNT_KEYS.map((key) => LOOKS[key].width), '6rem', '1.5rem'].join(
+    ' ',
+  ),
+}
 </script>
 
 <script setup lang="ts">
@@ -13,7 +30,7 @@ import { useI18n } from 'vue-i18n'
 
 import WeekBars from '@/components/WeekBars.vue'
 import type { Filters } from '@/lib/filters'
-import { statusOf, type RepoRow } from '@/lib/repos'
+import { COUNTS, statusOf, TALLIED, type RepoRow } from '@/lib/repos'
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { displayRepo } from '@/stores/data'
@@ -35,42 +52,19 @@ const only = computed<Partial<Filters>>(() => ({ repo: [repo.value.fullName], st
 // The name opens what is open in the repository. Nothing changes in an archived one, so it opens everything there.
 const everything = computed<Partial<Filters>>(() => ({ ...only.value, ...(repo.value.isArchived && { state: [] }) }))
 
-interface Count {
-  key: 'issues' | 'prs' | 'awaiting' | 'failing'
-  icon?: string
-  count: number
-  /** Not known until the repository's open pull requests load. */
-  loading?: boolean
-  filters: Partial<Filters>
-}
-
-// Each count opens the list of what it counts.
-const counts = computed<Count[]>(() => [
-  {
-    key: 'issues',
-    icon: 'i-octicon-issue-opened-16',
-    count: repo.value.openIssues,
-    filters: { ...only.value, kind: ['issue'] },
-  },
-  {
-    key: 'prs',
-    icon: 'i-octicon-git-pull-request-16',
-    count: repo.value.openPrs,
-    filters: { ...only.value, kind: ['pr'] },
-  },
-  {
-    key: 'awaiting',
-    count: props.row.awaiting,
-    loading: props.row.countsLoading,
-    filters: { ...only.value, kind: ['pr'], review: ['pending'] },
-  },
-  {
-    key: 'failing',
-    count: props.row.failing,
-    loading: props.row.countsLoading,
-    filters: { ...only.value, kind: ['pr'], checks: ['failure'] },
-  },
-])
+const counts = computed(() =>
+  COUNT_KEYS.map((key) => ({
+    key,
+    ...LOOKS[key],
+    count: props.row.counts[key],
+    tallied: TALLIED.includes(key),
+    loading: TALLIED.includes(key) && props.row.countsLoading,
+    filters: { ...only.value, ...COUNTS[key].filters },
+  })),
+)
+const totals = computed(() => counts.value.filter((count) => !count.tallied))
+const tallied = computed(() => counts.value.filter((count) => count.tallied))
+type Shown = (typeof counts.value)[number]
 
 // A click opens the list in place. With a modifier key or the middle button, the browser opens the link itself.
 function follow(event: MouseEvent, filters: Partial<Filters>) {
@@ -79,7 +73,7 @@ function follow(event: MouseEvent, filters: Partial<Filters>) {
   showItems(filters)
 }
 
-const label = (count: Count) =>
+const label = (count: Shown) =>
   `${t(`repos.columns.${count.key}`)}: ${count.loading ? t('repos.loading') : formatNumber(count.count)}`
 const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-primary'
 </script>
@@ -137,7 +131,7 @@ const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:o
       <div class="mt-2 flex items-end gap-4 @4xl:hidden">
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[13px] leading-5 text-muted">
           <a
-            v-for="count in counts.slice(0, 2)"
+            v-for="count in totals"
             :key="count.key"
             :href="itemsLink(count.filters)"
             class="inline-flex items-center gap-1.5 text-toned"
@@ -150,13 +144,13 @@ const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:o
           </a>
           <span v-if="row.countsLoading" class="inline-flex">
             <span class="h-3 w-24 animate-pulse rounded-md bg-elevated" aria-hidden="true" />
-            <span v-for="count in counts.slice(2)" :key="count.key" class="sr-only">{{ label(count) }}</span>
+            <span v-for="count in tallied" :key="count.key" class="sr-only">{{ label(count) }}</span>
           </span>
-          <template v-for="count in counts.slice(2)" v-else :key="count.key">
+          <template v-for="count in tallied" v-else :key="count.key">
             <a
               v-if="count.count"
               :href="itemsLink(count.filters)"
-              :class="[LINK, count.key === 'failing' ? 'text-error' : 'text-highlighted']"
+              :class="[LINK, count.tone]"
               @click="follow($event, count.filters)"
               >{{ t(`repos.${count.key}Count`, { n: formatNumber(count.count) }) }}</a
             >
@@ -188,10 +182,7 @@ const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:o
         v-else-if="count.count"
         :href="itemsLink(count.filters)"
         class="hidden justify-self-end font-mono text-[13px] tabular-nums @4xl:block"
-        :class="[
-          LINK,
-          count.key === 'failing' ? 'text-error' : count.key === 'awaiting' ? 'text-highlighted' : 'text-toned',
-        ]"
+        :class="[LINK, count.tone]"
         :aria-label="label(count)"
         @click="follow($event, count.filters)"
         >{{ formatNumber(count.count) }}</a

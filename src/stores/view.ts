@@ -14,7 +14,7 @@ import { i18n } from '@/locale'
 import type { View } from '@/types'
 
 import { now } from './clock'
-import { items, repos } from './data'
+import { items, me, repos } from './data'
 import { activeWorkspace, WORKSPACE_PARAM } from './settings'
 
 export const filters = reactive<Filters>(fromQuery(location.search))
@@ -82,7 +82,8 @@ export function resetFilters() {
   Object.assign(filters, defaultFilters())
 }
 
-const context = computed<Context>(() => ({ repos: repos.value, now: now.value }))
+/** What filtering needs besides the items: the repositories, the time and who is looking. */
+export const context = computed<Context>(() => ({ repos: repos.value, now: now.value, me: me.value }))
 
 export const result = computed(() => applyFilters(items.value.values(), filters, context.value))
 

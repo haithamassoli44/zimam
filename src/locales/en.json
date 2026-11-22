@@ -46,6 +46,7 @@
     "issues": "Open issues",
     "prs": "Open pull requests",
     "awaiting": "Awaiting review",
+    "mine": "Involves me",
     "quiet": "Gone quiet",
     "archive": "Archived repositories"
   },
@@ -103,10 +104,17 @@
       "title": "Assignee",
       "none": "Unassigned"
     },
+    "me": {
+      "title": "Involves me",
+      "review": "Review requested",
+      "assigned": "Assigned to me",
+      "authored": "Opened by me"
+    },
     "review": {
       "title": "Review",
       "draft": "Draft",
-      "pending": "Awaiting review",
+      "required": "Review required",
+      "optional": "No review needed",
       "approved": "Approved",
       "changes": "Changes requested"
     },
@@ -115,6 +123,11 @@
       "success": "Passing",
       "failure": "Failing",
       "pending": "Running"
+    },
+    "merge": {
+      "title": "Conflicts",
+      "conflicts": "Has conflicts",
+      "clean": "No conflicts"
     },
     "updated": {
       "title": "Updated",
@@ -126,12 +139,26 @@
     },
     "sorts": {
       "updated": "Recently updated",
+      "ready": "Ready to merge",
       "created": "Newest",
       "oldest": "Oldest",
       "comments": "Most discussed",
       "quiet": "Longest quiet"
     },
-    "more": "{n} more, type to narrow them down"
+    "more": "{n} more, type to narrow them down",
+    "syntax": {
+      "button": "How to filter by typing",
+      "title": "Filter by typing",
+      "author": "Opened by someone",
+      "assignee": "Assigned to someone",
+      "label": "Has any of these labels",
+      "repo": "In a repository",
+      "is": "Also open, closed, merged, issue, pr and conflicting",
+      "no": "Unassigned, or no:label for those without a label",
+      "me": "You, whoever the token belongs to",
+      "minus": "A minus before any of these leaves its matches out",
+      "quotes": "Quotes keep spaces in a value"
+    }
   },
   "results": {
     "count": "No results | 1 result | {n} results",
@@ -156,7 +183,31 @@
     "prOpen": "Open pull request",
     "prDraft": "Draft pull request",
     "prMerged": "Merged pull request",
-    "prClosed": "Closed without merging"
+    "prClosed": "Closed without merging",
+    "conflicting": "{state}, conflicts with its base branch",
+    "moreLabels": "Also labeled {names}",
+    "diff": "Lines changed: {added} added, {removed} removed"
+  },
+  "checks": {
+    "title": "Checks",
+    "show": "Show checks: {state}",
+    "loading": "Loading the checks",
+    "failed": "Couldn't load the checks",
+    "none": "No checks on the last commit",
+    "onGitHub": "Open on GitHub",
+    "more": "No more | 1 more on GitHub | {n} more on GitHub",
+    "count": {
+      "failure": "{n} failing",
+      "pending": "{n} running",
+      "success": "{n} passing",
+      "skipped": "{n} skipped"
+    },
+    "states": {
+      "failure": "Failing",
+      "pending": "Running",
+      "success": "Passing",
+      "skipped": "Skipped"
+    }
   },
   "sync": {
     "synced": "Updated {time}",
@@ -200,7 +251,9 @@
       "author": "Author",
       "assignees": "Assignees",
       "comments": "Comments",
-      "checks": "Checks"
+      "review": "Review",
+      "checks": "Checks",
+      "size": "Lines changed"
     },
     "workspace": "This workspace",
     "editSources": "Edit sources and token",
@@ -232,6 +285,7 @@
     "loading": "still loading",
     "awaitingCount": "{n} awaiting review",
     "failingCount": "{n} failing",
+    "conflictsCount": "{n} with conflicts",
     "columns": {
       "name": "Repository",
       "opened": "Opened each week",
@@ -239,6 +293,7 @@
       "prs": "Open pull requests",
       "awaiting": "Awaiting review",
       "failing": "Failing checks",
+      "conflicts": "Conflicts",
       "activity": "Last activity"
     },
     "sorts": {
@@ -247,7 +302,8 @@
       "issues": "Most open issues",
       "prs": "Most open pull requests",
       "awaiting": "Most awaiting review",
-      "failing": "Most failing checks"
+      "failing": "Most failing checks",
+      "conflicts": "Most conflicts"
     }
   }
 }
