@@ -123,6 +123,12 @@
   isolation: isolate;
 }
 
+/* Only the sidebar and the lists scroll, never the window: scrolling past their ends doesn't bounce the whole page. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
 @keyframes arrived {
   from {
     background-color: color-mix(in oklab, var(--ui-primary) 12%, transparent);
