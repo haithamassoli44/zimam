@@ -85,6 +85,56 @@ describe('repoRows', () => {
   })
 })
 
+const closed = (id: string, repoId: string, kind: Item['kind'], days: number) =>
+  item(id, repoId, { kind, state: kind === 'pr' ? 'merged' : 'closed', createdAt: at(days), updatedAt: at(days) })
+
+describe('repoRows while loading', () => {
+  const rows = repoRows(
+    [
+      repo('web', { openIssues: 1, openPrs: 1 }),
+      repo('quiet', { openIssues: 0, openPrs: 0 }),
+      repo('issues', { openIssues: 2, openPrs: 0 }),
+      repo('deep', { openPrs: 1 }),
+      repo('recent', { openPrs: 1 }),
+      repo('shallow', { openPrs: 1 }),
+      repo('done', { openPrs: 1 }),
+    ],
+    [
+      closed('c1', 'deep', 'issue', 10),
+      closed('c2', 'deep', 'issue', 200),
+      closed('c3', 'shallow', 'pr', 10),
+      closed('c4', 'recent', 'issue', 10),
+    ],
+    NOW,
+    {
+      web: ['open', 'issues'],
+      quiet: ['open'],
+      issues: ['open'],
+      deep: ['issues'],
+      recent: ['issues'],
+      shallow: ['pullRequests'],
+    },
+  )
+  const row = (name: string) => rows.find((each) => each.repo.name === name)!
+
+  it("doesn't know the counts of a repository whose open pull requests haven't loaded", () => {
+    expect(row('web').countsLoading).toBe(true)
+    expect(row('quiet').countsLoading).toBe(false)
+    expect(row('issues').countsLoading).toBe(false)
+    expect(row('deep').countsLoading).toBe(false)
+  })
+
+  it('fills the weeks once the open items are in and the closed history goes back past them', () => {
+    expect(row('web').weeksLoading).toBe(true)
+    expect(row('quiet').weeksLoading).toBe(false)
+    expect(row('issues').weeksLoading).toBe(true)
+    expect(row('deep').weeksLoading).toBe(false)
+    expect(row('recent').weeksLoading).toBe(true)
+    expect(row('shallow').weeksLoading).toBe(true)
+    expect(row('done').weeksLoading).toBe(false)
+  })
+})
+
 describe('pickRows', () => {
   const rows = repoRows(
     [

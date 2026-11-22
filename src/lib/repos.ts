@@ -1,6 +1,7 @@
 import type { Item, Repo } from '@/types'
 
 import { REPO_STATUSES, type RepoStatus } from './filters'
+import type { Left } from './sync'
 import { normalize } from './text'
 
 const WEEK = 7 * 86_400_000
@@ -21,6 +22,10 @@ export interface RepoRow {
   activeAt: number
   /** Issues and pull requests opened in each of the last WEEKS weeks, oldest first. The last week ends now. */
   weeks: number[]
+  /** Its open pull requests haven't loaded yet, so `awaiting` and `failing` aren't known. */
+  countsLoading: boolean
+  /** Some of what was opened in it over the last WEEKS weeks may not have loaded yet. */
+  weeksLoading: boolean
 }
 
 export interface RepoFilters {
@@ -36,23 +41,58 @@ export function defaultRepoFilters(): RepoFilters {
 
 export const statusOf = (repo: Repo): RepoStatus => (repo.isArchived ? 'archived' : 'active')
 
-export function repoRows(repos: Iterable<Repo>, items: Iterable<Item>, now: number): RepoRow[] {
-  const rows = new Map<string, RepoRow>()
+/** `left` is what each repository still has to load, as the sync shows it. */
+export function repoRows(
+  repos: Iterable<Repo>,
+  items: Iterable<Item>,
+  now: number,
+  left: Record<string, Left[]> = {},
+): RepoRow[] {
+  const tallies = new Map<string, { row: RepoRow; oldestClosed: Record<Item['kind'], number> }>()
   for (const repo of repos) {
     const pushedAt = repo.pushedAt ? Date.parse(repo.pushedAt) : 0
-    rows.set(repo.id, { repo, awaiting: 0, failing: 0, activeAt: pushedAt, weeks: Array<number>(WEEKS).fill(0) })
+    const row: RepoRow = {
+      repo,
+      awaiting: 0,
+      failing: 0,
+      activeAt: pushedAt,
+      weeks: Array<number>(WEEKS).fill(0),
+      countsLoading: false,
+      weeksLoading: false,
+    }
+    tallies.set(repo.id, { row, oldestClosed: { issue: Infinity, pr: Infinity } })
   }
   for (const item of items) {
-    const row = rows.get(item.repoId)
-    if (!row) continue
-    row.activeAt = Math.max(row.activeAt, Date.parse(item.updatedAt))
+    const tally = tallies.get(item.repoId)
+    if (!tally) continue
+    const { row } = tally
+    const updatedAt = Date.parse(item.updatedAt)
+    row.activeAt = Math.max(row.activeAt, updatedAt)
     const week = Math.floor((now - Date.parse(item.createdAt)) / WEEK)
     if (week >= 0 && week < WEEKS) row.weeks[WEEKS - 1 - week]++
-    if (item.kind !== 'pr' || item.state !== 'open') continue
+    if (item.state !== 'open') {
+      tally.oldestClosed[item.kind] = Math.min(tally.oldestClosed[item.kind], updatedAt)
+      continue
+    }
+    if (item.kind !== 'pr') continue
     if (item.review === 'pending') row.awaiting++
     if (item.checks === 'failure') row.failing++
   }
-  return [...rows.values()]
+  // The closed history loads the latest change first. Nothing changes before it is opened, so once it reaches a change
+  // from before the first week shown, all that was opened since is in.
+  const start = now - WEEKS * WEEK
+  for (const { row, oldestClosed } of tallies.values()) {
+    const kinds = left[row.repo.id]
+    if (!kinds) continue
+    const { openIssues, openPrs } = row.repo
+    const open = kinds.includes('open')
+    row.countsLoading = open && openPrs > 0
+    row.weeksLoading =
+      (open && openIssues + openPrs > 0) ||
+      (kinds.includes('issues') && oldestClosed.issue > start) ||
+      (kinds.includes('pullRequests') && oldestClosed.pr > start)
+  }
+  return [...tallies.values()].map((tally) => tally.row)
 }
 
 const searchText = new WeakMap<Repo, string>()

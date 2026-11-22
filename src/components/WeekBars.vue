@@ -3,7 +3,8 @@ import { computed } from 'vue'
 
 import { WEEKS } from '@/lib/repos'
 
-const props = defineProps<{ weeks: number[] }>()
+// `loading` says some weeks may still be short.
+const props = defineProps<{ weeks: number[]; loading?: boolean }>()
 
 const STEP = 4
 const WIDTH = WEEKS * STEP - 1
@@ -26,6 +27,7 @@ const bars = computed(() => {
     :width="WIDTH"
     :height="HEIGHT"
     class="shrink-0 text-muted rtl:-scale-x-100"
+    :class="loading && 'motion-safe:animate-pulse'"
     aria-hidden="true"
   >
     <rect

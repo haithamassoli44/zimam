@@ -228,6 +228,8 @@
     "private": "Private",
     "onGitHub": "Open {name} on GitHub",
     "opened": "Opened in the last 6 months: {n}",
+    "openedSoFar": "Opened in the last 6 months: {n} so far, still loading",
+    "loading": "still loading",
     "awaitingCount": "{n} awaiting review",
     "failingCount": "{n} failing",
     "columns": {

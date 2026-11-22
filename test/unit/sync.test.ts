@@ -151,6 +151,25 @@ describe('Syncer', () => {
     expect(searches.filter((index) => index < pages.at(-1)!).length).toBeGreaterThanOrEqual(2)
   })
 
+  it('tells what each repository has left to load, but not open items it reads again', async () => {
+    const { state, status, syncer } = await setup()
+    const left: string[] = []
+    state.onQuery = () => left.push(JSON.stringify(status.left))
+    await syncer.sync()
+    expect(left[1]).toBe('{"R1":["open","issues","pullRequests"]}')
+    expect(left).toContain('{"R1":["issues","pullRequests"]}')
+    expect(status.left).toEqual({})
+
+    // A refresh some time later reads the open items again, which are still shown meanwhile.
+    const later = Date.now() + 11 * 60_000
+    vi.spyOn(Date, 'now').mockImplementation(() => later)
+    left.length = 0
+    state.calls = []
+    await syncer.sync(true)
+    expect(state.calls).toContain('items')
+    expect(new Set(left)).toEqual(new Set(['{}']))
+  })
+
   it('picks up a change with one search, and marks it as news', async () => {
     const { store, state, syncer, fresh } = await setup()
     await syncer.sync()

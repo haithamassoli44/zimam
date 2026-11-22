@@ -23,6 +23,9 @@ const RECONCILE_MANUAL = 10 * MINUTE
 const RESERVE = 0.02
 const HISTORY_RESERVE = 0.15
 
+/** What a repository can have left to load: its open items, its closed issues, its closed pull requests. */
+export type Left = 'open' | 'issues' | 'pullRequests'
+
 export interface SyncStatus {
   phase: 'idle' | 'repos' | 'open' | 'changes' | 'history'
   /** Repositories whose open items are fetched, while `phase` is 'open'. */
@@ -32,6 +35,8 @@ export interface SyncStatus {
   /** Repositories whose closed history is fetched, out of those that have one. */
   history: { done: number; total: number }
   historyDone: boolean
+  /** Each repository with something left to load, by id. Open items read again, as a reconcile does, don't count. */
+  left: Record<string, Left[]>
   pausedUntil: number | null
   rate: RateLimit | null
   /** Rate limits pause instead: see `pausedUntil`. */
@@ -47,6 +52,7 @@ export function idleStatus(): SyncStatus {
     syncedAt: null,
     history: { done: 0, total: 0 },
     historyDone: false,
+    left: {},
     pausedUntil: null,
     rate: null,
     error: null,
@@ -75,6 +81,8 @@ export class Syncer {
   private unsaved = false
   private settled = false
   private sliced = false
+  // Repositories whose open items have loaded at least once.
+  private opened = new Set<string>()
 
   static async open(ws: Workspace, gh: GitHub, store: SyncStore, status: SyncStatus): Promise<Syncer> {
     const sources = sourcesKey(ws.sources)
@@ -206,7 +214,9 @@ export class Syncer {
     for (const repo of cache.repos) this.store.repos.set(repo.id, repo)
     for (const item of cache.items) this.store.items.set(item.id, item)
     this.status.syncedAt = cache.syncedAt
-    this.showHistory()
+    // Once a sync has finished, every repository's open items have loaded. Until then, only those in `openDone` have.
+    this.opened = new Set(cache.syncedAt === null ? cache.openDone : cache.repos.map((repo) => repo.id))
+    this.showProgress()
     this.store.changed([])
   }
 
@@ -252,6 +262,7 @@ export class Syncer {
     for (const [id, repo] of repos) this.store.repos.set(id, repo)
     this.cache.openDone = this.cache.openDone.filter((id) => repos.has(id))
     this.cache.reposAt = Date.now()
+    this.showProgress()
     this.changed([])
   }
 
@@ -276,6 +287,8 @@ export class Syncer {
       )
       if (missing.length) await this.refetch(missing.map((item) => item.id))
       this.cache.openDone.push(repo.id)
+      this.opened.add(repo.id)
+      this.showProgress()
       this.status.done++
       this.saveSoon()
     })
@@ -347,7 +360,7 @@ export class Syncer {
   }
 
   private async loadHistory() {
-    const pending = this.showHistory()
+    const pending = this.showProgress()
     if (!pending.length || !this.hasBudget(HISTORY_RESERVE)) return
     this.status.phase = 'history'
     const until = Date.now() + HISTORY_SLICE
@@ -368,20 +381,26 @@ export class Syncer {
         }
         if (this.stopped) return
         entry[key] = true
+        this.showProgress()
       }
-      this.status.history.done++
     })
-    this.sliced = this.showHistory().length > 0 && !this.stopped && this.hasBudget(HISTORY_RESERVE)
+    this.sliced = this.showProgress().length > 0 && !this.stopped && this.hasBudget(HISTORY_RESERVE)
   }
 
-  /** Shows how much of the history is loaded, and returns the repositories with some of it left. */
-  private showHistory(): Repo[] {
+  /** Shows what is left to load, and returns the repositories with some of their closed history left. */
+  private showProgress(): Repo[] {
     const pending = this.historyLeft()
     const total = [...this.store.repos.values()].filter(
       (repo) => repo.issues + repo.prs > repo.openIssues + repo.openPrs,
     ).length
     this.status.history = { done: total - pending.length, total }
     this.status.historyDone = this.cache.syncedAt !== null && pending.length === 0
+    const left: Record<string, Left[]> = {}
+    for (const repo of this.store.repos.values()) {
+      const kinds: Left[] = [...(this.opened.has(repo.id) ? [] : ['open' as const]), ...this.historyKinds(repo)]
+      if (kinds.length) left[repo.id] = kinds
+    }
+    this.status.left = left
     return pending
   }
 

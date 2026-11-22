@@ -24,7 +24,11 @@ const { t } = useI18n()
 
 const repo = computed(() => props.row.repo)
 const onGitHub = computed(() => `https://github.com/${repo.value.fullName}`)
-const opened = computed(() => t('repos.opened', { n: formatNumber(props.row.weeks.reduce((sum, n) => sum + n, 0)) }))
+const opened = computed(() =>
+  t(props.row.weeksLoading ? 'repos.openedSoFar' : 'repos.opened', {
+    n: formatNumber(props.row.weeks.reduce((sum, n) => sum + n, 0)),
+  }),
+)
 const active = computed(() => (props.row.activeAt ? relativeTime(props.row.activeAt, now.value) : ''))
 
 const only = computed<Partial<Filters>>(() => ({ repo: [repo.value.fullName], status: [statusOf(repo.value)] }))
@@ -35,6 +39,8 @@ interface Count {
   key: 'issues' | 'prs' | 'awaiting' | 'failing'
   icon?: string
   count: number
+  /** Not known until the repository's open pull requests load. */
+  loading?: boolean
   filters: Partial<Filters>
 }
 
@@ -52,8 +58,18 @@ const counts = computed<Count[]>(() => [
     count: repo.value.openPrs,
     filters: { ...only.value, kind: ['pr'] },
   },
-  { key: 'awaiting', count: props.row.awaiting, filters: { ...only.value, kind: ['pr'], review: ['pending'] } },
-  { key: 'failing', count: props.row.failing, filters: { ...only.value, kind: ['pr'], checks: ['failure'] } },
+  {
+    key: 'awaiting',
+    count: props.row.awaiting,
+    loading: props.row.countsLoading,
+    filters: { ...only.value, kind: ['pr'], review: ['pending'] },
+  },
+  {
+    key: 'failing',
+    count: props.row.failing,
+    loading: props.row.countsLoading,
+    filters: { ...only.value, kind: ['pr'], checks: ['failure'] },
+  },
 ])
 
 // A click opens the list in place. With a modifier key or the middle button, the browser opens the link itself.
@@ -63,7 +79,8 @@ function follow(event: MouseEvent, filters: Partial<Filters>) {
   showItems(filters)
 }
 
-const label = (count: Count) => `${t(`repos.columns.${count.key}`)}: ${formatNumber(count.count)}`
+const label = (count: Count) =>
+  `${t(`repos.columns.${count.key}`)}: ${count.loading ? t('repos.loading') : formatNumber(count.count)}`
 const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-primary'
 </script>
 
@@ -131,7 +148,11 @@ const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:o
             <UIcon :name="count.icon!" class="size-4 text-muted" />
             <span class="font-mono tabular-nums">{{ formatNumber(count.count) }}</span>
           </a>
-          <template v-for="count in counts.slice(2)" :key="count.key">
+          <span v-if="row.countsLoading" class="inline-flex">
+            <span class="h-3 w-24 animate-pulse rounded-md bg-elevated" aria-hidden="true" />
+            <span v-for="count in counts.slice(2)" :key="count.key" class="sr-only">{{ label(count) }}</span>
+          </span>
+          <template v-for="count in counts.slice(2)" v-else :key="count.key">
             <a
               v-if="count.count"
               :href="itemsLink(count.filters)"
@@ -145,18 +166,26 @@ const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:o
           </UTooltip>
         </div>
         <UTooltip :text="opened">
-          <span class="flex" :aria-label="opened" role="img"><WeekBars :weeks="row.weeks" /></span>
+          <span class="flex" :aria-label="opened" role="img"
+            ><WeekBars :weeks="row.weeks" :loading="row.weeksLoading"
+          /></span>
         </UTooltip>
       </div>
     </div>
 
     <!-- Wide screens: one column each. -->
     <UTooltip :text="opened">
-      <span class="hidden @4xl:flex" :aria-label="opened" role="img"><WeekBars :weeks="row.weeks" /></span>
+      <span class="hidden @4xl:flex" :aria-label="opened" role="img"
+        ><WeekBars :weeks="row.weeks" :loading="row.weeksLoading"
+      /></span>
     </UTooltip>
     <template v-for="count in counts" :key="count.key">
+      <span v-if="count.loading" class="hidden justify-self-end @4xl:block">
+        <span class="block h-3 w-6 animate-pulse rounded-md bg-elevated" aria-hidden="true" />
+        <span class="sr-only">{{ label(count) }}</span>
+      </span>
       <a
-        v-if="count.count"
+        v-else-if="count.count"
         :href="itemsLink(count.filters)"
         class="hidden justify-self-end font-mono text-[13px] tabular-nums @4xl:block"
         :class="[
