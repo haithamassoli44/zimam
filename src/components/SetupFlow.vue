@@ -5,6 +5,7 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
+import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -24,6 +25,8 @@ const workspace = ui.setup === 'edit' ? activeWorkspace.value : null
 const cancellable = !!activeWorkspace.value
 
 const isDev = import.meta.env.DEV
+// Zimam's own code, for anyone who wants to check what happens to their token.
+const CODE = 'https://github.com/ieasybooks/zimam'
 const FINE_GRAINED =
   'https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&issues=read&pull_requests=read&metadata=read&commit_statuses=read'
 const CLASSIC = 'https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam'
@@ -142,7 +145,21 @@ function finish() {
     <div class="flex flex-col px-6 py-6 sm:px-12 lg:min-h-dvh lg:px-16">
       <header class="flex h-10 items-center justify-between">
         <BrandMark />
-        <LanguageSwitch />
+        <div class="flex items-center gap-1">
+          <LanguageSwitch />
+          <UTooltip :text="t('setup.code')">
+            <UButton
+              :href="CODE"
+              target="_blank"
+              rel="noopener"
+              icon="i-octicon-mark-github-16"
+              color="neutral"
+              variant="ghost"
+              :aria-label="t('setup.code')"
+              :ui="{ leadingIcon: 'text-toned' }"
+            />
+          </UTooltip>
+        </div>
       </header>
 
       <div class="w-full max-w-lg pt-12 pb-16 lg:my-auto lg:py-16" :class="workspace && 'mx-auto'">
@@ -295,7 +312,18 @@ function finish() {
         </div>
       </div>
 
-      <p class="text-xs leading-5 text-muted" :class="workspace && 'text-center'">{{ t('app.about') }}</p>
+      <footer class="space-y-1.5 text-xs leading-5 text-muted" :class="workspace && 'text-center'">
+        <p>{{ t('app.about') }}</p>
+        <a
+          :href="CODE"
+          target="_blank"
+          rel="noopener"
+          class="inline-flex items-center gap-1.5 rounded-sm text-toned transition-colors hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          <UIcon name="i-octicon-mark-github-16" class="size-3.5" />
+          {{ t('setup.openSource') }}
+        </a>
+      </footer>
     </div>
 
     <aside

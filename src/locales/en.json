@@ -30,7 +30,9 @@
     "nameLabel": "Workspace name",
     "open": "Open the workspace",
     "cancel": "Cancel",
-    "save": "Save changes"
+    "save": "Save changes",
+    "code": "Zimam on GitHub",
+    "openSource": "Open source on GitHub"
   },
   "nav": {
     "views": "Views",
