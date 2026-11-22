@@ -133,15 +133,17 @@ function everything(facet: Facet, values: readonly string[]): boolean {
   return !!choices && COVERING.includes(facet) && choices.every((choice) => values.includes(choice))
 }
 
-/** Picks or unpicks a value, where none picked means every value: picking from none keeps only that value. */
+/**
+ * Picks or unpicks one of a fixed set of values, where none picked means every value. Of two, picking one drops the
+ * other, so it switches between them: both picked would show what none picked shows. Of more, picks add up.
+ */
+export function pickChoice<T extends string>(picked: readonly T[], value: T, choices: readonly T[]): T[] {
+  if (picked.includes(value)) return picked.filter((other) => other !== value)
+  return choices.length === 2 ? [value] : [...picked, value]
+}
+
 export function toggleValue(filters: Filters, facet: Facet, value: string) {
-  const current = filters[facet] as string[]
-  const next = !current.length
-    ? [value]
-    : current.includes(value)
-      ? current.filter((v) => v !== value)
-      : [...current, value]
-  ;(filters[facet] as string[]) = everything(facet, next) ? [] : next
+  ;(filters[facet] as string[]) = pickChoice(filters[facet] as string[], value, CHOICES[facet] ?? [])
 }
 
 export interface Context {

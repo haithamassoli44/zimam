@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyFilters, defaultFilters, fromQuery, NONE, parseSearch, toQuery, type Context } from '@/lib/filters'
+import {
+  applyFilters,
+  defaultFilters,
+  fromQuery,
+  NONE,
+  parseSearch,
+  toggleValue,
+  toQuery,
+  type Context,
+} from '@/lib/filters'
 import { noOne, type Item, type Repo } from '@/types'
 
 const NOW = Date.parse('2026-11-21T12:00:00Z')
@@ -107,6 +116,34 @@ describe('toQuery and fromQuery', () => {
   it('reads the views saved before every filter became a list', () => {
     expect(fromQuery('updated=stale&sort=quiet')).toMatchObject({ updated: ['stale'], sort: 'quiet' })
     expect(toQuery(fromQuery('updated=stale&sort=quiet'))).toBe('updated=stale&sort=quiet')
+  })
+})
+
+describe('toggleValue', () => {
+  it('switches between two values, and unpicks the one picked', () => {
+    const filters = defaultFilters()
+    toggleValue(filters, 'kind', 'issue')
+    expect(filters.kind).toEqual(['issue'])
+    toggleValue(filters, 'kind', 'pr')
+    expect(filters.kind).toEqual(['pr'])
+    toggleValue(filters, 'kind', 'pr')
+    expect(filters.kind).toEqual([])
+  })
+
+  it('adds up picks among more values, keeping each one picked', () => {
+    const filters = defaultFilters()
+    toggleValue(filters, 'state', 'merged')
+    expect(filters.state).toEqual(['open', 'merged'])
+    toggleValue(filters, 'state', 'closed')
+    expect(filters.state).toEqual(['open', 'merged', 'closed'])
+    toggleValue(filters, 'state', 'open')
+    expect(filters.state).toEqual(['merged', 'closed'])
+  })
+
+  it('unpicks one of two values picked in a link, leaving the other', () => {
+    const filters = fromQuery('kind=issue&kind=pr')
+    toggleValue(filters, 'kind', 'issue')
+    expect(filters.kind).toEqual(['pr'])
   })
 })
 

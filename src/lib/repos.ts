@@ -1,6 +1,14 @@
 import type { Item, Repo } from '@/types'
 
-import { defaultFilters, matcher, REPO_STATUSES, type Context, type Filters, type RepoStatus } from './filters'
+import {
+  defaultFilters,
+  matcher,
+  pickChoice,
+  REPO_STATUSES,
+  type Context,
+  type Filters,
+  type RepoStatus,
+} from './filters'
 import type { Left } from './sync'
 import { normalize } from './text'
 
@@ -167,13 +175,7 @@ export function arrange(pinned: string[], shown: string[]): string[] {
   return pinned.map((id) => (moving.has(id) ? (next.next().value ?? id) : id))
 }
 
-/** Picks or unpicks a status. Picking both is the same as picking none. */
+/** Picks or unpicks a status. Picking one drops the other. */
 export function toggleStatus(filters: Pick<RepoFilters, 'status'>, status: RepoStatus) {
-  const current = filters.status
-  const next = !current.length
-    ? [status]
-    : current.includes(status)
-      ? current.filter((other) => other !== status)
-      : [...current, status]
-  filters.status = next.length === REPO_STATUSES.length ? [] : next
+  filters.status = pickChoice(filters.status, status, REPO_STATUSES)
 }

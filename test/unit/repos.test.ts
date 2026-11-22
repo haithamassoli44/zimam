@@ -220,13 +220,15 @@ describe('arrange', () => {
 })
 
 describe('toggleStatus', () => {
-  it('treats both statuses picked as none picked', () => {
+  it('switches between the two statuses, and unpicks the one picked', () => {
     const filters = defaultRepoFilters()
     toggleStatus(filters, 'archived')
+    expect(filters.status).toEqual(['archived'])
+    toggleStatus(filters, 'active')
+    expect(filters.status).toEqual(['active'])
+    toggleStatus(filters, 'active')
     expect(filters.status).toEqual([])
     toggleStatus(filters, 'archived')
     expect(filters.status).toEqual(['archived'])
-    toggleStatus(filters, 'archived')
-    expect(filters.status).toEqual([])
   })
 })
