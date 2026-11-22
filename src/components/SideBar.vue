@@ -123,12 +123,14 @@ function viewMenu(view: View): DropdownMenuItem[][] {
             @pick="pick(view)"
           >
             <template #actions>
+              <!-- The icon draws its dots half a pixel above its middle, so it's moved down that much. -->
               <UDropdownMenu :items="viewMenu(view)" :content="{ align: 'end' }">
                 <UButton
                   icon="i-octicon-kebab-horizontal-16"
                   color="neutral"
                   variant="ghost"
                   size="xs"
+                  :ui="{ leadingIcon: 'translate-y-[0.5px]' }"
                   :aria-label="t('views.options', { name: viewName(view) })"
                 />
               </UDropdownMenu>

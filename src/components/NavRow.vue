@@ -25,13 +25,16 @@ const emit = defineEmits<{ pick: [] }>()
       <span class="min-w-0 flex-1 truncate">{{ label }}</span>
       <span
         class="font-mono text-xs text-muted tabular-nums"
-        :class="$slots.actions && 'group-focus-within:invisible group-hover:invisible pointer-coarse:visible'"
+        :class="
+          $slots.actions &&
+          'group-focus-within:invisible group-hover:invisible group-has-data-[state=open]:invisible pointer-coarse:visible!'
+        "
         >{{ formatNumber(count) }}</span
       >
     </button>
     <div
       v-if="$slots.actions"
-      class="absolute end-1 top-1/2 -translate-y-1/2 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 has-data-[state=open]:opacity-100 pointer-coarse:opacity-100"
+      class="absolute end-1 top-1/2 flex -translate-y-1/2 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 has-data-[state=open]:opacity-100 pointer-coarse:opacity-100"
     >
       <slot name="actions" />
     </div>
