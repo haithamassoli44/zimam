@@ -124,8 +124,13 @@ const historyPercent = computed(() => {
 </script>
 
 <template>
-  <div class="border-b border-default">
-    <div class="flex flex-wrap items-center gap-x-2 gap-y-3 px-4 pt-4 sm:px-6 lg:h-16 lg:flex-nowrap lg:pt-0">
+  <!-- An issue open beside the list leaves it narrower than the screen: the first row then makes room by its own width.
+       Below 47rem the search is shorter, the sort shows only its icon and "Update view" steps aside; below 36rem the
+       search takes a row of its own. -->
+  <div class="@container border-b border-default">
+    <div
+      class="flex flex-wrap items-center gap-x-2 gap-y-3 px-4 pt-4 sm:px-6 lg:@min-[36rem]:h-16 lg:@min-[36rem]:flex-nowrap lg:@min-[36rem]:pt-0"
+    >
       <h1
         class="flex min-w-0 flex-1 items-baseline gap-2 text-2xl font-medium text-highlighted lg:text-[28px] lg:leading-9"
       >
@@ -139,7 +144,7 @@ const historyPercent = computed(() => {
         v-model="filters.q"
         icon="i-octicon-search-16"
         :placeholder="t('filters.search')"
-        class="order-last w-full lg:order-none lg:w-72"
+        class="order-last w-full lg:@min-[36rem]:order-none lg:@min-[36rem]:w-56 lg:@min-[47rem]:w-72"
         :ui="{ trailing: 'pe-1.5' }"
       >
         <template #trailing>
@@ -190,7 +195,7 @@ const historyPercent = computed(() => {
             v-if="lastView"
             color="neutral"
             variant="ghost"
-            class="hidden sm:inline-flex"
+            class="hidden sm:inline-flex lg:@max-[47rem]:hidden"
             :label="t('views.update', { name: viewName(lastView) })"
             @click="updateView(lastView)"
           />
@@ -209,7 +214,7 @@ const historyPercent = computed(() => {
             icon="i-octicon-sort-desc-16"
             :label="t(`filters.sorts.${filters.sort}`)"
             :aria-label="t('filters.sort')"
-            :ui="{ base: 'text-toned', label: 'hidden sm:block', leadingIcon: 'text-muted' }"
+            :ui="{ base: 'text-toned', label: 'hidden sm:block lg:@max-[47rem]:hidden', leadingIcon: 'text-muted' }"
           />
         </UDropdownMenu>
       </div>

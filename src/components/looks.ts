@@ -7,3 +7,6 @@ export const CHECK_LOOKS: Record<RunState, { icon: string; color: string }> = {
   success: { icon: 'i-octicon-check-16', color: 'text-muted' },
   skipped: { icon: 'i-octicon-skip-16', color: 'text-muted' },
 }
+
+/** The issue panel beside the list, on screens 80rem wide and up (Tailwind's `xl`), and the room held while it loads. */
+export const ISSUE_PANEL = 'w-[clamp(28rem,36vw,35rem)] shrink-0 border-s border-default'

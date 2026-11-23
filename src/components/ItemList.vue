@@ -6,15 +6,20 @@ import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ItemRow, { ROW_HEIGHT } from '@/components/ItemRow.vue'
+import { sameRef } from '@/lib/issue'
 import { displayRepo, highlighted, items, loaded, repos, status, syncNow } from '@/stores/data'
 import { settings } from '@/stores/settings'
 import { openSetup } from '@/stores/ui'
-import { isDefault, query, resetFilters, result } from '@/stores/view'
+import { isDefault, openIssue, query, resetFilters, result } from '@/stores/view'
 import type { Item } from '@/types'
 
 const { t } = useI18n()
 const scroller = useTemplateRef<HTMLElement>('scroller')
 const rows = computed(() => result.value.items)
+
+function isOpen(item: Item, fullName: string | undefined) {
+  return item.kind === 'issue' && !!fullName && sameRef(openIssue.value, { repo: fullName, number: item.number })
+}
 
 function rowProps(item: Item) {
   const repo = repos.value.get(item.repoId)
@@ -23,6 +28,7 @@ function rowProps(item: Item) {
     repoName: displayRepo(repo?.fullName ?? ''),
     archived: repo?.isArchived,
     fresh: highlighted.value.has(item.id),
+    opened: isOpen(item, repo?.fullName),
   }
 }
 
@@ -43,6 +49,13 @@ function measure(element: unknown) {
 }
 
 watch(query, () => scroller.value?.scrollTo({ top: 0 }))
+
+// The issue that ↑ and ↓ in its panel move to stays in sight.
+watch(openIssue, (issue) => {
+  if (!issue) return
+  const index = rows.value.findIndex((item) => isOpen(item, repos.value.get(item.repoId)?.fullName))
+  if (index >= 0) virtualizer.value.scrollToIndex(index, { align: 'auto' })
+})
 watch(
   () => settings.density,
   () => virtualizer.value.measure(),

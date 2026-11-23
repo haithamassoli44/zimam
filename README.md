@@ -17,6 +17,7 @@ Every issue and pull request across your GitHub organizations, in one fast, filt
 - **Faceted filters with live counts.** Type, state, active or archived repository, account, repository, label, author, assignee, what involves you, review, checks, conflicts and last activity. Each value shows how many items picking it would give.
 - **Typed filters.** The search box takes qualifiers like `author:name`, `label:bug,docs`, `repo:name`, `is:draft` and `no:assignee`, and a minus before one leaves its matches out: `-author:renovate`.
 - **Pull requests at a glance.** Each open pull request shows its checks, whether a review is required, approved or asked to change, whether it conflicts with its base branch, and its size. Its checks icon opens the list of checks with links to their logs. Sorting by "Ready to merge" puts approved, passing pull requests first.
+- **Read issues in Zimam.** Click an issue to read its description and comments beside the list, or over it on a smaller screen, in Zimam's type and colors. Its ↑ and ↓ buttons go to the previous or next issue in the list, and the address names the open one. Reading is read-only: replying stays on GitHub, and pull requests open there.
 - **What involves you.** Pull requests that ask you or your team for a review, and what you opened or are assigned to.
 - **Repositories page.** Every repository in the workspace with its open issues and pull requests, those awaiting a required review, failing checks or conflicting, its last activity, and bars of what was opened each week over six months. Each count opens the list it counts. Pin the repositories you watch to keep them on top, in the order you drag them into, whatever the sort.
 - **Views are URLs.** Save filter sets in the sidebar; every screen is a link you can share or bookmark.
@@ -35,6 +36,7 @@ Zimam is a static single-page app with no backend: the browser calls GitHub's Gr
 - **Quiet minutes are free.** When the last search found nothing, Zimam first asks GitHub's REST API for each source's most recently updated issue, with the ETag of its last answer. An unchanged answer costs nothing, and when every source is unchanged the search is skipped. It still runs at least every 5 minutes. Organizations use one address for all their repositories when the token may read it, and each active repository otherwise.
 - **What search can't see.** A finished CI run doesn't change a pull request's `updatedAt`, and neither does its base branch moving on, so the checks, reviews and conflicts of open pull requests in active repositories are read again on their own, 50 at a time: every minute while checks run, every 5 minutes while they fail, every 15 otherwise. Review requests can go to a team, so a search for `review-requested:@me` finds them every 5 minutes. Deleted and transferred items are caught by refetching the open items every 6 hours, and only what GitHub reports as gone is removed.
 - **Rate limits.** GitHub's hourly allowance is shared by every tool on your account. Zimam leaves 2% of it for the others, loads history only while more than 15% remains, and pauses until the reset time GitHub reports. When GitHub asks for a pause without a time, each pause in a row doubles, from 30 seconds up to 15 minutes. A request with no answer after 30 seconds is given up on.
+- **Reading an issue.** One query reads the issue and its first 100 comments as GitHub renders them, for one point, and each further 100 comments cost another. GitHub signs the image links in that HTML for five minutes, so an answer is reused for a minute at most, and read again when the list sees the issue change.
 - **Offline.** A service worker keeps the app's own files, never GitHub's responses, so the app opens without a network and shows the cached list. Syncing resumes as soon as the connection is back. A new version waits until you reload.
 - **Storage.** Each workspace's items are cached in IndexedDB, settings and views in `localStorage`. With several tabs open, one tab syncs (Web Locks) and the others pick up its cache (BroadcastChannel).
 - **Filtering** is one pass over the cached items, so results and counts update as you click. Filters live in the URL's query string.
@@ -42,7 +44,8 @@ Zimam is a static single-page app with no backend: the browser calls GitHub's Gr
 ## Security
 
 - Your token stays in your browser's storage and is sent only to `api.github.com`.
-- A Content Security Policy enforces it: the page can connect only to GitHub's API and Cloudflare Web Analytics, and load images only from GitHub's avatar host.
+- A Content Security Policy enforces it: the page can connect only to GitHub's API and Cloudflare Web Analytics, and load images only from GitHub's image hosts (`*.githubusercontent.com`), which also proxy the outside images people link to.
+- Issue text is cleaned again with DOMPurify before it is shown, though GitHub cleans it too: only text, links, images, code, tables and lists stay. Links open in a new tab that can't reach Zimam's page.
 - Settings exports leave tokens out.
 
 ## Tokens
@@ -56,7 +59,7 @@ Read access is enough. Each workspace keeps its own token.
 
 ## Stack
 
-Vue 3, Nuxt UI, vue-i18n, TanStack Virtual, Vite, Bun, Vitest, oxlint and oxfmt. Hosted as static assets on Cloudflare Workers.
+Vue 3, Nuxt UI, vue-i18n, TanStack Virtual, DOMPurify, Vite, Bun, Vitest, oxlint and oxfmt. Hosted as static assets on Cloudflare Workers.
 
 ## Development
 

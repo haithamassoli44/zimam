@@ -220,6 +220,48 @@
       "skipped": "Skipped"
     }
   },
+  "issue": {
+    "title": "Issue {ref}",
+    "close": "Close",
+    "previous": "Previous issue",
+    "next": "Next issue",
+    "onGitHub": "Open on GitHub",
+    "loading": "Loading the issue",
+    "failed": "Couldn't load this issue",
+    "missing": "GitHub can't find this issue. It may have been deleted or moved, or this workspace's token can't read it.",
+    "states": {
+      "open": "Open",
+      "completed": "Closed",
+      "notPlanned": "Not planned",
+      "duplicate": "Duplicate"
+    },
+    "opened": "{login} opened this {time}",
+    "assignees": "Assigned to",
+    "edited": "edited",
+    "ghost": "Deleted account",
+    "bot": "Bot",
+    "roles": {
+      "owner": "Owner",
+      "member": "Member",
+      "collaborator": "Collaborator",
+      "contributor": "Contributor"
+    },
+    "hidden": {
+      "abuse": "Hidden as abuse",
+      "offTopic": "Hidden as off-topic",
+      "outdated": "Hidden as outdated",
+      "resolved": "Hidden as resolved",
+      "duplicate": "Hidden as a duplicate",
+      "spam": "Hidden as spam",
+      "other": "Hidden"
+    },
+    "show": "Show",
+    "more": "No more comments | Show 1 more comment | Show {n} more comments",
+    "moreFailed": "Couldn't load more comments",
+    "readOnly": "Read-only here.",
+    "reply": "Reply on GitHub",
+    "video": "Watch the video on GitHub"
+  },
   "sync": {
     "synced": "Updated {time}",
     "never": "Not synced yet",
