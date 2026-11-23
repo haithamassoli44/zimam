@@ -12,7 +12,7 @@ import { formatRef, IssueMissing, issueUrl, sameRef, type IssueRef, type Post, t
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { displayRepo, issueThread, items, loaded, moreComments, repos } from '@/stores/data'
-import { closeIssue, openIssue, result, showIssue } from '@/stores/view'
+import { closeIssue, openIssue, result, showIssue, takeOpener } from '@/stores/view'
 import type { Item } from '@/types'
 
 /** An issue, read-only: its description and comments, with a way to the next one in the list. */
@@ -56,6 +56,8 @@ const unhidden = reactive(new Set<string>())
 let answeredAt = 0
 let ticket = 0
 let moreTicket = 0
+// Show more, while it loads.
+let loadingMoreNow: Promise<void> | null = null
 // What had the focus when the issue was opened from outside the panel. The title takes the focus over once the issue
 // loads, unless the focus has moved on since.
 let opener: Element | null = null
@@ -65,13 +67,12 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function load(refresh: boolean, settle = 0) {
   const issue = props.issue
   const mine = ++ticket
-  // A newer version is read with as many comments as were shown, and what's shown stays until it arrives.
-  const had = refresh && thread.value ? thread.value.comments.length : 0
   if (!refresh) {
     thread.value = null
     problem.value = null
     moreTicket++
     loadingMore.value = false
+    loadingMoreNow = null
     moreFailed.value = false
     unhidden.clear()
   }
@@ -83,8 +84,15 @@ async function load(refresh: boolean, settle = 0) {
   }
   try {
     let answer = await issueThread(issue, version.value)
-    while (answer.after && answer.comments.length < had) answer = await moreComments(answer)
-    if (mine !== ticket) return
+    // A newer version is read with as many comments as are shown when it's ready, and what's shown stays until then.
+    // Show more, should it be loading, finishes first, so the comments it brings are counted too.
+    for (;;) {
+      if (refresh && loadingMoreNow) await loadingMoreNow
+      if (mine !== ticket) return
+      const shown = refresh && thread.value ? thread.value.comments.length : 0
+      if (!answer.after || answer.comments.length >= shown) break
+      answer = await moreComments(answer)
+    }
     thread.value = answer
     answeredAt = Date.now()
     problem.value = null
@@ -110,7 +118,8 @@ watch(
     const before = previousValues?.[0]
     const another = issue !== before
     if (another) {
-      opener = props.docked && !root.value?.contains(document.activeElement) ? document.activeElement : null
+      const from = takeOpener(props.issue)
+      opener = props.docked && !root.value?.contains(from) ? from : null
       scroller.value?.scrollTo({ top: 0 })
     }
     void load(!another && thread.value !== null, another && before ? 150 : 0)
@@ -118,21 +127,27 @@ watch(
   { immediate: true },
 )
 
-async function showMore() {
+function showMore() {
   const current = thread.value
   if (!current?.after || loadingMore.value) return
   const mine = ++moreTicket
   loadingMore.value = true
   moreFailed.value = false
-  try {
-    const answer = await moreComments(current)
-    // A newer answer may have come in meanwhile. Then this one is dropped, and the button stays to try again.
-    if (mine === moreTicket && thread.value === current) thread.value = answer
-  } catch {
-    if (mine === moreTicket) moreFailed.value = true
-  } finally {
-    if (mine === moreTicket) loadingMore.value = false
-  }
+  const loading: Promise<void> = moreComments(current)
+    .then(
+      (answer) => {
+        // Another issue may have been opened meanwhile. Then the answer is dropped.
+        if (mine === moreTicket && thread.value === current) thread.value = answer
+      },
+      () => {
+        if (mine === moreTicket) moreFailed.value = true
+      },
+    )
+    .finally(() => {
+      if (loadingMoreNow === loading) loadingMoreNow = null
+      if (mine === moreTicket) loadingMore.value = false
+    })
+  loadingMoreNow = loading
 }
 
 // The next page holds up to 100 comments.
