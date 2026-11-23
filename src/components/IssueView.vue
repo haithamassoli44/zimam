@@ -8,41 +8,39 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, useTemp
 import { useI18n } from 'vue-i18n'
 
 import IssueText from '@/components/IssueText.vue'
-import { formatRef, IssueMissing, issueUrl, sameRef, type IssueRef, type Post, type Thread } from '@/lib/issue'
+import LabelTag from '@/components/LabelTag.vue'
+import { ISSUE_LOOKS } from '@/components/looks'
+import { expiring, IssueMissing, nextPage, type Post, type Thread } from '@/lib/issue'
+import { stateOf } from '@/lib/queries'
+import { issueUrl, refKey, sameRef, type IssueRef } from '@/lib/refs'
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { displayRepo, issueThread, items, loaded, moreComments, repos } from '@/stores/data'
-import { closeIssue, openIssue, result, showIssue, takeOpener } from '@/stores/view'
-import type { Item } from '@/types'
+import { displayRepo, issueRef, issueThread, items, loaded, moreComments } from '@/stores/data'
+import { closeIssue, openIssue, result, showIssue } from '@/stores/view'
 
-/** An issue, read-only: its description and comments, with a way to the next one in the list. */
-const props = defineProps<{ issue: IssueRef; docked?: boolean }>()
+/**
+ * An issue, read-only: its description and comments, with a way to the next one in the list. `opener` is what had the
+ * focus as it opened.
+ */
+const props = defineProps<{ issue: IssueRef; docked?: boolean; opener?: Element | null }>()
 const { t } = useI18n()
 const root = useTemplateRef<HTMLElement>('root')
 const scroller = useTemplateRef<HTMLElement>('scroller')
 const heading = useTemplateRef<HTMLElement>('heading')
 
-const refOf = (item: Item): IssueRef | null => {
-  const repo = repos.value.get(item.repoId)
-  return repo ? { repo: repo.fullName, number: item.number } : null
-}
-
 // The list's copy of the issue. When it changes there, the issue is read again.
-const listed = computed(() =>
-  [...items.value.values()].find((item) => item.kind === 'issue' && sameRef(refOf(item), props.issue)),
-)
+const listed = computed(() => [...items.value.values()].find((item) => sameRef(issueRef(item), props.issue)))
 const version = computed(() => listed.value?.updatedAt ?? '')
 
 // ↑ and ↓ go through the issues the list shows, in its order, past its pull requests.
-const issues = computed(() => result.value.items.filter((item) => item.kind === 'issue'))
-const position = computed(() => issues.value.findIndex((item) => sameRef(refOf(item), props.issue)))
+const issues = computed(() => result.value.items.flatMap((item) => issueRef(item) ?? []))
+const position = computed(() => issues.value.findIndex((issue) => sameRef(issue, props.issue)))
 const neighbor = (by: -1 | 1) => (position.value < 0 ? null : (issues.value[position.value + by] ?? null))
 const previous = computed(() => neighbor(-1))
 const next = computed(() => neighbor(1))
 
 function move(by: -1 | 1) {
-  const target = neighbor(by)
-  const issue = target && refOf(target)
+  const issue = neighbor(by)
   if (issue) showIssue(issue)
 }
 
@@ -50,17 +48,13 @@ const thread = shallowRef<Thread | null>(null)
 const problem = ref<'missing' | 'failed' | null>(null)
 const loadingMore = ref(false)
 const moreFailed = ref(false)
-// The hidden comments someone chose to see.
 const unhidden = reactive(new Set<string>())
-// When the answer shown arrived: GitHub's image links in it work for five minutes.
-let answeredAt = 0
 let ticket = 0
 let moreTicket = 0
-// Show more, while it loads.
 let loadingMoreNow: Promise<void> | null = null
 // What had the focus when the issue was opened from outside the panel. The title takes the focus over once the issue
 // loads, unless the focus has moved on since.
-let opener: Element | null = null
+let focusFrom: Element | null = null
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -94,23 +88,22 @@ async function load(refresh: boolean, settle = 0) {
       answer = await moreComments(answer)
     }
     thread.value = answer
-    answeredAt = Date.now()
     problem.value = null
-    const from = opener
-    opener = null
+    const from = focusFrom
+    focusFrom = null
     if (from && (document.activeElement === from || document.activeElement === document.body)) {
       await nextTick()
       heading.value?.focus({ preventScroll: true })
     }
   } catch (error) {
     if (mine !== ticket) return
-    opener = null
+    focusFrom = null
     if (refresh && thread.value) return
     problem.value = error instanceof IssueMissing ? 'missing' : 'failed'
   }
 }
 
-const key = computed(() => formatRef(props.issue).toLowerCase())
+const key = computed(() => refKey(props.issue))
 
 watch(
   [key, version, loaded],
@@ -118,8 +111,8 @@ watch(
     const before = previousValues?.[0]
     const another = issue !== before
     if (another) {
-      const from = takeOpener(props.issue)
-      opener = props.docked && !root.value?.contains(from) ? from : null
+      const from = props.opener ?? null
+      focusFrom = props.docked && !root.value?.contains(from) ? from : null
       scroller.value?.scrollTo({ top: 0 })
     }
     void load(!another && thread.value !== null, another && before ? 150 : 0)
@@ -136,7 +129,6 @@ function showMore() {
   const loading: Promise<void> = moreComments(current)
     .then(
       (answer) => {
-        // Another issue may have been opened meanwhile. Then the answer is dropped.
         if (mine === moreTicket && thread.value === current) thread.value = answer
       },
       () => {
@@ -150,46 +142,29 @@ function showMore() {
   loadingMoreNow = loading
 }
 
-// The next page holds up to 100 comments.
-const more = computed(() =>
-  thread.value?.after ? Math.min(100, thread.value.total - thread.value.comments.length) : 0,
-)
+const more = computed(() => (thread.value ? nextPage(thread.value) : 0))
 
 // A hidden comment's images are placed only when it's shown. Should its links be about to expire, the issue is read
 // again for fresh ones.
 function unhide(post: Post) {
   unhidden.add(post.id)
-  if (Date.now() - answeredAt > 4 * 60_000) void load(true)
-}
-
-// Beside the list, focus that was in the panel goes back to the issue's row. Over it, the dialog does that.
-function close() {
-  const row = document.querySelector<HTMLElement>('main a[data-row][aria-current]')
-  const inside = root.value?.contains(document.activeElement)
-  closeIssue()
-  if (props.docked && inside) row?.focus({ preventScroll: true })
+  if (thread.value && expiring(thread.value)) void load(true)
 }
 
 // Escape closes the panel beside the list, unless a menu, popover, dialog or tooltip is open to take it.
 function onKey(event: KeyboardEvent) {
   if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || !props.docked || !openIssue.value) return
   if (document.querySelector('[data-dismissable-layer]')) return
-  close()
+  closeIssue()
 }
 document.addEventListener('keydown', onKey)
-onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
-
-const STATES = {
-  open: { icon: 'i-octicon-issue-opened-16', color: 'text-toned' },
-  completed: { icon: 'i-octicon-issue-closed-16', color: 'text-merged' },
-  notPlanned: { icon: 'i-octicon-skip-16', color: 'text-muted' },
-  duplicate: { icon: 'i-octicon-skip-16', color: 'text-muted' },
-}
-const state = computed<keyof typeof STATES>(() => {
-  if (thread.value) return thread.value.closedAs ?? 'open'
-  if (!listed.value || listed.value.state === 'open') return 'open'
-  return listed.value.notPlanned ? 'notPlanned' : 'completed'
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKey)
+  // What's still to load is for a panel no longer there.
+  ticket++
 })
+
+const state = computed(() => thread.value?.state ?? (listed.value ? stateOf(listed.value) : 'open'))
 
 const posts = computed<Post[]>(() => (thread.value ? [thread.value.post, ...thread.value.comments] : []))
 const url = computed(() => thread.value?.url ?? issueUrl(props.issue))
@@ -210,10 +185,10 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
         variant="ghost"
         :aria-label="t('issue.close')"
         :ui="{ leadingIcon: 'rtl:-scale-x-100' }"
-        @click="close"
+        @click="closeIssue"
       />
       <span class="flex min-w-0 items-center gap-2 font-mono text-[13px] text-toned" :class="!docked && 'ps-1'">
-        <UIcon :name="STATES[state].icon" class="size-4 shrink-0" :class="STATES[state].color" />
+        <UIcon :name="ISSUE_LOOKS[state].icon" class="size-4 shrink-0" :class="ISSUE_LOOKS[state].color" />
         <span class="truncate" dir="ltr">{{ displayRepo(issue.repo) }}#{{ issue.number }}</span>
       </span>
       <span class="flex-1" />
@@ -254,7 +229,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
             color="neutral"
             variant="ghost"
             :aria-label="t('issue.close')"
-            @click="close"
+            @click="closeIssue"
           />
         </UTooltip>
       </template>
@@ -311,7 +286,6 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
       <template v-else>
         <div class="px-4 pt-5 pb-4 sm:px-6">
           <h2
-            id="issue-title"
             ref="heading"
             tabindex="-1"
             class="text-xl leading-7 font-medium text-highlighted focus:outline-none"
@@ -323,7 +297,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
             <span
               class="inline-flex h-6 items-center gap-1.5 rounded-full bg-elevated ps-2 pe-2.5 font-medium text-highlighted"
             >
-              <UIcon :name="STATES[state].icon" class="size-4" :class="STATES[state].color" />
+              <UIcon :name="ISSUE_LOOKS[state].icon" class="size-4" :class="ISSUE_LOOKS[state].color" />
               {{ t(`issue.states.${state}`) }}
             </span>
             <i18n-t keypath="issue.opened" tag="span" scope="global">
@@ -343,17 +317,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
             </span>
           </div>
           <div v-if="thread.labels.length" class="mt-3 flex flex-wrap gap-1.5">
-            <span
-              v-for="label in thread.labels"
-              :key="label.name"
-              class="inline-flex h-5 items-center gap-1.5 rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
-            >
-              <span
-                class="size-2 rounded-full ring-1 ring-black/10 ring-inset dark:ring-white/15"
-                :style="{ background: `#${label.color}` }"
-              />
-              <bdi>{{ label.name }}</bdi>
-            </span>
+            <LabelTag v-for="label in thread.labels" :key="label.name" :label="label" />
           </div>
           <div v-if="thread.assignees.length" class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px]">
             <span class="text-muted">{{ t('issue.assignees') }}</span>

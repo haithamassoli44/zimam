@@ -2,34 +2,19 @@
 import { onMounted, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { clean, direction } from '@/lib/clean'
+import { addressOf, ADDRESSED, clean, direction } from '@/lib/clean'
+import { unsigned } from '@/lib/issue'
 
 /** The text of an issue or a comment, as GitHub renders it, cleaned. `link` is where it is on GitHub. */
 const props = defineProps<{ html: string; link: string }>()
 const { t } = useI18n()
 const root = useTemplateRef<HTMLElement>('root')
 
-// GitHub signs the links to the files people upload, on this host, anew in every answer, and each lasts five minutes.
-// Read again with nothing new but those signatures, a post takes the fresh links in place, and nothing else changes, so
-// what the reader did stays: a section opened, the focus, a selection. New text replaces what's shown, but an image
-// that has loaded stays: loading it again would only make it flash.
-const SIGNED_HOST = 'private-user-images.githubusercontent.com'
-// The cleaned text keeps an address only on a link and on an image.
-const ADDRESSED = 'a, img'
-const addressOf = (element: Element) => (element.tagName === 'IMG' ? 'src' : 'href')
+// GitHub signs its links to uploaded files anew in every answer. Read again with nothing new but those signatures, a
+// post takes the fresh links in place, and nothing else changes, so what the reader did stays: a section opened, the
+// focus, a selection. New text replaces what's shown, but an image that has loaded stays: loading it again would only
+// make it flash.
 const loaded = (image: HTMLImageElement) => image.complete && image.naturalWidth > 0
-
-/** The address without its signature, should it be one of GitHub's signed links. */
-function unsigned(address: string): string {
-  try {
-    const url = new URL(address)
-    if (url.hostname !== SIGNED_HOST) return address
-    url.searchParams.delete('jwt')
-    return url.href
-  } catch {
-    return address
-  }
-}
 
 const sameness = (image: HTMLImageElement) =>
   JSON.stringify([...image.attributes].map(({ name, value }) => [name, name === 'src' ? unsigned(value) : value]))
@@ -55,7 +40,6 @@ function render() {
   if (!element) return
   const fragment = clean(props.html, { video: { href: props.link, label: t('issue.video') } })
   const now = gist(fragment)
-  // Nothing new but the signatures: each link takes its fresh one in place. An image that has loaded keeps its own.
   if (now === placed) {
     const fresh = fragment.querySelectorAll(ADDRESSED)
     for (const [index, node] of addressed.entries()) {

@@ -1,5 +1,6 @@
 <script lang="ts">
-import { COUNT_KEYS, type Count } from '@/lib/repos'
+import { BARS_WIDTH } from '@/components/WeekBars.vue'
+import { COUNT_KEYS, type Count, type RepoSort } from '@/lib/repos'
 
 // Totals stay quiet with an icon of what they count. What waits on someone reads clearly, and failing checks alone
 // are red. Each count has a column of its own width on wide screens.
@@ -11,14 +12,20 @@ const LOOKS: Record<Count, { icon?: string; tone: string; width: string }> = {
   conflicts: { tone: 'text-highlighted', width: '4.5rem' },
 }
 
-// The repositories page's columns, shared by its header and rows: the name, the weeks, the counts, the last activity,
-// and the pin and the link. The page sets the widths for both. Below this width the rows stack instead.
-export const REPO_COLUMNS = '@4xl:grid @4xl:grid-cols-(--repo-columns) @4xl:gap-x-3'
-export const REPO_COLUMN_WIDTHS = {
-  '--repo-columns': ['minmax(0,1fr)', '6.5rem', ...COUNT_KEYS.map((key) => LOOKS[key].width), '6rem', '3.25rem'].join(
-    ' ',
-  ),
-}
+/**
+ * The repositories page's columns, in order, shared by its header and its rows. The header names each, and sorts by it
+ * where that means something. The last holds the pin and the link.
+ */
+export const REPO_COLUMNS: { key: string; width: string; sort?: RepoSort; start?: boolean; named?: false }[] = [
+  { key: 'name', width: 'minmax(0,1fr)', sort: 'name', start: true },
+  { key: 'opened', width: `${BARS_WIDTH}px`, start: true },
+  ...COUNT_KEYS.map((key) => ({ key, width: LOOKS[key].width, sort: key })),
+  { key: 'activity', width: '6rem', sort: 'activity' },
+  { key: 'actions', width: '3.25rem', named: false },
+]
+// The page sets the widths for its header and rows. Below this width the rows stack instead.
+export const REPO_GRID = '@4xl:grid @4xl:grid-cols-(--repo-columns) @4xl:gap-x-3'
+export const REPO_COLUMN_WIDTHS = { '--repo-columns': REPO_COLUMNS.map((column) => column.width).join(' ') }
 </script>
 
 <script setup lang="ts">
@@ -28,9 +35,10 @@ import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { DOT } from '@/components/looks'
 import WeekBars from '@/components/WeekBars.vue'
-import type { Filters } from '@/lib/filters'
-import { COUNTS, statusOf, TALLIED, type RepoRow } from '@/lib/repos'
+import { statusOf, type Filters } from '@/lib/filters'
+import { COUNTS, TALLIED, type RepoRow } from '@/lib/repos'
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { displayRepo } from '@/stores/data'
@@ -116,7 +124,7 @@ const link = computed(() => ({
 <template>
   <div
     class="group relative border-b border-default px-4 py-3 transition-colors hover:bg-elevated/60 sm:px-6 @4xl:items-center @4xl:py-2.5"
-    :class="REPO_COLUMNS"
+    :class="REPO_GRID"
   >
     <button
       v-if="pinned"
@@ -161,10 +169,7 @@ const link = computed(() => ({
       >
         <span v-if="repo.description" class="truncate" dir="auto">{{ repo.description }}</span>
         <span v-if="repo.language" class="hidden shrink-0 items-center gap-1.5 sm:inline-flex">
-          <span
-            class="size-2 rounded-full ring-1 ring-black/10 ring-inset dark:ring-white/15"
-            :style="{ background: repo.language.color ?? 'currentColor' }"
-          />
+          <span :class="DOT" :style="{ background: repo.language.color ?? 'currentColor' }" />
           <bdi>{{ repo.language.name }}</bdi>
         </span>
       </div>

@@ -11,9 +11,9 @@ import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import FacetMenu, { type Option } from '@/components/FacetMenu.vue'
-import { CHOICES, NONE, SORTS, toggleValue, type Facet } from '@/lib/filters'
+import { CHOICES, NONE, singlePick, SORTS, toggleValue, type Facet } from '@/lib/filters'
 import { formatNumber } from '@/locale'
-import { displayRepo, owners, people, status } from '@/stores/data'
+import { displayRepo, historyPercent, owners, people, status } from '@/stores/data'
 import {
   activeView,
   askToSave,
@@ -115,11 +115,10 @@ function addToSearch(example: string) {
 const total = computed(() => result.value.items.length)
 const title = computed(() => (activeView.value ? viewName(activeView.value) : t('results.custom')))
 
-const historyPercent = computed(() => {
+// The closed history still loading matters only to a list that shows closed items.
+const historyShown = computed(() => {
   const wantsClosed = filters.state.length === 0 || filters.state.some((state) => state !== 'open')
-  if (status.value.historyDone || !wantsClosed || !status.value.syncedAt) return null
-  const { history } = status.value
-  return history.total ? Math.round((history.done / history.total) * 100) : 0
+  return status.value.historyDone || !wantsClosed || !status.value.syncedAt ? null : historyPercent.value
 })
 </script>
 
@@ -235,16 +234,17 @@ const historyPercent = computed(() => {
       <FacetMenu
         v-for="[facet, list] in menus"
         :key="facet"
-        v-model="filters[facet]"
         :title="t(`filters.${facet}.title`)"
         :options="list"
-        :single="facet === 'updated'"
+        :picked="selected(facet)"
+        :single="singlePick(facet)"
+        @toggle="(value) => toggle(facet, value)"
       />
 
       <UButton v-if="!isDefault" color="neutral" variant="link" :label="t('filters.clear')" @click="resetFilters" />
 
-      <span v-if="historyPercent !== null" class="text-xs text-muted sm:ms-auto">{{
-        t('results.historyLoading', { percent: historyPercent })
+      <span v-if="historyShown !== null" class="text-xs text-muted sm:ms-auto">{{
+        t('results.historyLoading', { percent: historyShown })
       }}</span>
     </div>
   </div>

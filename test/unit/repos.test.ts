@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { arrange, defaultRepoFilters, pickRows, repoRows, toggleStatus, WEEKS } from '@/lib/repos'
+import { arrange, defaultRepoFilters, findRepos, pickRows, repoRows, toggleStatus, WEEKS } from '@/lib/repos'
 import type { Left } from '@/lib/sync'
 import { noOne, type Item, type Repo } from '@/types'
 
@@ -206,6 +206,31 @@ describe('pickRows', () => {
   it('counts what the search finds in each status, whichever is picked', () => {
     expect(pickRows(rows, { ...defaultRepoFilters(), q: 'o' }).counts).toEqual({ active: 0, archived: 1 })
     expect(pickRows(rows, defaultRepoFilters()).counts).toEqual({ active: 2, archived: 1 })
+  })
+})
+
+describe('findRepos', () => {
+  it('searches what the list shows of each repository, and counts what it finds by status', () => {
+    const all = [
+      repo('web', { description: 'The site' }),
+      repo('site-old', { isArchived: true }),
+      repo('api', { description: 'Serves the site' }),
+    ]
+    const byName = findRepos(
+      all,
+      (each) => each,
+      { q: 'site', status: ['active'] },
+      (each) => each.name,
+    )
+    expect(byName.kept).toEqual([])
+    expect(byName.counts).toEqual({ active: 0, archived: 1 })
+    const byAll = findRepos(
+      all,
+      (each) => each,
+      { q: 'site', status: [] },
+      (each) => `${each.name} ${each.description}`,
+    )
+    expect(byAll.kept.map((each) => each.name)).toEqual(['web', 'site-old', 'api'])
   })
 })
 

@@ -83,10 +83,12 @@ describe('the open issue', () => {
 
   it('closes in place when its entry is from before a reload', async () => {
     showIssue(WEB)
-    // A reload keeps the entry's state, but the page that added it is gone.
-    history.replaceState({ zimamIssue: { ...history.state.zimamIssue, load: 'an earlier page' } }, '')
-    closeIssue()
-    expect(openIssue.value).toBeNull()
+    // A reload keeps the entry, but the page that added it is gone.
+    vi.resetModules()
+    const reloaded = await import('@/stores/view')
+    expect(reloaded.openIssue.value).toEqual(WEB)
+    reloaded.closeIssue()
+    expect(reloaded.openIssue.value).toBeNull()
     await nextTick()
     expect(named()).toBeNull()
     await back()

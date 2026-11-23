@@ -130,6 +130,22 @@ describe('toggleValue', () => {
     expect(filters.kind).toEqual([])
   })
 
+  it('takes one time range at a time', () => {
+    const filters = defaultFilters()
+    toggleValue(filters, 'updated', 'week')
+    toggleValue(filters, 'updated', 'month')
+    expect(filters.updated).toEqual(['month'])
+    toggleValue(filters, 'updated', 'month')
+    expect(filters.updated).toEqual([])
+  })
+
+  it('adds up picks of a facet some items have no value in, even of two values', () => {
+    const filters = defaultFilters()
+    toggleValue(filters, 'merge', 'conflicts')
+    toggleValue(filters, 'merge', 'clean')
+    expect(filters.merge).toEqual(['conflicts', 'clean'])
+  })
+
   it('adds up picks among more values, keeping each one picked', () => {
     const filters = defaultFilters()
     toggleValue(filters, 'state', 'merged')

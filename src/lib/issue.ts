@@ -1,37 +1,37 @@
-import type { Label, Person } from '@/types'
+import type { IssueState, Label, Person } from '@/types'
 
 import type { GitHub } from './github'
+import { ASSIGNEES, closedAs, LABELS, PERSON } from './queries'
+import { refKey, type IssueRef } from './refs'
 
-/** Where an issue lives: `owner/name#number`, the way GitHub writes a reference. */
-export interface IssueRef {
-  repo: string
-  number: number
+// GitHub signs the links to the files people upload, on this host, anew in every answer. Each lasts five minutes.
+const SIGNED_HOST = 'private-user-images.githubusercontent.com'
+const SIGNED_FOR = 5 * 60_000
+
+/** The address without its signature, should it be one of GitHub's signed links. */
+export function unsigned(address: string): string {
+  try {
+    const url = new URL(address)
+    if (url.hostname !== SIGNED_HOST) return address
+    url.searchParams.delete('jwt')
+    return url.href
+  } catch {
+    return address
+  }
 }
 
-const REF = /^([\w.-]+\/[\w.-]+)#([1-9]\d{0,8})$/
-
-export function parseRef(text: string | null | undefined): IssueRef | null {
-  const match = REF.exec(text ?? '')
-  return match ? { repo: match[1], number: Number(match[2]) } : null
-}
-
-export const formatRef = (ref: IssueRef) => `${ref.repo}#${ref.number}`
-
-/** GitHub doesn't mind the case of a repository's name, so neither does this. */
-export const sameRef = (a: IssueRef | null, b: IssueRef | null) =>
-  !!a && !!b && a.number === b.number && a.repo.toLowerCase() === b.repo.toLowerCase()
-
-export const issueUrl = (ref: IssueRef) => `https://github.com/${ref.repo}/issues/${ref.number}`
+/** Whether the signed links in this thread stop working within a minute. */
+export const expiring = (thread: Thread) => Date.now() - thread.readAt > SIGNED_FOR - 60_000
 
 /** How the author of a post is tied to the repository, where GitHub says so. */
-export const ROLES = ['owner', 'member', 'collaborator', 'contributor'] as const
-export type Role = (typeof ROLES)[number]
+const ROLES = ['owner', 'member', 'collaborator', 'contributor'] as const
+type Role = (typeof ROLES)[number]
 
 /** Why someone hid a comment. */
-export const HIDDEN = ['abuse', 'offTopic', 'outdated', 'resolved', 'duplicate', 'spam', 'other'] as const
-export type Hidden = (typeof HIDDEN)[number]
+const HIDDEN = ['abuse', 'offTopic', 'outdated', 'resolved', 'duplicate', 'spam', 'other'] as const
+type Hidden = (typeof HIDDEN)[number]
 
-export interface Author extends Person {
+interface Author extends Person {
   bot: boolean
 }
 
@@ -54,9 +54,7 @@ export interface Thread {
   ref: IssueRef
   title: string
   url: string
-  state: 'open' | 'closed'
-  /** Why a closed issue was closed. */
-  closedAs: 'completed' | 'notPlanned' | 'duplicate' | null
+  state: IssueState
   labels: Label[]
   assignees: Person[]
   post: Post
@@ -65,18 +63,21 @@ export interface Thread {
   total: number
   /** Where the next comments start, while there are more. */
   after: string | null
+  /** When GitHub was asked for it, which its signed links count from. */
+  readAt: number
 }
 
 /** Thrown when GitHub finds no such issue: deleted, moved, a pull request's number, or out of the token's reach. */
 export class IssueMissing extends Error {}
 
 // A page of comments as large as still costs one point, with the issue around the first.
+const PAGE = 100
 const COMMENTS = `
   totalCount
   pageInfo { hasNextPage endCursor }
   nodes {
     id url createdAt lastEditedAt isMinimized minimizedReason authorAssociation bodyHTML
-    author { kind: __typename login avatarUrl(size: 64) }
+    author { kind: __typename ${PERSON} }
   }`
 
 const ISSUE = `
@@ -84,10 +85,10 @@ const ISSUE = `
     repository(owner: $owner, name: $name) {
       issue(number: $number) {
         id url title state stateReason createdAt lastEditedAt authorAssociation bodyHTML
-        author { kind: __typename login avatarUrl(size: 64) }
-        labels(first: 20) { nodes { name color } }
-        assignees(first: 10) { nodes { login avatarUrl(size: 64) } }
-        comments(first: 100) { ${COMMENTS} }
+        author { kind: __typename ${PERSON} }
+        ${LABELS}
+        ${ASSIGNEES}
+        comments(first: ${PAGE}) { ${COMMENTS} }
       }
     }
   }`
@@ -95,7 +96,7 @@ const ISSUE = `
 const MORE = `
   query($id: ID!, $after: String!) {
     node(id: $id) {
-      ... on Issue { comments(first: 100, after: $after) { ${COMMENTS} } }
+      ... on Issue { comments(first: ${PAGE}, after: $after) { ${COMMENTS} } }
     }
   }`
 
@@ -169,61 +170,57 @@ const toPost = (raw: RawComment): Post => ({
 
 const present = <T>(nodes: (T | null)[] | undefined): T[] => (nodes ?? []).filter((node): node is T => node !== null)
 
-const CLOSED_AS: Record<string, Thread['closedAs']> = {
-  COMPLETED: 'completed',
-  NOT_PLANNED: 'notPlanned',
-  DUPLICATE: 'duplicate',
-}
-
-function toThread(ref: IssueRef, raw: RawIssue): Thread {
-  const closed = raw.state === 'CLOSED'
+function toThread(ref: IssueRef, raw: RawIssue, readAt: number): Thread {
   return {
     id: raw.id,
     ref,
     title: raw.title,
     url: raw.url,
-    state: closed ? 'closed' : 'open',
-    closedAs: closed ? (CLOSED_AS[raw.stateReason ?? ''] ?? 'completed') : null,
+    state: raw.state === 'CLOSED' ? closedAs(raw.stateReason) : 'open',
     labels: present(raw.labels?.nodes),
     assignees: present(raw.assignees?.nodes),
     post: toPost({ ...raw, isMinimized: false, minimizedReason: null }),
     comments: present(raw.comments.nodes).map(toPost),
     total: raw.comments.totalCount,
     after: raw.comments.pageInfo.hasNextPage ? raw.comments.pageInfo.endCursor : null,
+    readAt,
   }
 }
 
-// Opening the same issue again soon after costs nothing, unless it changed since. GitHub's image links in the answer
-// stop working five minutes after it, so an answer is kept only for a minute. What one token read stays with it.
+export const nextPage = (thread: Thread) => (thread.after ? Math.min(PAGE, thread.total - thread.comments.length) : 0)
+
+// Opening the same issue again soon after costs nothing, unless it changed since. The signed links in an answer don't
+// last, so it's kept only for a minute. What one token read stays with it.
 const FRESH = 60_000
 const recentFor = new WeakMap<GitHub, Map<string, { version: string; at: number; answer: Promise<Thread> }>>()
 
 /**
- * Reads an issue with its first 100 comments, for one point. `version` is when the list last saw it change, so a
+ * Reads an issue with its first page of comments, for one point. `version` is when the list last saw it change, so a
  * newer change is read again.
  */
 export function readIssue(gh: GitHub, ref: IssueRef, version = ''): Promise<Thread> {
   const recent = recentFor.get(gh) ?? new Map()
   recentFor.set(gh, recent)
   for (const [each, { at }] of recent) if (Date.now() - at >= FRESH) recent.delete(each)
-  const key = formatRef(ref).toLowerCase()
+  const key = refKey(ref)
   const last = recent.get(key)
   if (last && last.version === version && Date.now() - last.at < FRESH) return last.answer
   const [owner, name] = ref.repo.split('/')
+  const at = Date.now()
   const answer = gh
     .request<{ repository: { issue: RawIssue | null } | null }>(ISSUE, { owner, name, number: ref.number })
     .then(({ data, errors }) => {
       const issue = data.repository?.issue
-      if (issue) return toThread(ref, issue)
+      if (issue) return toThread(ref, issue, at)
       if (errors.some((error) => error.type === 'NOT_FOUND')) throw new IssueMissing(errors[0].message)
       throw new Error(errors[0]?.message ?? 'No issue in the answer')
     })
-  recent.set(key, { version, at: Date.now(), answer })
+  recent.set(key, { version, at, answer })
   answer.catch(() => recent.get(key)?.answer === answer && recent.delete(key))
   return answer
 }
 
-/** Reads the next 100 comments, for one point, and gives the thread with them added. */
+/** Reads the next page of comments, for one point, and gives the thread with them added. */
 export async function readMoreComments(gh: GitHub, thread: Thread): Promise<Thread> {
   if (!thread.after) return thread
   const { data } = await gh.request<{ node: { comments?: RawComments } | null }>(MORE, {

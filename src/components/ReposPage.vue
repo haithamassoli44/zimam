@@ -12,20 +12,13 @@ import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import { useReorder } from '@/components/reorder'
-import RepoRow, { REPO_COLUMN_WIDTHS, REPO_COLUMNS } from '@/components/RepoRow.vue'
+import RepoRow, { REPO_COLUMN_WIDTHS, REPO_COLUMNS, REPO_GRID } from '@/components/RepoRow.vue'
+import SyncFailed from '@/components/SyncFailed.vue'
 import { REPO_STATUSES, type RepoStatus } from '@/lib/filters'
-import {
-  COUNT_KEYS,
-  defaultRepoFilters,
-  REPO_SORTS,
-  toggleStatus,
-  type RepoRow as Row,
-  type RepoSort,
-} from '@/lib/repos'
+import { defaultRepoFilters, isFiltered, REPO_SORTS, toggleStatus, type RepoRow as Row } from '@/lib/repos'
 import { formatNumber } from '@/locale'
-import { displayRepo, loaded, repos, status, syncNow } from '@/stores/data'
+import { displayRepo, gathered, repos } from '@/stores/data'
 import { arrangePinned, repoFilters, repoResult } from '@/stores/repos'
-import { openSetup } from '@/stores/ui'
 
 const { t } = useI18n()
 const search = useTemplateRef<{ inputRef: HTMLInputElement | null }>('search')
@@ -77,17 +70,9 @@ const sortItems = computed<DropdownMenuItem[]>(() =>
   })),
 )
 
-// The header names each column, and sorts by it where that means something.
-const COLUMNS: { key: string; sort?: RepoSort; start?: boolean }[] = [
-  { key: 'name', sort: 'name', start: true },
-  { key: 'opened', start: true },
-  ...COUNT_KEYS.map((key) => ({ key, sort: key })),
-  { key: 'activity', sort: 'activity' },
-]
-
 const GROUP = 'border-b border-default bg-muted px-4 py-1.5 text-xs leading-4 font-medium text-muted sm:px-6'
 
-const filtered = computed(() => repoFilters.q.trim() !== '' || repoFilters.status.join() !== 'active')
+const filtered = computed(() => isFiltered(repoFilters))
 
 function clear() {
   Object.assign(repoFilters, { q: '', status: defaultRepoFilters().status })
@@ -98,12 +83,7 @@ watch(
   () => scroller.value?.scrollTo({ top: 0 }),
 )
 
-const empty = computed(() => loaded.value && repos.value.size === 0)
-const gathering = computed(
-  () =>
-    !loaded.value || (empty.value && (status.value.phase !== 'idle' || !status.value.syncedAt) && !status.value.error),
-)
-const failed = computed(() => empty.value && status.value.error)
+const { gathering, failed } = gathered(() => repos.value.size)
 </script>
 
 <template>
@@ -173,25 +153,7 @@ const failed = computed(() => empty.value && status.value.error)
         </div>
       </div>
 
-      <div v-else-if="failed" class="flex flex-col items-center justify-center gap-2 px-6 py-24 text-center">
-        <p class="text-xl font-medium text-highlighted">{{ t(`sync.error.${failed}`) }}</p>
-        <UButton
-          v-if="failed === 'auth'"
-          class="mt-2"
-          color="neutral"
-          variant="outline"
-          :label="t('sync.replaceToken')"
-          @click="openSetup('edit')"
-        />
-        <UButton
-          v-else
-          class="mt-2"
-          color="neutral"
-          variant="outline"
-          :label="t('sync.retry')"
-          @click="syncNow(true)"
-        />
-      </div>
+      <SyncFailed v-else-if="failed" :error="failed" />
 
       <div v-else-if="!shown" class="flex flex-col items-center justify-center gap-2 px-6 py-24 text-center">
         <p class="text-xl font-medium text-highlighted">{{ filtered ? t('filters.nothing') : t('results.empty') }}</p>
@@ -208,9 +170,9 @@ const failed = computed(() => empty.value && status.value.error)
       <template v-else>
         <div
           class="sticky top-0 z-10 hidden min-h-9 items-center border-b border-default bg-default px-6 py-1.5 text-xs leading-4 text-muted"
-          :class="REPO_COLUMNS"
+          :class="REPO_GRID"
         >
-          <template v-for="column in COLUMNS" :key="column.key">
+          <template v-for="column in REPO_COLUMNS" :key="column.key">
             <button
               v-if="column.sort"
               type="button"
@@ -225,7 +187,7 @@ const failed = computed(() => empty.value && status.value.error)
               {{ t(`repos.columns.${column.key}`) }}
               <UIcon v-if="repoFilters.sort === column.sort" name="i-octicon-arrow-down-16" class="size-3 shrink-0" />
             </button>
-            <span v-else class="text-balance">{{ t(`repos.columns.${column.key}`) }}</span>
+            <span v-else-if="column.named !== false" class="text-balance">{{ t(`repos.columns.${column.key}`) }}</span>
           </template>
         </div>
         <template v-if="pinned.length">

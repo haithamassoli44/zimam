@@ -1,12 +1,11 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineAsyncComponent, defineComponent, h, type Component } from 'vue'
 
 import IssueView from '@/components/IssueView.vue'
 import type { Post, Thread } from '@/lib/issue'
 import { i18n } from '@/locale'
 import { issueThread, items, loaded, moreComments, repos } from '@/stores/data'
-import { openIssue, showIssue } from '@/stores/view'
+import { openIssue } from '@/stores/view'
 import type { Item, Repo } from '@/types'
 
 // Nuxt UI's components need its Vite plugin. Plain stand-ins do here: a button is a button with its label.
@@ -61,13 +60,13 @@ const thread = (edition: string, shown: number): Thread => ({
   title: `The issue, ${edition}`,
   url: LINK,
   state: 'open',
-  closedAs: null,
   labels: [],
   assignees: [],
   post: post('body', `${edition} description`),
   comments: Array.from({ length: shown }, (_, index) => post(`c${index}`, `${edition} comment ${index}`)),
   total: TOTAL,
   after: shown < TOTAL ? `after ${shown}` : null,
+  readAt: Date.now(),
 })
 const edition = (answer: Thread) => answer.title.replace('The issue, ', '')
 const nextPage = (answer: Thread) => thread(edition(answer), Math.min(TOTAL, answer.comments.length + PAGE))
@@ -112,9 +111,9 @@ const changeOnGitHub = (updatedAt: string, other = 'first') =>
   ]))
 
 let wrapper: VueWrapper | null = null
-function open() {
+function open(opener: Element | null = null) {
   wrapper = mount(IssueView, {
-    props: { issue: WEB, docked: true },
+    props: { issue: WEB, docked: true, opener },
     global: { plugins: [i18n] },
     attachTo: document.body,
   })
@@ -137,6 +136,7 @@ beforeEach(() => {
   Element.prototype.scrollTo = () => {}
 })
 afterEach(() => {
+  vi.useRealTimers()
   openIssue.value = null
   wrapper?.unmount()
   wrapper = null
@@ -211,9 +211,11 @@ describe('Show more while the issue is read again', () => {
   it("doesn't keep the next issue waiting for it", async () => {
     await openRead()
     await showMore()?.trigger('click')
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
     await wrapper?.setProps({ issue: { repo: 'acme/web', number: 13 } })
     // ↑ and ↓ wait a moment before reading.
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    await vi.runOnlyPendingTimersAsync()
+    vi.useRealTimers()
     reads[1]?.answer(thread('next', PAGE))
     await flushPromises()
     expect(title()).toBe('The issue, next')
@@ -235,16 +237,6 @@ describe('Show more while the issue is read again', () => {
   })
 })
 
-// The panel's code loads only when the first issue is opened, so the panel comes a moment after the click. Returns
-// what brings the code.
-function openLate() {
-  let arrive: (() => void) | undefined
-  const late = defineAsyncComponent(() => new Promise<Component>((resolve) => (arrive = () => resolve(IssueView))))
-  const shell = defineComponent(() => () => h(late, { issue: WEB, docked: true }))
-  wrapper = mount(shell, { global: { plugins: [i18n] }, attachTo: document.body })
-  return () => arrive?.()
-}
-
 describe('the focus, once the issue loads', () => {
   let row: HTMLAnchorElement
   let search: HTMLInputElement
@@ -256,21 +248,17 @@ describe('the focus, once the issue loads', () => {
 
   it('goes to the title when it stayed where the issue was opened', async () => {
     row.focus()
-    showIssue(WEB)
-    const arrive = openLate()
-    arrive()
+    open(row)
     await flushPromises()
     reads[0]?.answer(thread('first', 1))
     await flushPromises()
-    expect(document.activeElement?.id).toBe('issue-title')
+    expect(document.activeElement).toBe(wrapper?.find('h2').element)
   })
 
-  it('stays where the reader moved it while the panel was still loading', async () => {
+  it('stays where the reader moved it before the panel was there', async () => {
     row.focus()
-    showIssue(WEB)
-    const arrive = openLate()
     search.focus()
-    arrive()
+    open(row)
     await flushPromises()
     reads[0]?.answer(thread('first', 1))
     await flushPromises()
@@ -279,12 +267,73 @@ describe('the focus, once the issue loads', () => {
 
   it('stays where the reader moved it while the issue was loading', async () => {
     row.focus()
-    showIssue(WEB)
-    open()
+    open(row)
     await flushPromises()
     search.focus()
     reads[0]?.answer(thread('first', 1))
     await flushPromises()
     expect(document.activeElement).toBe(search)
+  })
+})
+
+// An answer whose first comment is hidden, read from GitHub at `readAt`.
+const withHidden = (readAt: number): Thread => {
+  const answer = thread('first', PAGE)
+  return {
+    ...answer,
+    readAt,
+    comments: answer.comments.map((each, index) => (index === 0 ? { ...each, hidden: 'outdated' } : each)),
+  }
+}
+const showHidden = () => wrapper?.findAll('button').find((button) => button.text() === 'Show')
+
+describe('a hidden comment, shown', () => {
+  it('comes from the answer it was in while its links still work', async () => {
+    open()
+    await flushPromises()
+    reads[0]?.answer(withHidden(Date.now()))
+    await flushPromises()
+    expect(wrapper?.text()).not.toContain('first comment 0')
+    await showHidden()?.trigger('click')
+    await flushPromises()
+    expect(wrapper?.text()).toContain('first comment 0')
+    expect(reads).toHaveLength(1)
+  })
+
+  it('has the issue read again for fresh links when they are about to stop working', async () => {
+    open()
+    await flushPromises()
+    reads[0]?.answer(withHidden(0))
+    await flushPromises()
+    await showHidden()?.trigger('click')
+    await flushPromises()
+    expect(wrapper?.text()).toContain('first comment 0')
+    expect(reads).toHaveLength(2)
+  })
+})
+
+describe('closed on the way to the next issue', () => {
+  it("doesn't read the issue it was going to", async () => {
+    await openRead()
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    await wrapper?.setProps({ issue: { repo: 'acme/web', number: 13 } })
+    wrapper?.unmount()
+    wrapper = null
+    // ↑ and ↓ wait a moment before reading.
+    await vi.runOnlyPendingTimersAsync()
+    expect(reads).toHaveLength(1)
+  })
+})
+
+describe('the next issue', () => {
+  it('is the next one the list shows, past its pull requests', async () => {
+    items.value = new Map([
+      ['issue-12', item('2026-11-23T03:00:00Z')],
+      ['pr-14', { ...item('2026-11-23T02:00:00Z', 14), id: 'pr-14', kind: 'pr' }],
+      ['issue-13', item('2026-11-23T01:00:00Z', 13)],
+    ])
+    await openRead()
+    await wrapper?.find('button[aria-label="Next issue"]').trigger('click')
+    expect(openIssue.value).toEqual({ repo: 'acme/web', number: 13 })
   })
 })

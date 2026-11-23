@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { clean, direction, fromGitHub } from '@/lib/clean'
+import { clean, direction } from '@/lib/clean'
 
 const VIDEO = { href: 'https://github.com/acme/web/issues/1#issuecomment-1', label: 'Watch the video on GitHub' }
 const IMAGE = 'https://private-user-images.githubusercontent.com/1/2.png?jwt=abc'
@@ -165,22 +165,23 @@ describe('clean', () => {
       const href = link.getAttribute('href')
       if (href !== null) expect(href).toMatch(/^(https:\/\/|mailto:)/)
     }
-    for (const image of box.querySelectorAll('img')) expect(fromGitHub(image.getAttribute('src'))).toBe(true)
+    for (const image of box.querySelectorAll('img')) {
+      expect(new URL(image.getAttribute('src')!).origin).toMatch(/^https:\/\/[a-z-]+\.githubusercontent\.com$/)
+    }
   })
-})
 
-describe('fromGitHub', () => {
-  it("takes only HTTPS addresses on GitHub's image hosts", () => {
-    expect(fromGitHub(IMAGE)).toBe(true)
-    expect(fromGitHub('https://camo.githubusercontent.com/abc/def')).toBe(true)
-    expect(fromGitHub('https://avatars.githubusercontent.com/u/1?v=4')).toBe(true)
-    expect(fromGitHub('http://camo.githubusercontent.com/abc')).toBe(false)
-    expect(fromGitHub('https://githubusercontent.com/abc')).toBe(false)
-    expect(fromGitHub('https://camo.githubusercontent.com.evil.example/abc')).toBe(false)
-    expect(fromGitHub('https://evil.example/?u=.githubusercontent.com')).toBe(false)
-    expect(fromGitHub('https://x@evil.example/.githubusercontent.com')).toBe(false)
-    expect(fromGitHub('/x.png')).toBe(false)
-    expect(fromGitHub(null)).toBe(false)
+  it("keeps an image only from an HTTPS address on GitHub's image hosts", () => {
+    const kept = (src: string) => html(`<img src="${src}" alt="x">`).startsWith('<img')
+    expect(kept(IMAGE)).toBe(true)
+    expect(kept('https://camo.githubusercontent.com/abc/def')).toBe(true)
+    expect(kept('https://avatars.githubusercontent.com/u/1?v=4')).toBe(true)
+    expect(kept('http://camo.githubusercontent.com/abc')).toBe(false)
+    expect(kept('https://githubusercontent.com/abc')).toBe(false)
+    expect(kept('https://camo.githubusercontent.com.evil.example/abc')).toBe(false)
+    expect(kept('https://evil.example/?u=.githubusercontent.com')).toBe(false)
+    expect(kept('https://x@evil.example/.githubusercontent.com')).toBe(false)
+    expect(kept('/x.png')).toBe(false)
+    expect(html('<img alt="x">')).toBe('x')
   })
 })
 

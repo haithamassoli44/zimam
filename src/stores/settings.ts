@@ -7,6 +7,7 @@ import {
   DENSITIES,
   INVOLVEMENTS,
   LOCALES,
+  PRESETS,
   ROW_PARTS,
   SOURCE_KINDS,
   THEMES,
@@ -184,7 +185,7 @@ interface WorkspaceFields {
 const nameFor = (name: string, sources: Source[]) => name.trim() || sources[0]?.name || 'Zimam'
 
 export function createWorkspace(fields: WorkspaceFields) {
-  const views = (Object.keys(PRESET_FILTERS) as Preset[]).map((preset) => ({
+  const views = PRESETS.map((preset) => ({
     id: randomId(),
     preset,
     query: presetQuery(preset),

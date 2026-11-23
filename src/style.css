@@ -51,6 +51,7 @@
   --ui-text-dimmed: #737373;
   --ui-text-inverted: #ffffff;
 
+  /* index.html's theme-color and the app manifest in vite.config.ts repeat both backgrounds. */
   --ui-bg: #ffffff;
   --ui-bg-muted: #fafafa;
   --ui-bg-elevated: #f4f4f5;

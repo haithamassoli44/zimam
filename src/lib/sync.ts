@@ -3,17 +3,21 @@ import type { Item, Me, Repo, Source, Workspace } from '@/types'
 import { emptyCache, readCache, setMarker, syncedMarker, writeCache, type Cache } from './cache'
 import { GitHubError, type ErrorKind, type GitHub, type RateLimit } from './github'
 import {
+  hasClosed,
+  KINDS,
+  LIST_KINDS,
+  type ListKind,
   NODES,
+  type Page,
   PR_STATUS,
+  type RawItem,
+  type RawStatus,
   repoItems,
   REVIEW_REQUESTED,
   SEARCH,
   STATUS_FIELDS,
   toItem,
   toStatus,
-  type Page,
-  type RawItem,
-  type RawStatus,
 } from './queries'
 import { brings, qualifier, reposOf, sourcesKey } from './sources'
 
@@ -51,7 +55,7 @@ const RESERVE = 0.02
 const HISTORY_RESERVE = 0.15
 
 /** What a repository can have left to load: its open items, its closed issues, its closed pull requests. */
-export type Left = 'open' | 'issues' | 'pullRequests'
+export type Left = 'open' | ListKind
 
 export interface SyncStatus {
   phase: 'idle' | 'repos' | 'open' | 'changes' | 'history'
@@ -142,7 +146,7 @@ export class Syncer {
     return new Syncer(ws, gh, store, status, cache)
   }
 
-  constructor(
+  private constructor(
     private readonly ws: Workspace,
     private readonly gh: GitHub,
     private readonly store: SyncStore,
@@ -193,7 +197,8 @@ export class Syncer {
   private async run(manual: boolean) {
     const started = Date.now()
     this.runStartedAt = started
-    if (this.stopped || (this.status.pausedUntil ?? 0) > started) return
+    // A refused token stays refused until it's replaced, which opens the workspace anew.
+    if (this.stopped || this.status.error === 'auth' || (this.status.pausedUntil ?? 0) > started) return
     this.status.pausedUntil = null
     const peerJustSynced = (await this.adoptStored()) && started - syncedMarker(this.ws.id) < 0.75 * TICK
     if (peerJustSynced && !manual) return
@@ -326,10 +331,10 @@ export class Syncer {
       if (this.stopped || !this.hasBudget(RESERVE)) return
       const fetched: Item[] = []
       const hidden = new Set<Item['kind']>()
-      for (const kind of ['issues', 'pullRequests'] as const) {
-        if (!(kind === 'issues' ? repo.openIssues : repo.openPrs)) continue
+      for (const kind of LIST_KINDS) {
+        if (!repo[KINDS[kind].open]) continue
         for await (const page of this.pages(repo, kind, ['OPEN'])) {
-          if (!page) hidden.add(kind === 'issues' ? 'issue' : 'pr')
+          if (!page) hidden.add(KINDS[kind].item)
           else fetched.push(...page.items)
         }
       }
@@ -521,11 +526,10 @@ export class Syncer {
       for (const kind of this.historyKinds(repo)) {
         if (!more()) return
         const entry = (this.cache.history[repo.id] ??= {})
-        const key = kind === 'issues' ? 'issues' : 'prs'
+        const key = KINDS[kind].history
         const saved = entry[key]
         const resume = typeof saved === 'string' ? saved : null
-        const states = kind === 'issues' ? ['CLOSED'] : ['CLOSED', 'MERGED']
-        for await (const page of this.pages(repo, kind, states, resume)) {
+        for await (const page of this.pages(repo, kind, KINDS[kind].closed, resume)) {
           // A repository GitHub won't show has no history to load.
           if (!page) break
           this.put(page.items)
@@ -544,8 +548,8 @@ export class Syncer {
   /** Shows what is left to load, and returns the repositories with some of their closed history left. */
   private showProgress(): Repo[] {
     const pending = this.historyLeft()
-    const total = [...this.store.repos.values()].filter(
-      (repo) => repo.issues + repo.prs > repo.openIssues + repo.openPrs,
+    const total = [...this.store.repos.values()].filter((repo) =>
+      LIST_KINDS.some((kind) => hasClosed(repo, kind)),
     ).length
     this.status.history = { done: total - pending.length, total }
     this.status.historyDone = this.cache.syncedAt !== null && pending.length === 0
@@ -567,20 +571,17 @@ export class Syncer {
       )
   }
 
-  private historyKinds(repo: Repo): ('issues' | 'pullRequests')[] {
+  private historyKinds(repo: Repo): ListKind[] {
     const entry = this.cache.history[repo.id] ?? {}
-    const kinds: ('issues' | 'pullRequests')[] = []
-    if (repo.issues > repo.openIssues && entry.issues !== true) kinds.push('issues')
-    if (repo.prs > repo.openPrs && entry.prs !== true) kinds.push('pullRequests')
-    return kinds
+    return LIST_KINDS.filter((kind) => hasClosed(repo, kind) && entry[KINDS[kind].history] !== true)
   }
 
   // GitHub times out on heavy pages, so any page that times out is asked for again at half the size. A repository
   // GitHub doesn't show, because it is gone or the token may no longer read it, gives one null.
   private async *pages(
     repo: Repo,
-    kind: 'issues' | 'pullRequests',
-    states: string[],
+    kind: ListKind,
+    states: readonly string[],
     after: string | null = null,
   ): AsyncGenerator<{ items: Item[]; cursor: string | null } | null> {
     const open = states.includes('OPEN')

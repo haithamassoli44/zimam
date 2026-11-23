@@ -16,7 +16,7 @@ import RepoPicker from '@/components/RepoPicker.vue'
 import SetupPreview from '@/components/SetupPreview.vue'
 import { DEV_TOKEN_PATH } from '@/dev'
 import { createGitHub, GitHubError, type GitHub } from '@/lib/github'
-import { findSource, findViewer, sameSource, type SourceChoice, type Viewer } from '@/lib/sources'
+import { findSource, findViewer, sameSource, sourceKey, type SourceChoice, type Viewer } from '@/lib/sources'
 import { activeWorkspace, createWorkspace, updateWorkspace } from '@/stores/settings'
 import { ui } from '@/stores/ui'
 import type { Source } from '@/types'
@@ -135,7 +135,7 @@ function bringOnly(source: Source, only: string[] | undefined) {
 const pickedBefore = new Map<string, string[]>()
 
 function bring(source: Source, which: string) {
-  const key = `${source.kind}:${source.name.toLowerCase()}`
+  const key = sourceKey(source)
   if (which === 'all' && source.only) pickedBefore.set(key, source.only)
   bringOnly(source, which === 'some' ? (source.only ?? pickedBefore.get(key) ?? []) : undefined)
 }

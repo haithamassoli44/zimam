@@ -600,7 +600,8 @@ describe('Syncer after review', () => {
       me: { login: null, requested: new Set() },
       changed: () => {},
     }
-    const syncer = new Syncer(ws, gh, store, idleStatus(), cache)
+    saved.cache = cache
+    const syncer = await Syncer.open(ws, gh, store, idleStatus())
     await syncer.start()
     expect(state.calls).toContain('requested')
     expect(store.me).toEqual({ login: 'ali', requested: new Set() })

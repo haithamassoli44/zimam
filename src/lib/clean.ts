@@ -45,8 +45,12 @@ const DIRECTIONS = new Set(['auto', 'ltr', 'rtl'])
 // Its own instance, so its settings and hooks are this file's alone.
 const purify = DOMPurify(window)
 
+/** The elements cleaned text keeps an address on, and which attribute holds it. */
+export const ADDRESSED = [...ONLY_ON.href, ...ONLY_ON.src].join(', ')
+export const addressOf = (element: Element) => (ONLY_ON.src.includes(element.tagName) ? 'src' : 'href')
+
 /** Images come only from GitHub, which also proxies the outside images people link to. The CSP allows the same. */
-export function fromGitHub(src: string | null): boolean {
+function fromGitHub(src: string | null): boolean {
   try {
     const url = new URL(src ?? '')
     return url.protocol === 'https:' && url.hostname.endsWith('.githubusercontent.com') && !url.username
@@ -55,7 +59,7 @@ export function fromGitHub(src: string | null): boolean {
   }
 }
 
-export interface CleanOptions {
+interface CleanOptions {
   /** Where to watch a video, and the words that say so. */
   video: { href: string; label: string }
 }
@@ -69,7 +73,6 @@ export function clean(html: string, { video }: CleanOptions): DocumentFragment {
   const fragment = purify.sanitize(html, {
     ALLOWED_TAGS: TAGS,
     ALLOWED_ATTR: ATTRS,
-    // Links go to the web or to email.
     ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i,
     ADD_URI_SAFE_ATTR: SAFE,
     ALLOW_DATA_ATTR: false,
@@ -90,7 +93,6 @@ export function clean(html: string, { video }: CleanOptions): DocumentFragment {
   }
 
   for (const element of fragment.querySelectorAll('*')) {
-    // A copy of the names: removing one would shift the live list being read.
     for (const name of element.getAttributeNames()) {
       if (ONLY_ON[name] && !ONLY_ON[name].includes(element.tagName)) element.removeAttribute(name)
     }
@@ -105,7 +107,6 @@ export function clean(html: string, { video }: CleanOptions): DocumentFragment {
     link.setAttribute('rel', 'noopener noreferrer')
   }
 
-  // An image from anywhere else is left as its description.
   for (const image of fragment.querySelectorAll('img')) {
     if (fromGitHub(image.getAttribute('src'))) continue
     const alt = image.getAttribute('alt')

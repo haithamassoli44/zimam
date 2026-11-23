@@ -1,29 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { GitHub, QueryError } from '@/lib/github'
-import { formatRef, IssueMissing, parseRef, readIssue, readMoreComments, sameRef } from '@/lib/issue'
-
-describe('issue references', () => {
-  it('reads and writes them the way GitHub writes them', () => {
-    expect(parseRef('nuxt/nuxt#33041')).toEqual({ repo: 'nuxt/nuxt', number: 33041 })
-    expect(parseRef('a-b/c.d_e#1')).toEqual({ repo: 'a-b/c.d_e', number: 1 })
-    expect(formatRef({ repo: 'nuxt/nuxt', number: 33041 })).toBe('nuxt/nuxt#33041')
-  })
-
-  it('refuses anything else', () => {
-    for (const text of ['', 'nuxt#1', 'nuxt/nuxt', 'nuxt/nuxt#', 'nuxt/nuxt#0', 'nuxt/nuxt#01', 'a/b/c#1', 'a b/c#1']) {
-      expect(parseRef(text)).toBeNull()
-    }
-    expect(parseRef('nuxt/nuxt#1234567890')).toBeNull()
-    expect(parseRef(null)).toBeNull()
-  })
-
-  it("ignores the case of a repository's name, as GitHub does", () => {
-    expect(sameRef({ repo: 'Nuxt/Nuxt', number: 1 }, { repo: 'nuxt/nuxt', number: 1 })).toBe(true)
-    expect(sameRef({ repo: 'nuxt/nuxt', number: 1 }, { repo: 'nuxt/nuxt', number: 2 })).toBe(false)
-    expect(sameRef(null, { repo: 'nuxt/nuxt', number: 1 })).toBe(false)
-  })
-})
+import { expiring, IssueMissing, nextPage, readIssue, readMoreComments } from '@/lib/issue'
 
 const person = (login: string, kind = 'User') => ({
   kind,
@@ -79,7 +57,7 @@ function github(...answers: unknown[]) {
 const WEB = { repo: 'acme/web', number: 12 }
 
 const closed = async (stateReason: string | null) =>
-  (await readIssue(github(found(issue({ state: 'CLOSED', stateReason }))).gh, WEB)).closedAs
+  (await readIssue(github(found(issue({ state: 'CLOSED', stateReason }))).gh, WEB)).state
 
 describe('readIssue', () => {
   it('reads the issue, its description and its first comments, by repository and number', async () => {
@@ -91,7 +69,6 @@ describe('readIssue', () => {
       ref: WEB,
       title: 'Search ignores hamza',
       state: 'open',
-      closedAs: null,
       labels: [{ name: 'bug', color: 'd73a4a' }],
       assignees: [{ login: 'omar' }],
       total: 1,
@@ -169,6 +146,22 @@ describe('readIssue', () => {
     }
   })
 
+  it('counts the life of its signed links from when GitHub was asked, also for an answer reused', async () => {
+    vi.useFakeTimers()
+    try {
+      const { gh } = github(found(issue()))
+      const thread = await readIssue(gh, { repo: 'acme/links', number: 1 })
+      vi.advanceTimersByTime(59_000)
+      expect(await readIssue(gh, { repo: 'acme/links', number: 1 })).toBe(thread)
+      vi.advanceTimersByTime(4 * 60_000 - 59_000)
+      expect(expiring(thread)).toBe(false)
+      vi.advanceTimersByTime(1)
+      expect(expiring(thread)).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("doesn't keep a failed answer", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce(found(issue()))
     const gh = { request } as unknown as GitHub
@@ -195,6 +188,17 @@ describe('readMoreComments', () => {
     expect(thread.after).toBeNull()
     expect(await readMoreComments(gh, thread)).toBe(thread)
     expect(request).toHaveBeenCalledTimes(3)
+  })
+
+  it('says how many comments the next page brings', async () => {
+    const { gh } = github(
+      found(issue({ comments: page([comment('1')], 250, 'c1') })),
+      found(issue({ comments: page([comment('1')], 30, 'c1') })),
+      found(issue({ comments: page([comment('1')], 1) })),
+    )
+    expect(nextPage(await readIssue(gh, { repo: 'acme/many', number: 1 }))).toBe(100)
+    expect(nextPage(await readIssue(gh, { repo: 'acme/some', number: 1 }))).toBe(29)
+    expect(nextPage(await readIssue(gh, { repo: 'acme/one', number: 1 }))).toBe(0)
   })
 
   it('says when the issue is gone', async () => {

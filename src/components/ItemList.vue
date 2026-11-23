@@ -6,10 +6,10 @@ import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ItemRow, { ROW_HEIGHT } from '@/components/ItemRow.vue'
-import { sameRef } from '@/lib/issue'
-import { displayRepo, highlighted, items, loaded, repos, status, syncNow } from '@/stores/data'
+import SyncFailed from '@/components/SyncFailed.vue'
+import { sameRef } from '@/lib/refs'
+import { displayRepo, gathered, highlighted, issueRef, items, repos } from '@/stores/data'
 import { settings } from '@/stores/settings'
-import { openSetup } from '@/stores/ui'
 import { isDefault, openIssue, query, resetFilters, result } from '@/stores/view'
 import type { Item } from '@/types'
 
@@ -17,9 +17,7 @@ const { t } = useI18n()
 const scroller = useTemplateRef<HTMLElement>('scroller')
 const rows = computed(() => result.value.items)
 
-function isOpen(item: Item, fullName: string | undefined) {
-  return item.kind === 'issue' && !!fullName && sameRef(openIssue.value, { repo: fullName, number: item.number })
-}
+const isOpen = (item: Item) => sameRef(openIssue.value, issueRef(item))
 
 function rowProps(item: Item) {
   const repo = repos.value.get(item.repoId)
@@ -28,7 +26,7 @@ function rowProps(item: Item) {
     repoName: displayRepo(repo?.fullName ?? ''),
     archived: repo?.isArchived,
     fresh: highlighted.value.has(item.id),
-    opened: isOpen(item, repo?.fullName),
+    opened: isOpen(item),
   }
 }
 
@@ -53,7 +51,7 @@ watch(query, () => scroller.value?.scrollTo({ top: 0 }))
 // The issue that ↑ and ↓ in its panel move to stays in sight.
 watch(openIssue, (issue) => {
   if (!issue) return
-  const index = rows.value.findIndex((item) => isOpen(item, repos.value.get(item.repoId)?.fullName))
+  const index = rows.value.findIndex(isOpen)
   if (index >= 0) virtualizer.value.scrollToIndex(index, { align: 'auto' })
 })
 watch(
@@ -61,12 +59,7 @@ watch(
   () => virtualizer.value.measure(),
 )
 
-const empty = computed(() => loaded.value && items.value.size === 0)
-const gathering = computed(
-  () =>
-    !loaded.value || (empty.value && (status.value.phase !== 'idle' || !status.value.syncedAt) && !status.value.error),
-)
-const failed = computed(() => empty.value && status.value.error)
+const { gathering, failed } = gathered(() => items.value.size)
 </script>
 
 <template>
@@ -87,18 +80,7 @@ const failed = computed(() => empty.value && status.value.error)
       </div>
     </div>
 
-    <div v-else-if="failed" class="flex flex-col items-center justify-center gap-2 px-6 py-24 text-center">
-      <p class="text-xl font-medium text-highlighted">{{ t(`sync.error.${failed}`) }}</p>
-      <UButton
-        v-if="failed === 'auth'"
-        class="mt-2"
-        color="neutral"
-        variant="outline"
-        :label="t('sync.replaceToken')"
-        @click="openSetup('edit')"
-      />
-      <UButton v-else class="mt-2" color="neutral" variant="outline" :label="t('sync.retry')" @click="syncNow(true)" />
-    </div>
+    <SyncFailed v-else-if="failed" :error="failed" />
 
     <div v-else-if="!rows.length" class="flex flex-col items-center justify-center gap-2 px-6 py-24 text-center">
       <p class="text-xl font-medium text-highlighted">{{ isDefault ? t('results.allClear') : t('results.empty') }}</p>

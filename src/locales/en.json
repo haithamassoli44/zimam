@@ -188,13 +188,17 @@
     "comments": "No comments | 1 comment | {n} comments",
     "archived": "Archived",
     "assignees": "Assigned to {names}",
-    "issueOpen": "Open issue",
-    "issueClosed": "Closed issue",
-    "issueNotPlanned": "Closed as not planned",
-    "prOpen": "Open pull request",
-    "prDraft": "Draft pull request",
-    "prMerged": "Merged pull request",
-    "prClosed": "Closed without merging",
+    "issue": {
+      "open": "Open issue",
+      "completed": "Closed issue",
+      "notPlanned": "Closed as not planned"
+    },
+    "pr": {
+      "open": "Open pull request",
+      "draft": "Draft pull request",
+      "merged": "Merged pull request",
+      "closed": "Closed without merging"
+    },
     "conflicting": "{state}, conflicts with its base branch",
     "moreLabels": "Also labeled {names}",
     "diff": "Lines changed: {added} added, {removed} removed"

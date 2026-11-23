@@ -1,21 +1,12 @@
 import { computed, reactive, ref, watch } from 'vue'
 
-import {
-  applyFilters,
-  countMatches,
-  defaultFilters,
-  fromQuery,
-  toQuery,
-  type Context,
-  type Filters,
-} from '@/lib/filters'
-import { formatRef, parseRef, sameRef, type IssueRef } from '@/lib/issue'
+import { applyFilters, countMatches, defaultFilters, fromQuery, toQuery, type Filters } from '@/lib/filters'
+import { formatRef, parseRef, sameRef, type IssueRef } from '@/lib/refs'
 import { randomId } from '@/lib/text'
 import { i18n } from '@/locale'
 import type { View } from '@/types'
 
-import { now } from './clock'
-import { items, me, repos } from './data'
+import { context, items } from './data'
 import { activeWorkspace, WORKSPACE_PARAM } from './settings'
 
 export const filters = reactive<Filters>(fromQuery(location.search))
@@ -71,8 +62,6 @@ const OPENED = 'zimamIssue'
 const PAGE_LOAD = randomId()
 // Set while going back over that entry, until the browser gets there.
 let closing = false
-// What had the focus when an issue was opened. The panel may come later, once its code has loaded.
-let opener: { issue: IssueRef; element: Element | null } | null = null
 
 /**
  * Opens an issue beside the list, as a new entry in the browser's history, so Back closes it. One opened in its place
@@ -83,18 +72,7 @@ export function showIssue(issue: IssueRef) {
   const next = link('items', activeWorkspace.value?.id, query.value, issue)
   if (openIssue.value) history.replaceState(history.state, '', next)
   else history.pushState({ [OPENED]: { load: PAGE_LOAD, over: query.value } }, '', next)
-  opener = { issue, element: document.activeElement }
   openIssue.value = issue
-}
-
-/**
- * What had the focus when this issue was opened, told once. For an issue opened another way, as by Forward, it's what
- * has the focus now.
- */
-export function takeOpener(issue: IssueRef): Element | null {
-  const element = opener && sameRef(opener.issue, issue) ? opener.element : document.activeElement
-  opener = null
-  return element
 }
 
 /**
@@ -103,7 +81,6 @@ export function takeOpener(issue: IssueRef): Element | null {
  */
 export function closeIssue() {
   if (!openIssue.value || closing) return
-  opener = null
   const opened = history.state?.[OPENED]
   if (opened?.load !== PAGE_LOAD || opened.over !== query.value) {
     openIssue.value = null
@@ -122,7 +99,6 @@ export function closeIssue() {
 
 addEventListener('popstate', () => {
   closing = false
-  opener = null
   page.value = pageAt(location.pathname)
   if (page.value === 'items') Object.assign(filters, fromQuery(location.search))
   openIssue.value = page.value === 'items' ? issueAt(location.search) : null
@@ -152,9 +128,6 @@ watch(
 export function resetFilters() {
   Object.assign(filters, defaultFilters())
 }
-
-/** What filtering needs besides the items: the repositories, the time and who is looking. */
-export const context = computed<Context>(() => ({ repos: repos.value, now: now.value, me: me.value }))
 
 export const result = computed(() => applyFilters(items.value.values(), filters, context.value))
 

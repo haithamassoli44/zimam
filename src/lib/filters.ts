@@ -26,6 +26,9 @@ export type RepoStatus = (typeof REPO_STATUSES)[number]
 type Range = (typeof RANGES)[number]
 export type Sort = (typeof SORTS)[number]
 
+export const statusOf = (repo: Pick<Repo, 'isArchived'> | undefined): RepoStatus =>
+  repo?.isArchived ? 'archived' : 'active'
+
 export const NONE = '-'
 
 export interface Filters {
@@ -142,8 +145,18 @@ export function pickChoice<T extends string>(picked: readonly T[], value: T, cho
   return choices.length === 2 ? [value] : [...picked, value]
 }
 
+// Time ranges nest, so one is picked at a time.
+const SINGLE: Facet[] = ['updated']
+export const singlePick = (facet: Facet) => SINGLE.includes(facet)
+
+/** Picks or unpicks a value, by the facet's rule. */
 export function toggleValue(filters: Filters, facet: Facet, value: string) {
-  ;(filters[facet] as string[]) = pickChoice(filters[facet] as string[], value, CHOICES[facet] ?? [])
+  const picked = filters[facet] as string[]
+  let next: string[]
+  if (singlePick(facet)) next = picked.includes(value) ? [] : [value]
+  else if (COVERING.includes(facet)) next = pickChoice(picked, value, CHOICES[facet] ?? [])
+  else next = picked.includes(value) ? picked.filter((other) => other !== value) : [...picked, value]
+  ;(filters[facet] as string[]) = next
 }
 
 export interface Context {
@@ -165,7 +178,7 @@ function facetValues(item: Item, ctx: Context): Record<Facet, string[]> {
   return {
     kind: [item.kind],
     state: [item.state],
-    status: [repo?.isArchived ? 'archived' : 'active'],
+    status: [statusOf(repo)],
     owner: [repo?.owner ?? ''],
     repo: [repo?.fullName ?? ''],
     label: item.labels.length ? item.labels.map((label) => label.name) : [NONE],
@@ -197,7 +210,7 @@ export interface Search {
 }
 
 /** Keeps items with any of its values in its facet, or with none of them when `negated`. */
-export interface Qualifier {
+interface Qualifier {
   pairs: [Facet, string][]
   negated: boolean
 }

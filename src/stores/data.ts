@@ -2,16 +2,18 @@ import { computed, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 
 import { deleteCache } from '@/lib/cache'
 import { readCheckRuns, type CheckRuns } from '@/lib/checks'
+import type { Context } from '@/lib/filters'
 import { createGitHub, type GitHub } from '@/lib/github'
-import { readIssue, readMoreComments, type IssueRef, type Thread } from '@/lib/issue'
+import { readIssue, readMoreComments, type Thread } from '@/lib/issue'
+import type { IssueRef } from '@/lib/refs'
 import { idleStatus, syncKey, Syncer, TICK, type SyncStatus, type SyncStore } from '@/lib/sync'
 import { noOne, type Item, type Me, type Repo, type Workspace } from '@/types'
 
+import { now } from './clock'
 import { activeWorkspace, removeWorkspace } from './settings'
 
-// style.css reads this as `--fresh` for the wash on a fresh row.
-const FRESH_MS = 8000
-document.documentElement.style.setProperty('--fresh', `${FRESH_MS}ms`)
+/** How long a row that just changed stays marked. */
+export const FRESH_MS = 8000
 
 // Each opened workspace gets its own maps and status, so a syncer that is still finishing can't touch the next one's.
 export const repos = shallowRef(new Map<string, Repo>())
@@ -25,6 +27,12 @@ export const loaded = ref(false)
 /** Every account the open workspace's repositories belong to, with its avatar. */
 export const owners = computed(() => new Map([...repos.value.values()].map((repo) => [repo.owner, repo.ownerAvatar])))
 const oneOwner = computed(() => owners.value.size <= 1)
+
+/** Where a listed issue lives, or null for a pull request or a repository that isn't loaded. */
+export function issueRef(item: Item): IssueRef | null {
+  const repo = repos.value.get(item.repoId)
+  return item.kind === 'issue' && repo ? { repo: repo.fullName, number: item.number } : null
+}
 
 export function displayRepo(fullName: string): string {
   return oneOwner.value ? (fullName.split('/')[1] ?? fullName) : fullName
@@ -41,12 +49,37 @@ export const people = computed(() => {
   return { avatars, colors }
 })
 
+/** How far the closed history has loaded, in percent. */
+export const historyPercent = computed(() => {
+  const { history } = status.value
+  return history.total ? Math.round((history.done / history.total) * 100) : 0
+})
+
 /** How far loading has got, in percent: the open items while they load, then the closed history until it's all in. */
 export const progress = computed(() => {
   const { phase, done, total, history, historyDone } = status.value
   if (phase === 'open') return total ? Math.round((done / total) * 100) : null
-  return !historyDone && history.total ? Math.round((history.done / history.total) * 100) : null
+  return !historyDone && history.total ? historyPercent.value : null
 })
+
+/** What the filters need besides the items: the repositories, the time and who is looking. */
+export const context = computed<Context>(() => ({ repos: repos.value, now: now.value, me: me.value }))
+
+/**
+ * Whether a page is still gathering what it lists, or why it failed to, while it has none of it. `size` is how much
+ * it has.
+ */
+export function gathered(size: () => number) {
+  const empty = computed(() => loaded.value && size() === 0)
+  return {
+    gathering: computed(
+      () =>
+        !loaded.value ||
+        (empty.value && (status.value.phase !== 'idle' || !status.value.syncedAt) && !status.value.error),
+    ),
+    failed: computed(() => (empty.value ? status.value.error : null)),
+  }
+}
 
 let syncer: Syncer | null = null
 let github: GitHub | null = null
@@ -98,8 +131,7 @@ watch(
 )
 
 export function syncNow(manual = false) {
-  if (!syncer || status.value.error === 'auth') return Promise.resolve()
-  return syncer.sync(manual)
+  return syncer ? syncer.sync(manual) : Promise.resolve()
 }
 
 /** The checks on an open pull request's last commit, read from GitHub when asked for. */
@@ -114,7 +146,6 @@ export function issueThread(issue: IssueRef, version?: string): Promise<Thread> 
   return readIssue(github, issue, version)
 }
 
-/** The issue with its next comments added. */
 export function moreComments(thread: Thread): Promise<Thread> {
   if (!github) return Promise.reject(new Error('No workspace'))
   return readMoreComments(github, thread)

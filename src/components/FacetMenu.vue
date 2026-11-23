@@ -19,13 +19,14 @@ export interface Option {
   color?: string
 }
 
-const props = defineProps<{ title: string; options: Option[]; single?: boolean }>()
-const model = defineModel<string[]>({ required: true })
+// `single` shows the choices as radio buttons: the facet takes one value at a time.
+const props = defineProps<{ title: string; options: Option[]; picked: string[]; single?: boolean }>()
+const emit = defineEmits<{ toggle: [value: string] }>()
 const { t } = useI18n()
 const search = ref('')
 
 const selectedLabels = computed(() =>
-  model.value.map((value) => props.options.find((option) => option.value === value)?.label ?? value),
+  props.picked.map((value) => props.options.find((option) => option.value === value)?.label ?? value),
 )
 
 const marked = computed(() => props.options.some((option) => option.avatar || option.color))
@@ -41,32 +42,26 @@ const shown = computed(() =>
   matching.value
     .toSorted(
       (a, b) =>
-        Number(model.value.includes(b.value)) - Number(model.value.includes(a.value)) ||
+        Number(props.picked.includes(b.value)) - Number(props.picked.includes(a.value)) ||
         b.count - a.count ||
         a.label.localeCompare(b.label),
     )
     .slice(0, LIMIT),
 )
-
-function toggle(value: string) {
-  if (props.single) model.value = model.value.includes(value) ? [] : [value]
-  else
-    model.value = model.value.includes(value) ? model.value.filter((other) => other !== value) : [...model.value, value]
-}
 </script>
 
 <template>
   <UPopover :content="{ align: 'start' }" @update:open="search = ''">
     <UButton
-      v-bind="pressed(model.length > 0)"
+      v-bind="pressed(picked.length > 0)"
       trailing-icon="i-octicon-chevron-down-16"
       :ui="{ label: 'max-w-48 truncate', trailingIcon: 'opacity-70' }"
     >
       <span>{{ title }}</span>
-      <template v-if="model.length">
+      <template v-if="picked.length">
         <span class="opacity-50">·</span>
         <bdi>{{ selectedLabels[0] }}</bdi>
-        <span v-if="model.length > 1" class="font-mono text-xs tabular-nums">+{{ model.length - 1 }}</span>
+        <span v-if="picked.length > 1" class="font-mono text-xs tabular-nums">+{{ picked.length - 1 }}</span>
       </template>
     </UButton>
 
@@ -86,18 +81,18 @@ function toggle(value: string) {
           <li v-for="option in shown" :key="option.value">
             <button
               type="button"
-              :aria-pressed="model.includes(option.value)"
+              :aria-pressed="picked.includes(option.value)"
               class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-start text-sm transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary pointer-coarse:h-11"
-              @click="toggle(option.value)"
+              @click="emit('toggle', option.value)"
             >
               <span
                 class="flex size-4 shrink-0 items-center justify-center border transition-colors"
                 :class="[
                   single ? 'rounded-full' : 'rounded-sm',
-                  model.includes(option.value) ? 'border-primary bg-primary text-inverted' : 'border-accented',
+                  picked.includes(option.value) ? 'border-primary bg-primary text-inverted' : 'border-accented',
                 ]"
               >
-                <UIcon v-if="model.includes(option.value)" name="i-octicon-check-16" class="size-3" />
+                <UIcon v-if="picked.includes(option.value)" name="i-octicon-check-16" class="size-3" />
               </span>
               <span v-if="marked" class="flex size-4 shrink-0 items-center justify-center">
                 <UAvatar v-if="option.avatar" :src="option.avatar" :alt="option.label" size="3xs" />

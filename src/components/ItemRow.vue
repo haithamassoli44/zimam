@@ -9,46 +9,48 @@ import UAvatarGroup from '@nuxt/ui/components/AvatarGroup.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed } from 'vue'
+import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import CheckRuns from '@/components/CheckRuns.vue'
-import { CHECK_LOOKS } from '@/components/looks'
+import LabelTag from '@/components/LabelTag.vue'
+import { CHECK_LOOKS, ISSUE_LOOKS } from '@/components/looks'
+import { stateOf } from '@/lib/queries'
 import { formatList, formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { repos } from '@/stores/data'
+import { FRESH_MS, issueRef } from '@/stores/data'
 import { settings } from '@/stores/settings'
-import { showIssue } from '@/stores/view'
+import { openIssue, showIssue } from '@/stores/view'
 import type { Item } from '@/types'
 
 const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fresh?: boolean; opened?: boolean }>()
 const { t } = useI18n()
+const link = useTemplateRef<HTMLElement>('link')
 
 const compact = computed(() => settings.density === 'compact')
 const open = computed(() => props.item.state === 'open')
 
 // GitHub's glyphs already tell the state by shape.
-const STATES = {
-  issueOpen: { icon: 'i-octicon-issue-opened-16', color: 'text-toned' },
-  issueClosed: { icon: 'i-octicon-issue-closed-16', color: 'text-merged' },
-  issueNotPlanned: { icon: 'i-octicon-skip-16', color: 'text-muted' },
-  prOpen: { icon: 'i-octicon-git-pull-request-16', color: 'text-toned' },
-  prDraft: { icon: 'i-octicon-git-pull-request-draft-16', color: 'text-muted' },
-  prMerged: { icon: 'i-octicon-git-merge-16', color: 'text-merged' },
-  prClosed: { icon: 'i-octicon-git-pull-request-closed-16', color: 'text-error' },
+const PR_LOOKS = {
+  open: { icon: 'i-octicon-git-pull-request-16', color: 'text-toned' },
+  draft: { icon: 'i-octicon-git-pull-request-draft-16', color: 'text-muted' },
+  merged: { icon: 'i-octicon-git-merge-16', color: 'text-merged' },
+  closed: { icon: 'i-octicon-git-pull-request-closed-16', color: 'text-error' },
 }
 
-const state = computed<keyof typeof STATES>(() => {
-  const { kind, state: value, notPlanned, review } = props.item
-  if (kind === 'issue') return value === 'open' ? 'issueOpen' : notPlanned ? 'issueNotPlanned' : 'issueClosed'
-  if (value === 'merged') return 'prMerged'
-  if (value === 'closed') return 'prClosed'
-  return review === 'draft' ? 'prDraft' : 'prOpen'
+const state = computed(() => {
+  const { item } = props
+  if (item.kind === 'issue') {
+    const value = stateOf(item)
+    return { look: ISSUE_LOOKS[value], text: t(`item.issue.${value}`) }
+  }
+  const value = item.state === 'open' ? (item.review === 'draft' ? 'draft' : 'open') : item.state
+  return { look: PR_LOOKS[value], text: t(`item.pr.${value}`) }
 })
 
 const conflicts = computed(() => props.item.merge === 'conflicts')
 const stateText = computed(() =>
-  conflicts.value ? t('item.conflicting', { state: t(`item.${state.value}`) }) : t(`item.${state.value}`),
+  conflicts.value ? t('item.conflicting', { state: state.value.text }) : state.value.text,
 )
 
 // A draft says so by its icon, and a review no branch rule asks for says nothing.
@@ -72,10 +74,10 @@ const moreLabels = computed(() => props.item.labels.slice(LABELS).map((label) =>
 // An issue opens in Zimam's issue panel. A pull request, or an issue clicked with a key held or the middle button, opens
 // on GitHub in a new tab.
 function read(event: MouseEvent): boolean {
-  const repo = repos.value.get(props.item.repoId)
-  if (props.item.kind !== 'issue' || !repo || event.button !== 0) return false
+  const issue = issueRef(props.item)
+  if (!issue || event.button !== 0) return false
   if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
-  showIssue({ repo: repo.fullName, number: props.item.number })
+  showIssue(issue)
   return true
 }
 
@@ -90,6 +92,18 @@ function follow(event: MouseEvent) {
 function clickTitle(event: MouseEvent) {
   if (read(event)) event.preventDefault()
 }
+
+// The panel beside the list takes the focus it had with it when it closes, and the focus comes back to the issue's row.
+// Over the list, the dialog gives it back itself.
+watch(
+  () => props.opened,
+  (opened, was) => {
+    if (was && !opened && !openIssue.value && document.activeElement === document.body) {
+      link.value?.focus({ preventScroll: true })
+    }
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
@@ -102,6 +116,7 @@ function clickTitle(event: MouseEvent) {
         ? 'bg-elevated before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary'
         : 'hover:bg-elevated/60',
     ]"
+    :style="fresh ? { '--fresh': `${FRESH_MS}ms` } : undefined"
     @click="follow"
     @auxclick="follow"
   >
@@ -114,7 +129,7 @@ function clickTitle(event: MouseEvent) {
 
     <UTooltip :text="stateText">
       <span class="relative flex shrink-0" :class="!compact && 'mt-1'">
-        <UIcon :name="STATES[state].icon" class="size-4" :class="STATES[state].color" />
+        <UIcon :name="state.look.icon" class="size-4" :class="state.look.color" />
         <span
           v-if="conflicts"
           class="absolute -end-0.5 -bottom-0.5 size-2 rounded-full bg-error ring-2 ring-(--ui-bg) transition-colors group-hover:ring-(--ui-bg-elevated)"
@@ -130,6 +145,7 @@ function clickTitle(event: MouseEvent) {
         <!-- A compact title takes its direction from its own words. The hidden state text has a direction of its own, so it
              doesn't count, and neither would a title in <bdi>. -->
         <a
+          ref="link"
           :href="item.url"
           target="_blank"
           rel="noopener"
@@ -143,17 +159,7 @@ function clickTitle(event: MouseEvent) {
           ><bdi v-else>{{ item.title }}</bdi></a
         >
         <template v-if="settings.show.labels">
-          <span
-            v-for="label in labels"
-            :key="label.name"
-            class="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
-          >
-            <span
-              class="size-2 rounded-full ring-1 ring-black/10 ring-inset dark:ring-white/15"
-              :style="{ background: `#${label.color}` }"
-            />
-            <bdi>{{ label.name }}</bdi>
-          </span>
+          <LabelTag v-for="label in labels" :key="label.name" :label="label" class="shrink-0" />
           <UTooltip v-if="moreLabels.length" :text="formatList(moreLabels)">
             <span class="inline-flex h-5 shrink-0 items-center font-mono text-xs text-muted tabular-nums">
               <span aria-hidden="true">+{{ formatNumber(moreLabels.length) }}</span>

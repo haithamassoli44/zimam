@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { repoItems, SEARCH, toItem, toStatus, type RawItem } from '@/lib/queries'
+import { repoItems, SEARCH, stateOf, toItem, toStatus, type RawItem } from '@/lib/queries'
 
 const rawPr = (overrides: Partial<RawItem>): RawItem => ({
   kind: 'PullRequest',
@@ -45,6 +45,26 @@ describe('reading a pull request', () => {
   it('shows checks and conflicts only while it is open', () => {
     expect(toItem(rawPr({}))).toMatchObject({ checks: 'failure', merge: 'conflicts' })
     expect(toItem(rawPr({ state: 'MERGED' }))).toMatchObject({ checks: null, merge: null, review: 'optional' })
+  })
+})
+
+const closedIssue = (stateReason: string | null) =>
+  toItem({ ...rawPr({}), kind: 'Issue', state: 'CLOSED', stateReason }).notPlanned
+
+describe('reading an issue', () => {
+  it('counts one closed as not planned or as a duplicate as not done', () => {
+    expect(closedIssue('NOT_PLANNED')).toBe(true)
+    expect(closedIssue('DUPLICATE')).toBe(true)
+    expect(closedIssue('COMPLETED')).toBe(false)
+    expect(closedIssue(null)).toBe(false)
+  })
+})
+
+describe('stateOf', () => {
+  it("tells an issue's state from the list's copy, which counts a duplicate as not planned", () => {
+    expect(stateOf({ state: 'open', notPlanned: false })).toBe('open')
+    expect(stateOf({ state: 'closed', notPlanned: false })).toBe('completed')
+    expect(stateOf({ state: 'closed', notPlanned: true })).toBe('notPlanned')
   })
 })
 

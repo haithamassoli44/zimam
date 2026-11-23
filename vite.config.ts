@@ -80,6 +80,7 @@ export default defineConfig(({ command }) => ({
         start_url: '/',
         scope: '/',
         display: 'standalone',
+        // The light background in style.css.
         background_color: '#ffffff',
         theme_color: '#ffffff',
         icons: [

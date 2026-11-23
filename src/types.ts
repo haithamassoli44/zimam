@@ -23,6 +23,8 @@ export type Preset = (typeof PRESETS)[number]
 
 export type ItemKind = (typeof ITEM_KINDS)[number]
 export type ItemState = (typeof ITEM_STATES)[number]
+/** An issue is open, or closed as done, as not planned or as a duplicate. */
+export type IssueState = 'open' | 'completed' | 'notPlanned' | 'duplicate'
 export type Review = (typeof REVIEWS)[number]
 export type Checks = (typeof CHECKS)[number]
 export type Merge = (typeof MERGES)[number]

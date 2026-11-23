@@ -5,10 +5,12 @@ import {
   matcher,
   pickChoice,
   REPO_STATUSES,
+  statusOf,
   type Context,
   type Filters,
   type RepoStatus,
 } from './filters'
+import { KINDS, LIST_KINDS } from './queries'
 import type { Left } from './sync'
 import { normalize } from './text'
 
@@ -67,7 +69,9 @@ export function defaultRepoFilters(): RepoFilters {
   return { q: '', status: ['active'], sort: 'activity' }
 }
 
-export const statusOf = (repo: Repo): RepoStatus => (repo.isArchived ? 'archived' : 'active')
+/** Whether a search or a status other than the default narrows the repositories. */
+export const isFiltered = ({ q, status }: Pick<RepoFilters, 'q' | 'status'>) =>
+  q.trim() !== '' || status.join() !== defaultRepoFilters().status.join()
 
 /** Counted as the list counts, in `ctx`. `left` is what each repository still has to load, as the sync shows it. */
 export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<string, Left[]> = {}): RepoRow[] {
@@ -117,22 +121,21 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
     row.countsLoading = open && openPrs > 0
     row.weeksLoading =
       (open && openIssues + openPrs > 0) ||
-      (kinds.includes('issues') && oldestClosed.issue > start) ||
-      (kinds.includes('pullRequests') && oldestClosed.pr > start)
+      LIST_KINDS.some((kind) => kinds.includes(kind) && oldestClosed[KINDS[kind].item] > start)
   }
   return [...tallies.values()].map((tally) => tally.row)
 }
 
 const searchText = new WeakMap<Repo, string>()
 
-function matches(repo: Repo, terms: string[]): boolean {
-  if (!terms.length) return true
+// The repositories page shows a repository's name and description, so its search reads both.
+function pageText(repo: Repo): string {
   let text = searchText.get(repo)
   if (text === undefined) {
     text = normalize(`${repo.fullName} ${repo.description ?? ''}`)
     searchText.set(repo, text)
   }
-  return terms.every((term) => text.includes(term))
+  return text
 }
 
 const byName = (a: RepoRow, b: RepoRow) => a.repo.fullName.localeCompare(b.repo.fullName)
@@ -150,15 +153,7 @@ const ORDER = {
  * order of `pinned`, and the rest in the filters' order.
  */
 export function pickRows(rows: RepoRow[], filters: RepoFilters, pinned: string[] = []) {
-  const terms = normalize(filters.q).split(/\s+/).filter(Boolean)
-  const counts: Record<RepoStatus, number> = { active: 0, archived: 0 }
-  const picked: RepoRow[] = []
-  for (const row of rows) {
-    if (!matches(row.repo, terms)) continue
-    const status = statusOf(row.repo)
-    counts[status]++
-    if (!filters.status.length || filters.status.includes(status)) picked.push(row)
-  }
+  const { kept: picked, counts } = findRepos(rows, (row) => row.repo, filters, pageText)
   const place = new Map(pinned.map((id, index) => [id, index]))
   const at = (row: RepoRow) => place.get(row.repo.id) ?? -1
   return {
@@ -166,6 +161,29 @@ export function pickRows(rows: RepoRow[], filters: RepoFilters, pinned: string[]
     rest: picked.filter((row) => at(row) < 0).toSorted(ORDER[filters.sort]),
     counts,
   }
+}
+
+/**
+ * What a search and a status pick keep of `entries`, with how many the search finds in each status. The search reads
+ * `textOf`: what the list shows of a repository, normalized.
+ */
+export function findRepos<T>(
+  entries: Iterable<T>,
+  repoOf: (entry: T) => Repo,
+  { q, status }: Pick<RepoFilters, 'q' | 'status'>,
+  textOf: (repo: Repo) => string,
+) {
+  const terms = normalize(q).split(/\s+/).filter(Boolean)
+  const counts: Record<RepoStatus, number> = { active: 0, archived: 0 }
+  const kept: T[] = []
+  for (const entry of entries) {
+    const repo = repoOf(entry)
+    if (terms.length && !terms.every((term) => textOf(repo).includes(term))) continue
+    const each = statusOf(repo)
+    counts[each]++
+    if (!status.length || status.includes(each)) kept.push(entry)
+  }
+  return { kept, counts }
 }
 
 /** Puts the pinned repositories shown in the order given. Those a search hides keep their places. */

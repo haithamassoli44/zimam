@@ -1,12 +1,14 @@
-import type { Checks, Item, Language, Merge, Person, Repo, Review } from '@/types'
+import type { Checks, IssueState, Item, ItemKind, Language, Merge, Person, Repo, Review } from '@/types'
 
-const PERSON = 'login avatarUrl(size: 64)'
+export const PERSON = 'login avatarUrl(size: 64)'
+export const ASSIGNEES = `assignees(first: 10) { nodes { ${PERSON} } }`
+export const LABELS = 'labels(first: 20) { nodes { name color } }'
 
 const SHARED = `
     id number title url state createdAt updatedAt
     author { ${PERSON} }
-    assignees(first: 10) { nodes { ${PERSON} } }
-    labels(first: 20) { nodes { name color } }
+    ${ASSIGNEES}
+    ${LABELS}
     comments { totalCount }
     repository { id }`
 
@@ -25,7 +27,7 @@ const pageSize = (...fields: string[]) => Math.floor(148 / Math.max(...fields.ma
 
 const REPO = `
   fragment RepoFields on Repository {
-    id name nameWithOwner description isPrivate isArchived pushedAt owner { login avatarUrl(size: 64) }
+    id name nameWithOwner description isPrivate isArchived pushedAt owner { ${PERSON} }
     primaryLanguage { name color }
     openIssues: issues(states: OPEN) { totalCount }
     openPrs: pullRequests(states: OPEN) { totalCount }
@@ -66,21 +68,68 @@ export const ONE_REPO = `
   query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ...RepoFields } }
   ${REPO}`
 
+/**
+ * Issues and pull requests, by what each part calls them: the items, a repository's counts of the open and of all of
+ * them, the states a closed one can be in, the cache's history of them, and how GitHub's list of them is read. An open
+ * pull request's page carries its status too.
+ */
+export const KINDS = {
+  issues: {
+    item: 'issue',
+    open: 'openIssues',
+    all: 'issues',
+    closed: ['CLOSED'],
+    history: 'issues',
+    states: 'IssueState',
+    fragment: ISSUE,
+    fields: '...IssueFields',
+    openStatus: false,
+  },
+  pullRequests: {
+    item: 'pr',
+    open: 'openPrs',
+    all: 'prs',
+    closed: ['CLOSED', 'MERGED'],
+    history: 'prs',
+    states: 'PullRequestState',
+    fragment: PR,
+    fields: '...PrFields',
+    openStatus: true,
+  },
+} as const satisfies Record<
+  string,
+  {
+    item: ItemKind
+    open: keyof Repo
+    all: keyof Repo
+    closed: readonly string[]
+    history: string
+    states: string
+    fragment: string
+    fields: string
+    openStatus: boolean
+  }
+>
+export type ListKind = keyof typeof KINDS
+export const LIST_KINDS = Object.keys(KINDS) as ListKind[]
+
+/** Whether a repository has closed issues, or closed pull requests. */
+export const hasClosed = (repo: Repo, kind: ListKind) => repo[KINDS[kind].all] > repo[KINDS[kind].open]
+
 /** A page of a repository's issues or pull requests, and the most items it may ask for at one point. */
-export function repoItems(kind: 'issues' | 'pullRequests', open: boolean): { query: string; size: number } {
-  const fields = kind === 'issues' ? '...IssueFields' : `...PrFields ${open ? STATUS : ''}`
-  const states = kind === 'issues' ? 'IssueState' : 'PullRequestState'
-  const size = kind === 'issues' ? pageSize(ISSUE) : pageSize(open ? PR + STATUS : PR)
+export function repoItems(kind: ListKind, open: boolean): { query: string; size: number } {
+  const { states, fragment, fields, openStatus } = KINDS[kind]
+  const status = open && openStatus ? STATUS : ''
   const query = `
     query($owner: String!, $name: String!, $states: [${states}!], $first: Int!, $after: String) {
       repository(owner: $owner, name: $name) {
         ${kind}(first: $first, after: $after, states: $states, orderBy: { field: UPDATED_AT, direction: DESC }) {
-          ${PAGE} nodes { ${fields} }
+          ${PAGE} nodes { ${fields} ${status} }
         }
       }
     }
-    ${kind === 'issues' ? ISSUE : PR}`
-  return { query, size }
+    ${fragment}`
+  return { query, size: pageSize(fragment + status) }
 }
 
 export const SEARCH = `
@@ -183,7 +232,7 @@ export function toItem(raw: RawItem): Item {
     title: raw.title,
     url: raw.url,
     state: raw.state === 'OPEN' ? 'open' : raw.state === 'MERGED' ? 'merged' : 'closed',
-    notPlanned: raw.stateReason === 'NOT_PLANNED' || raw.stateReason === 'DUPLICATE',
+    notPlanned: closedAs(raw.stateReason) !== 'completed',
     author: raw.author,
     assignees: raw.assignees.nodes,
     labels: raw.labels?.nodes ?? [],
@@ -195,11 +244,12 @@ export function toItem(raw: RawItem): Item {
   }
 }
 
-/** What a pull request's status says. A closed one has no checks or conflicts that still matter, so it shows none. */
+/** What a pull request's status says. */
 export const STATUS_FIELDS = ['review', 'checks', 'merge'] as const
 
 export type RawStatus = Pick<RawItem, 'isDraft' | 'reviewDecision' | 'mergeable' | 'commits'>
 
+/** A closed pull request has no checks or conflicts that still matter, so it shows none. */
 export function toStatus(raw: RawStatus, open: boolean): Pick<Item, (typeof STATUS_FIELDS)[number]> {
   const state = raw.commits?.nodes[0]?.commit.statusCheckRollup?.state
   return { review: toReview(raw), checks: open ? toChecks(state) : null, merge: open ? toMerge(raw) : null }
@@ -219,6 +269,16 @@ function toMerge(raw: Pick<RawItem, 'mergeable'>): Merge | null {
   if (raw.mergeable === 'MERGEABLE') return 'clean'
   return null
 }
+
+type ClosedAs = Exclude<IssueState, 'open'>
+const CLOSED_AS: Partial<Record<string, ClosedAs>> = { NOT_PLANNED: 'notPlanned', DUPLICATE: 'duplicate' }
+
+/** Why a closed issue was closed, as GitHub's `stateReason` says. Done, unless it says otherwise. */
+export const closedAs = (reason: string | null | undefined): ClosedAs => CLOSED_AS[reason ?? ''] ?? 'completed'
+
+/** The state of an issue as toItem() keeps it, which counts a duplicate as not planned. */
+export const stateOf = (item: Pick<Item, 'state' | 'notPlanned'>): Exclude<IssueState, 'duplicate'> =>
+  item.state === 'open' ? 'open' : item.notPlanned ? 'notPlanned' : 'completed'
 
 /** A combined or single commit status, as GitHub states it. */
 export function toChecks(state: string | null | undefined): Checks | null {

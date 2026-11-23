@@ -9,7 +9,7 @@ import { useI18n } from 'vue-i18n'
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import { REPO_STATUSES, type RepoStatus } from '@/lib/filters'
 import type { GitHub } from '@/lib/github'
-import { statusOf, toggleStatus } from '@/lib/repos'
+import { defaultRepoFilters, findRepos, toggleStatus } from '@/lib/repos'
 import { reposOf } from '@/lib/sources'
 import { normalize } from '@/lib/text'
 import { formatNumber, relativeTime } from '@/locale'
@@ -39,20 +39,19 @@ void load()
 // A new token may see other repositories.
 watch(() => props.gh, load)
 
-const filters = reactive({ q: '', status: ['active'] as RepoStatus[] })
-const found = computed(() => {
-  const terms = normalize(filters.q).split(/\s+/).filter(Boolean)
-  return (repos.value ?? []).filter((repo) => terms.every((term) => normalize(repo.name).includes(term)))
-})
-const shown = computed(() =>
-  found.value.filter((repo) => !filters.status.length || filters.status.includes(statusOf(repo))),
+const filters = reactive({ q: '', status: defaultRepoFilters().status })
+// The list shows each repository's name, so the search reads that.
+const found = computed(() =>
+  findRepos(
+    repos.value ?? [],
+    (repo) => repo,
+    filters,
+    (repo) => normalize(repo.name),
+  ),
 )
+const shown = computed(() => found.value.kept)
 const statuses = computed(() =>
-  REPO_STATUSES.map((value) => ({
-    value,
-    label: t(`filters.status.${value}`),
-    count: found.value.filter((repo) => statusOf(repo) === value).length,
-  })),
+  REPO_STATUSES.map((value) => ({ value, label: t(`filters.status.${value}`), count: found.value.counts[value] })),
 )
 
 const ticked = computed(() => new Set(only.value))

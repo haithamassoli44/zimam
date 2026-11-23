@@ -91,7 +91,8 @@ async function run<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) 
       const request = action(transaction.objectStore('cache'))
       transaction.addEventListener('complete', () => resolve(request.result))
       transaction.addEventListener('abort', () => resolve(null))
-    } catch {
+    } catch (error) {
+      console.error('Zimam could not use what this browser saved', error)
       resolve(null)
     }
   })

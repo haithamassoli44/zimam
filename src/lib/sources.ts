@@ -19,11 +19,12 @@ export interface SourceChoice {
   avatar?: string
 }
 
-export function sameSource(a: Source, b: Source): boolean {
-  return a.kind === b.kind && a.name.toLowerCase() === b.name.toLowerCase()
-}
+/** What tells a source apart. GitHub doesn't mind the case of a name. */
+export const sourceKey = (source: Source) => `${source.kind}:${source.name.toLowerCase()}`
 
-export function belongsTo(repo: Repo, source: Source): boolean {
+export const sameSource = (a: Source, b: Source) => sourceKey(a) === sourceKey(b)
+
+function belongsTo(repo: Repo, source: Source): boolean {
   const name = source.name.toLowerCase()
   return source.kind === 'repo' ? repo.fullName.toLowerCase() === name : repo.owner.toLowerCase() === name
 }
