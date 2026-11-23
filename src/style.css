@@ -159,7 +159,7 @@ body {
   & :is(h3, h4, h5, h6) {
     font-size: 0.875rem;
     line-height: 1.5;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--ui-text-highlighted);
   }
   & h3 {
@@ -218,12 +218,12 @@ body {
     direction: ltr;
     text-align: left;
     overflow-x: auto;
-    padding: 0.75rem 0.875rem;
+    padding: 0.75rem 1rem;
     border: 1px solid var(--ui-border);
     border-radius: 8px;
     background: var(--ui-bg-muted);
-    font-size: 0.78rem;
-    line-height: 1.6;
+    font-size: 0.75rem;
+    line-height: 1.25rem;
     & code {
       padding: 0;
       background: none;
@@ -262,15 +262,19 @@ body {
   }
 
   & .markdown-alert {
-    padding: 0.375rem 0.75rem;
+    padding: 0.5rem 0.75rem;
     border-inline-start: 3px solid var(--alert);
   }
   & .markdown-alert-title {
     font-weight: 500;
     color: var(--alert);
   }
-  & :is(.markdown-alert-note, .markdown-alert-important) {
-    --alert: var(--ui-primary);
+  /* Lapis marks only what's selected, linked or focused, so notes are in ink. */
+  & .markdown-alert-note {
+    --alert: var(--ui-text-muted);
+  }
+  & .markdown-alert-important {
+    --alert: var(--ui-text-highlighted);
   }
   & .markdown-alert-tip {
     --alert: var(--ui-success);
@@ -299,7 +303,7 @@ body {
     font-size: 0.8125rem;
   }
   & :is(th, td) {
-    padding: 0.375rem 0.75rem;
+    padding: 0.5rem 0.75rem;
     border: 1px solid var(--ui-border-accented);
   }
   & th {

@@ -238,7 +238,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
         />
       </UTooltip>
       <template v-if="docked">
-        <span class="mx-1.5 h-5 w-px bg-(--ui-border-accented)" aria-hidden="true" />
+        <span class="mx-1 h-5 w-px bg-(--ui-border-accented)" aria-hidden="true" />
         <UButton
           :to="url"
           target="_blank"
@@ -319,7 +319,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           >
             {{ thread.title }}
           </h2>
-          <div class="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[13px] text-muted">
+          <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] text-muted">
             <span
               class="inline-flex h-6 items-center gap-1.5 rounded-full bg-elevated ps-2 pe-2.5 font-medium text-highlighted"
             >
@@ -336,8 +336,11 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
                 </UTooltip>
               </template>
             </i18n-t>
-            <span aria-hidden="true">·</span>
-            <span>{{ t('item.comments', { n: formatNumber(thread.total) }, thread.total) }}</span>
+            <span v-if="thread.total" class="inline-flex items-center gap-1 font-mono tabular-nums">
+              <UIcon name="i-octicon-comment-16" class="size-4" />
+              <span aria-hidden="true">{{ formatNumber(thread.total) }}</span>
+              <span class="sr-only">{{ t('item.comments', { n: formatNumber(thread.total) }, thread.total) }}</span>
+            </span>
           </div>
           <div v-if="thread.labels.length" class="mt-3 flex flex-wrap gap-1.5">
             <span
@@ -369,7 +372,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           v-for="post in posts"
           :key="post.id"
           class="border-t border-default px-4 sm:px-6"
-          :class="post.hidden && !unhidden.has(post.id) ? 'py-2.5' : 'py-4'"
+          :class="post.hidden && !unhidden.has(post.id) ? 'py-2' : 'py-4'"
         >
           <div
             v-if="post.hidden && !unhidden.has(post.id)"
@@ -401,7 +404,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
                 <span>{{ t('issue.edited') }}</span>
               </template>
             </div>
-            <IssueText class="mt-2.5" :html="post.html" :link="post.url" />
+            <IssueText class="mt-2" :html="post.html" :link="post.url" />
           </template>
         </article>
 

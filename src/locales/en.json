@@ -235,7 +235,7 @@
       "notPlanned": "Not planned",
       "duplicate": "Duplicate"
     },
-    "opened": "{login} opened this {time}",
+    "opened": "{login} opened {time}",
     "assignees": "Assigned to",
     "edited": "edited",
     "ghost": "Deleted account",
