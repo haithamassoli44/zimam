@@ -1,5 +1,5 @@
 // The open pull request: what it is, what it changed, and what the reader saw of it before.
-import { computed, reactive, shallowReactive, shallowRef, watch } from 'vue'
+import { computed, shallowReactive, shallowRef, watch } from 'vue'
 
 import { seenKey } from '@/lib/cache'
 import {
@@ -27,6 +27,7 @@ import type { FileMode } from '@/types'
 
 import { client } from './data'
 import { activeWorkspace, postShown, settings } from './settings'
+import { sharedRecord } from './shared'
 import { openPull, pullScope } from './view'
 
 // --- What the reader saw: visits, viewed files, and a pull request's own file mode ----------------------------------
@@ -46,35 +47,20 @@ interface Seen {
 // the browser gives the whole app.
 const ROOM = 1_000_000
 
-function readSeen(): Record<string, Seen> {
-  try {
-    return JSON.parse(localStorage.getItem(seenKey(activeWorkspace.value?.id ?? '')) ?? '{}')
-  } catch {
-    return {}
-  }
-}
-const seenAll = reactive<Record<string, Seen>>(readSeen())
-watch(
-  () => activeWorkspace.value?.id,
-  () => {
-    for (const key of Object.keys(seenAll)) delete seenAll[key]
-    Object.assign(seenAll, readSeen())
+// Each pull request is its own entry, so a tab reading one doesn't undo what another tab saw of another.
+const seenAll = sharedRecord<Seen>(
+  () => seenKey(activeWorkspace.value?.id ?? ''),
+  (entries) => {
+    const kept: [string, Seen][] = []
+    let used = 0
+    for (const entry of entries.toSorted(([, a], [, b]) => b.at - a.at)) {
+      used += entry[0].length + JSON.stringify(entry[1]).length
+      if (used > ROOM && kept.length) break
+      kept.push(entry)
+    }
+    return kept
   },
 )
-watch(seenAll, () => {
-  const kept: [string, Seen][] = []
-  let used = 0
-  for (const entry of Object.entries(seenAll).toSorted(([, a], [, b]) => b.at - a.at)) {
-    used += entry[0].length + JSON.stringify(entry[1]).length
-    if (used > ROOM && kept.length) break
-    kept.push(entry)
-  }
-  try {
-    localStorage.setItem(seenKey(activeWorkspace.value?.id ?? ''), JSON.stringify(Object.fromEntries(kept)))
-  } catch {
-    // Without storage, what was seen lasts until the tab closes.
-  }
-})
 
 // --- The session: one pull request, from opening it until another opens --------------------------------------------
 
