@@ -12,31 +12,12 @@ vi.hoisted(() => {
   globalThis.matchMedia = () => ({ matches: true, addEventListener: () => {} }) as unknown as MediaQueryList
 })
 
-// jsdom lays nothing out, so the list's virtualizer draws every row, one under the other, by the keys it's given.
-vi.mock('@tanstack/vue-virtual', async () => {
-  const vue = await import('vue')
-  return {
-    useVirtualizer: (options: import('vue').Ref<{ count: number; getItemKey: (index: number) => string | number }>) =>
-      vue.computed(() => {
-        const { count, getItemKey } = options.value
-        return {
-          getVirtualItems: () =>
-            Array.from({ length: count }, (_, index) => ({
-              index,
-              key: getItemKey(index),
-              start: index * 40,
-              end: (index + 1) * 40,
-              size: 40,
-              lane: 0,
-            })),
-          getTotalSize: () => count * 40,
-          scrollToIndex: () => {},
-          measureElement: () => {},
-          measure: () => {},
-          takeSnapshot: () => [],
-        }
-      }),
-  }
+// jsdom lays nothing out: the scroller and each row get a size, and the list's own virtualizer draws the rows in sight.
+vi.hoisted(() => {
+  Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get: () => 800 })
+  Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 600 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 40 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 600 })
 })
 
 // A row that says when it's given the focus.
@@ -104,6 +85,8 @@ afterEach(() => {
 
 const press = (key: string) => dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
 
+const drawn = () => wrapper!.findAll('li[data-index]').map((row) => row.text())
+
 describe('the focus in the list', () => {
   it('goes to the row that is left first when the first row goes', async () => {
     repos.value = new Map([['R1', repo]])
@@ -122,8 +105,28 @@ describe('the focus in the list', () => {
     items.value.delete('I1')
     triggerRef(items)
     await flushPromises()
-    expect(wrapper.text()).not.toContain('I1')
+    expect(drawn()).toEqual(['I2'])
     focused.length = 0
+    press('j')
+    expect(focused).toEqual(['I2'])
+  })
+
+  it('goes to the row shown first when a sync puts another row first, the rows as many as before', async () => {
+    repos.value = new Map([['R1', { ...repo, openIssues: 3, issues: 3 }]])
+    items.value = new Map([
+      ['I1', issue('I1', '2026-11-25T10:00:00Z')],
+      ['I2', issue('I2', '2026-11-24T10:00:00Z')],
+      ['I3', issue('I3', '2026-11-23T10:00:00Z')],
+    ])
+    loaded.value = true
+    wrapper = mount(ItemList, { global: { plugins: [i18n] }, attachTo: document.body })
+    await flushPromises()
+    expect(drawn()).toEqual(['I1', 'I2', 'I3'])
+    // A sync finds the second one changed: it goes first.
+    items.value.set('I2', issue('I2', '2026-11-25T11:00:00Z'))
+    triggerRef(items)
+    await flushPromises()
+    expect(drawn()).toEqual(['I2', 'I1', 'I3'])
     press('j')
     expect(focused).toEqual(['I2'])
   })

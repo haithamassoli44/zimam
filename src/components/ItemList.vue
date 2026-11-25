@@ -59,7 +59,8 @@ const virtualizer = useVirtualizer(
     count: rows.value.length,
     getScrollElement: () => scroller.value,
     estimateSize: () => ROW_HEIGHT[settings.density],
-    getItemKey: keyAt,
+    // A function anew each time the rows change, so the virtualizer takes their keys again, though as many as before.
+    getItemKey: (index: number) => keyAt(index),
     overscan: 12,
     initialOffset: back?.offset ?? 0,
     initialMeasurementsCache: back?.rows ?? [],
