@@ -31,10 +31,10 @@ export const REPO_COLUMN_WIDTHS = { '--repo-columns': REPO_COLUMNS.map((column) 
 <script setup lang="ts">
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { useArming } from '@/components/armed'
 import { DOT } from '@/components/looks'
 import WeekBars from '@/components/WeekBars.vue'
 import { statusOf, type Filters } from '@/lib/filters'
@@ -45,9 +45,12 @@ import { displayRepo } from '@/stores/data'
 import { isPinned, togglePin } from '@/stores/repos'
 import { itemsLink, showItems } from '@/stores/view'
 
-const props = defineProps<{ row: RepoRow }>()
+// `wide`: whether the page is wide enough for a column each, which draws only that layout's parts. See ReposPage.
+const props = defineProps<{ row: RepoRow; wide: boolean }>()
 const emit = defineEmits<{ grab: [event: PointerEvent]; step: [by: -1 | 1] }>()
 const { t } = useI18n()
+const root = useTemplateRef<HTMLElement>('root')
+const { tip, arming } = useArming(root)
 
 const repo = computed(() => props.row.repo)
 const pinned = computed(() => isPinned(repo.value.id))
@@ -124,11 +127,13 @@ const link = computed(() => ({
 
 <template>
   <div
+    ref="root"
+    v-bind="arming"
     class="group relative border-b border-default px-4 py-3 transition-colors hover:bg-elevated/60 sm:px-6 @4xl:items-center @4xl:py-2.5"
     :class="REPO_GRID"
   >
     <button
-      v-if="pinned"
+      v-if="pinned && wide"
       v-bind="handle"
       type="button"
       class="absolute inset-y-0 start-0 hidden w-6 cursor-grab touch-none items-center justify-center text-dimmed focus-ring-inset transition-colors hover:text-toned focus-visible:text-highlighted @4xl:flex"
@@ -143,16 +148,16 @@ const link = computed(() => ({
           @click="follow($event, everything)"
           ><bdi>{{ displayRepo(repo.fullName) }}</bdi></a
         >
-        <UTooltip v-if="repo.isPrivate" :text="t('repos.private')">
+        <component :is="tip" v-if="repo.isPrivate" :text="t('repos.private')">
           <UIcon name="i-octicon-lock-16" class="size-4 shrink-0 text-muted" />
-        </UTooltip>
+        </component>
         <span v-if="repo.isPrivate" class="sr-only">{{ t('repos.private') }}</span>
         <span
           v-if="repo.isArchived"
           class="inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
           >{{ t('item.archived') }}</span
         >
-        <div class="ms-auto flex shrink-0 items-center gap-0.5 @4xl:hidden">
+        <div v-if="!wide" class="ms-auto flex shrink-0 items-center gap-0.5 @4xl:hidden">
           <UButton
             v-if="pinned"
             v-bind="{ ...BUTTON, ...handle }"
@@ -160,7 +165,7 @@ const link = computed(() => ({
             class="cursor-grab touch-none"
             :ui="{ leadingIcon: 'text-muted' }"
           />
-          <UTooltip :text="pinned ? t('repos.unpin') : t('repos.pin')"><UButton v-bind="pin" /></UTooltip>
+          <component :is="tip" :text="pinned ? t('repos.unpin') : t('repos.pin')"><UButton v-bind="pin" /></component>
           <UButton v-bind="link" />
         </div>
       </div>
@@ -176,7 +181,7 @@ const link = computed(() => ({
       </div>
 
       <!-- Narrow screens: the counts under the name, the weeks at the end. -->
-      <div class="mt-2 flex items-end gap-4 @4xl:hidden">
+      <div v-if="!wide" class="mt-2 flex items-end gap-4 @4xl:hidden">
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[13px] leading-5 text-muted">
           <a
             v-for="count in totals"
@@ -203,50 +208,52 @@ const link = computed(() => ({
               >{{ t(`repos.${count.key}Count`, { n: formatNumber(count.count) }) }}</a
             >
           </template>
-          <UTooltip v-if="active" :text="fullDate(row.activeAt)">
+          <component :is="tip" v-if="active" :text="fullDate(row.activeAt)">
             <span>{{ active }}</span>
-          </UTooltip>
+          </component>
         </div>
-        <UTooltip :text="opened">
+        <component :is="tip" :text="opened">
           <span class="flex" :aria-label="opened" role="img"
             ><WeekBars :weeks="row.weeks" :loading="row.weeksLoading"
           /></span>
-        </UTooltip>
+        </component>
       </div>
     </div>
 
     <!-- Wide screens: one column each. -->
-    <UTooltip :text="opened">
-      <span class="hidden @4xl:flex" :aria-label="opened" role="img"
-        ><WeekBars :weeks="row.weeks" :loading="row.weeksLoading"
-      /></span>
-    </UTooltip>
-    <template v-for="count in counts" :key="count.key">
-      <span v-if="count.loading" class="hidden justify-self-end @4xl:block">
-        <span class="block h-3 w-6 animate-pulse rounded-md bg-elevated" aria-hidden="true" />
-        <span class="sr-only">{{ label(count) }}</span>
-      </span>
-      <a
-        v-else-if="count.count"
-        :href="itemsLink(count.filters)"
-        class="hidden justify-self-end font-mono text-[13px] tabular-nums @4xl:block"
-        :class="[LINK, count.tone]"
-        :aria-label="label(count)"
-        @click="follow($event, count.filters)"
-        >{{ formatNumber(count.count) }}</a
-      >
-      <span v-else class="hidden justify-self-end font-mono text-[13px] text-muted opacity-60 @4xl:block">
-        <span aria-hidden="true">–</span>
-        <span class="sr-only">{{ label(count) }}</span>
-      </span>
+    <template v-if="wide">
+      <component :is="tip" :text="opened">
+        <span class="hidden @4xl:flex" :aria-label="opened" role="img"
+          ><WeekBars :weeks="row.weeks" :loading="row.weeksLoading"
+        /></span>
+      </component>
+      <template v-for="count in counts" :key="count.key">
+        <span v-if="count.loading" class="hidden justify-self-end @4xl:block">
+          <span class="block h-3 w-6 animate-pulse rounded-md bg-elevated" aria-hidden="true" />
+          <span class="sr-only">{{ label(count) }}</span>
+        </span>
+        <a
+          v-else-if="count.count"
+          :href="itemsLink(count.filters)"
+          class="hidden justify-self-end font-mono text-[13px] tabular-nums @4xl:block"
+          :class="[LINK, count.tone]"
+          :aria-label="label(count)"
+          @click="follow($event, count.filters)"
+          >{{ formatNumber(count.count) }}</a
+        >
+        <span v-else class="hidden justify-self-end font-mono text-[13px] text-muted opacity-60 @4xl:block">
+          <span aria-hidden="true">–</span>
+          <span class="sr-only">{{ label(count) }}</span>
+        </span>
+      </template>
+      <component :is="tip" v-if="active" :text="fullDate(row.activeAt)">
+        <span class="hidden justify-self-end text-[13px] whitespace-nowrap text-muted @4xl:block">{{ active }}</span>
+      </component>
+      <span v-else class="hidden @4xl:block" />
+      <div class="hidden items-center gap-0.5 justify-self-end @4xl:flex">
+        <component :is="tip" :text="pinned ? t('repos.unpin') : t('repos.pin')"><UButton v-bind="pin" /></component>
+        <UButton v-bind="link" />
+      </div>
     </template>
-    <UTooltip v-if="active" :text="fullDate(row.activeAt)">
-      <span class="hidden justify-self-end text-[13px] whitespace-nowrap text-muted @4xl:block">{{ active }}</span>
-    </UTooltip>
-    <span v-else class="hidden @4xl:block" />
-    <div class="hidden items-center gap-0.5 justify-self-end @4xl:flex">
-      <UTooltip :text="pinned ? t('repos.unpin') : t('repos.pin')"><UButton v-bind="pin" /></UTooltip>
-      <UButton v-bind="link" />
-    </div>
   </div>
 </template>

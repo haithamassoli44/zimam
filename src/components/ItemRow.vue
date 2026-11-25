@@ -8,9 +8,10 @@ import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, useTemplateRef } from 'vue'
+import { computed, ref, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { useArming } from '@/components/armed'
 import CheckRuns from '@/components/CheckRuns.vue'
 import { stepOf } from '@/components/keys'
 import LabelTag from '@/components/LabelTag.vue'
@@ -28,6 +29,14 @@ const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fr
 const emit = defineEmits<{ move: [by: 1 | -1] }>()
 const { t } = useI18n()
 const link = useTemplateRef<HTMLElement>('link')
+const root = useTemplateRef<HTMLElement>('root')
+const { armed, tip, arming } = useArming(root, { cards: true })
+// The checks' popover anchors to its button, so it comes with the row's tooltips: before, a click arms the row and opens it.
+const checksOpen = ref(false)
+function openChecks() {
+  armed.value = true
+  checksOpen.value = true
+}
 
 const compact = computed(() => settings.density === 'compact')
 const open = computed(() => props.item.state === 'open')
@@ -56,6 +65,9 @@ const review = computed(() => {
     : null
 })
 const diff = computed(() => (open.value && settings.show.size ? props.item.diff : null))
+const checksLabel = computed(() => t('checks.show', { state: t(`filters.checks.${props.item.checks}`) }))
+const CHECKS_BUTTON =
+  'tap flex rounded-sm focus-ring transition-colors hover:text-highlighted focus-visible:outline-offset-2'
 const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), now.value))
 
 const FACES = 3
@@ -70,10 +82,10 @@ const moreLabels = computed(() => props.item.labels.slice(LABELS).map((label) =>
 // key held or the middle button, either opens on GitHub in a new tab.
 function read(event: MouseEvent): boolean {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
-  const ref = itemRef(props.item)
-  if (!ref) return false
-  if (props.item.kind === 'pr') showPull(ref, 'files')
-  else showIssue(ref)
+  const where = itemRef(props.item)
+  if (!where) return false
+  if (props.item.kind === 'pr') showPull(where, 'files')
+  else showIssue(where)
   return true
 }
 
@@ -101,6 +113,8 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
 
 <template>
   <div
+    ref="root"
+    v-bind="arming"
     class="group relative flex cursor-pointer gap-3 border-b border-default px-4 transition-colors has-[a[data-row]:focus-visible]:bg-elevated has-[a[data-row]:focus-visible]:outline-2 has-[a[data-row]:focus-visible]:-outline-offset-2 has-[a[data-row]:focus-visible]:outline-primary sm:px-6"
     :class="[compact ? 'items-center py-2' : 'py-3', fresh && 'arrived', opened ? 'picked' : 'hover:bg-elevated/60']"
     :style="fresh ? { '--fresh': `${FRESH_MS}ms` } : undefined"
@@ -114,7 +128,7 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
       aria-hidden="true"
     />
 
-    <UTooltip :text="stateText">
+    <component :is="tip" :text="stateText">
       <span class="relative flex shrink-0" :class="!compact && 'mt-1 self-start'">
         <UIcon :name="state.look.icon" class="size-4" :class="state.look.color" />
         <span
@@ -122,7 +136,7 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
           class="absolute -end-0.5 -bottom-0.5 size-2 rounded-full bg-error ring-2 ring-(--ui-bg) transition-colors group-hover:ring-(--ui-bg-elevated)"
         />
       </span>
-    </UTooltip>
+    </component>
 
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-x-2 gap-y-1" :class="compact ? 'flex-nowrap' : 'flex-wrap'">
@@ -148,12 +162,12 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
         >
         <template v-if="settings.show.labels">
           <LabelTag v-for="label in labels" :key="label.name" :label="label" class="shrink-0" />
-          <UTooltip v-if="moreLabels.length" :text="formatList(moreLabels)">
+          <component :is="tip" v-if="moreLabels.length" :text="formatList(moreLabels)">
             <span class="inline-flex h-5 shrink-0 items-center font-mono text-xs text-muted tabular-nums">
               <span aria-hidden="true">+{{ formatNumber(moreLabels.length) }}</span>
               <span class="sr-only">{{ t('item.moreLabels', { names: formatList(moreLabels) }) }}</span>
             </span>
-          </UTooltip>
+          </component>
         </template>
       </div>
 
@@ -168,9 +182,9 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
             <PersonLink :who="item.author" tabindex="-1" class="align-bottom" />
           </template>
         </i18n-t>
-        <UTooltip :text="t('item.opened', { time: fullDate(item.createdAt) })">
+        <component :is="tip" :text="t('item.opened', { time: fullDate(item.createdAt) })">
           <span>{{ t('item.updated', { time: updated }) }}</span>
-        </UTooltip>
+        </component>
         <span v-if="diff" class="font-mono text-xs tabular-nums" dir="ltr">
           <span aria-hidden="true">+{{ formatNumber(diff.additions) }} −{{ formatNumber(diff.deletions) }}</span>
           <span class="sr-only">{{
@@ -182,20 +196,16 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
 
     <div class="flex shrink-0 items-center gap-4 text-xs text-muted" :class="!compact && 'h-6 self-start'">
       <span v-if="settings.show.review" class="flex w-4 justify-center" :class="!review && 'max-sm:hidden'">
-        <UTooltip v-if="review" :text="t(`filters.review.${review}`)">
+        <component :is="tip" v-if="review" :text="t(`filters.review.${review}`)">
           <UIcon :name="REVIEW_LOOKS[review].icon" class="size-4" :class="REVIEW_LOOKS[review].color" />
-        </UTooltip>
+        </component>
         <span v-if="review" class="sr-only">{{ t(`filters.review.${review}`) }}</span>
       </span>
       <span v-if="settings.show.checks" class="flex w-4 justify-center">
         <!-- Modal, so the click that closes it doesn't also open the row it lands on. -->
-        <UPopover v-if="item.checks" modal :content="{ align: 'end' }">
+        <UPopover v-if="item.checks && armed" v-model:open="checksOpen" modal :content="{ align: 'end' }">
           <UTooltip :text="t(`filters.checks.${item.checks}`)">
-            <button
-              type="button"
-              class="tap flex rounded-sm focus-ring transition-colors hover:text-highlighted focus-visible:outline-offset-2"
-              :aria-label="t('checks.show', { state: t(`filters.checks.${item.checks}`) })"
-            >
+            <button type="button" :class="CHECKS_BUTTON" :aria-label="checksLabel">
               <UIcon :name="CHECK_LOOKS[item.checks].icon" class="size-4" :class="CHECK_LOOKS[item.checks].color" />
             </button>
           </UTooltip>
@@ -203,19 +213,30 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
             <CheckRuns :item="item" />
           </template>
         </UPopover>
+        <button
+          v-else-if="item.checks"
+          type="button"
+          :class="CHECKS_BUTTON"
+          :aria-label="checksLabel"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+          @click="openChecks"
+        >
+          <UIcon :name="CHECK_LOOKS[item.checks].icon" class="size-4" :class="CHECK_LOOKS[item.checks].color" />
+        </button>
       </span>
       <span v-if="settings.show.assignees" class="hidden w-14 justify-end sm:flex">
         <span v-if="item.assignees.length" class="flex flex-row-reverse items-center">
           <span class="sr-only">{{
             t('item.assignees', { names: formatList(item.assignees.map((p) => p.login)) })
           }}</span>
-          <UTooltip v-if="moreFaces.length" :text="formatList(moreFaces)">
+          <component :is="tip" v-if="moreFaces.length" :text="formatList(moreFaces)">
             <span
               class="relative -ms-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-elevated px-1 font-mono text-[10px] text-toned ring-2 ring-(--ui-bg) group-hover:ring-(--ui-bg-elevated)"
               aria-hidden="true"
               >+{{ formatNumber(moreFaces.length) }}</span
             >
-          </UTooltip>
+          </component>
           <PersonLink
             v-for="person in faces.toReversed()"
             :key="person.login"
