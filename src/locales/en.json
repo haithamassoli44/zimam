@@ -210,6 +210,7 @@
     "show": "Show checks: {state}",
     "loading": "Loading the checks",
     "failed": "Couldn't load the checks",
+    "behind": "Couldn't load them again: they may be out of date",
     "none": "No checks on the last commit",
     "onGitHub": "Open on GitHub",
     "more": "No more | 1 more on GitHub | {n} more on GitHub",

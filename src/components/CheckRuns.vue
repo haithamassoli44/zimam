@@ -8,31 +8,49 @@ import CheckRow from '@/components/CheckRow.vue'
 import { runsSummary } from '@/components/checks'
 import type { CheckRuns } from '@/lib/checks'
 import { formatNumber } from '@/locale'
-import { checkRuns } from '@/stores/data'
+import { checkRuns, status } from '@/stores/data'
 import type { Item } from '@/types'
 
 const props = defineProps<{ item: Item }>()
 const { t } = useI18n()
 
 const answer = ref<CheckRuns | null>(null)
+// Whether no answer could be read, and whether the answer shown is older than the last read, which failed.
 const failed = ref(false)
-// Read once the popover opens, so only the checks someone looks at cost anything, and again when a sync finds them
-// changed while it's open. What it shows stays until the new answer is in, and an answer to an earlier read is let go.
-// A sync makes items anew for other changes too, so only these say the checks may have changed.
+const behind = ref(false)
+// Read once the popover opens, so only the checks someone looks at cost anything, and again after each sync while it's
+// open: a run can finish while the checks as a whole still run, which nothing in the item says. A sync that changed the
+// item had them read already, as it went. What it shows stays until the new answer is in, and an answer to an earlier
+// read is let go.
+const FRESH = 30_000
 let reads = 0
+let readAt = 0
 watch(
-  [() => props.item.id, () => props.item.updatedAt, () => props.item.checks],
-  ([id], before) => {
+  [() => props.item.id, () => props.item.updatedAt, () => props.item.checks, () => status.value.syncedAt],
+  (now, before) => {
+    const [id] = now
+    const synced = before && now.slice(0, 3).every((value, index) => value === before[index])
+    if (synced && Date.now() - readAt < FRESH) return
+    readAt = Date.now()
     const read = ++reads
-    if (before && id !== before[0]) answer.value = null
+    if (before && id !== before[0]) {
+      answer.value = null
+      behind.value = false
+    }
     failed.value = false
     checkRuns(props.item).then(
       (runs) => {
-        if (read === reads) answer.value = runs
+        if (read !== reads) return
+        answer.value = runs
+        behind.value = false
       },
-      // The runs already shown stay when reading them again fails.
+      // The runs already shown stay when reading them again fails, said to be maybe out of date.
       () => {
-        if (read === reads && !answer.value) failed.value = true
+        if (read !== reads) return
+        if (answer.value) behind.value = true
+        else failed.value = true
+        // So the sync's end asks again.
+        readAt = 0
       },
     )
   },
@@ -50,6 +68,7 @@ const onGitHub = computed(() => `${props.item.url}/checks`)
     <div class="border-b border-default p-3">
       <p class="text-sm font-medium text-highlighted">{{ t('checks.title') }}</p>
       <p v-if="answer && summary" class="mt-0.5 text-xs text-muted">{{ summary }}</p>
+      <p v-if="answer && behind" class="mt-0.5 text-xs text-muted">{{ t('checks.behind') }}</p>
     </div>
 
     <div v-if="!answer && !failed" class="space-y-3 p-3" aria-busy="true">
