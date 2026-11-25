@@ -6,6 +6,7 @@ import {
   pickChoice,
   REPO_STATUSES,
   statusOf,
+  timesOf,
   type Context,
   type Filters,
   type RepoStatus,
@@ -100,9 +101,9 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
     const tally = tallies.get(item.repoId)
     if (!tally) continue
     const { row } = tally
-    const updatedAt = Date.parse(item.updatedAt)
+    const { updated: updatedAt, created } = timesOf(item)
     row.activeAt = Math.max(row.activeAt, updatedAt)
-    const week = Math.floor((now - Date.parse(item.createdAt)) / WEEK)
+    const week = Math.floor((now - created) / WEEK)
     if (week >= 0 && week < WEEKS) row.weeks[WEEKS - 1 - week]++
     if (item.state !== 'open') {
       tally.oldestClosed[item.kind] = Math.min(tally.oldestClosed[item.kind], updatedAt)
