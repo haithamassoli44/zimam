@@ -404,11 +404,14 @@ export class Syncer {
     const found: Item[] = []
     let tooMany = false
     type Found = { search: Page<RawItem | Record<string, never>> & { issueCount: number } }
-    for await (const data of this.search<Found>(SEARCH, `updated:>=${since}`)) {
-      // Search stops at 1,000 results. After a long absence, refetching the open items is cheaper and complete.
-      tooMany = data.search.issueCount > 1000
-      if (tooMany) break
-      for (const node of data.search.nodes) if (node && 'id' in node) found.push(toItem(node as RawItem))
+    // With a fine-grained token, a search that doesn't say `is:issue` or `is:pr` finds nothing, so each has its own.
+    search: for (const kind of ['is:issue', 'is:pr']) {
+      for await (const data of this.search<Found>(SEARCH, `${kind} updated:>=${since}`)) {
+        // Search stops at 1,000 results. After a long absence, refetching the open items is cheaper and complete.
+        tooMany = data.search.issueCount > 1000
+        if (tooMany) break search
+        for (const node of data.search.nodes) if (node && 'id' in node) found.push(toItem(node as RawItem))
+      }
     }
     if (tooMany) {
       this.cache.openDone = []

@@ -128,7 +128,9 @@ function fakeGitHub() {
         [PR_STATUS]: 'checks',
         [REVIEW_REQUESTED]: 'requested',
       }[text] ?? 'items'
-    state.calls.push(call)
+    // The issues and the pull requests are searched apart, as a fine-grained token needs: the pair is one search.
+    const q = typeof variables.q === 'string' ? variables.q : ''
+    if (call !== 'search' || !q.includes('is:pr')) state.calls.push(call)
     state.onQuery()
     if (state.rateLimited) throw new GitHubError('Rate limited', 'rate', Date.now() + 60_000)
     if (call === 'repos') {
@@ -150,8 +152,10 @@ function fakeGitHub() {
       const more = state.more.map((name) => ({ ...repo, id: name, name, nameWithOwner: `acme/${name}` }))
       return done({ organization: { repositories: page([repo, ...more]) } })
     }
-    if (call === 'search')
-      return done({ search: { issueCount: state.searchResults.length, ...page(state.searchResults) } })
+    if (call === 'search') {
+      const found = state.searchResults.filter((node) => q.includes(node.kind === 'PullRequest' ? 'is:pr' : 'is:issue'))
+      return done({ search: { issueCount: found.length, ...page(found) } })
+    }
     if (call === 'requested')
       return done({ viewer: { login: 'ali' }, search: page(state.requested.map((id) => ({ id }))) })
     if (call === 'nodes') {
