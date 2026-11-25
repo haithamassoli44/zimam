@@ -771,8 +771,13 @@ export class Syncer {
       const old = this.store.items.get(incoming.id)
       if (old && old.updatedAt > incoming.updatedAt) continue
       const item = keepMerge(incoming, old)
-      // Open pull requests always come with their checks.
-      if (item.kind === 'pr' && item.state === 'open') this.cache.checkedAt[item.id] = this.runStartedAt
+      // Open pull requests always come with their checks. One GitHub doesn't know yet whether it conflicts, as after a
+      // push, is asked again soon, as when the checks find it so: the last answer it keeps meanwhile may no longer hold.
+      if (item.kind === 'pr' && item.state === 'open') {
+        this.cache.checkedAt[item.id] = this.runStartedAt
+        if (incoming.merge === null) this.unknownMerge.set(item.id, this.unknownMerge.get(item.id) ?? 0)
+        else this.unknownMerge.delete(item.id)
+      }
       if (old && old.updatedAt === item.updatedAt && sameStatus(old, item)) continue
       this.keep(item, old)
       changed = true

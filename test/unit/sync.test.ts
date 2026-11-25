@@ -547,6 +547,32 @@ describe('Syncer', () => {
     expect(await checkCalls(1)).toBe(0)
   })
 
+  it('asks again soon when a pull request known to be clean changes and the search finds it unknown', async () => {
+    const { store, state, syncer } = await setup()
+    await syncer.sync()
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    // A push, in a repository without checks: the search finds it while GitHub works out whether it still merges.
+    now += MINUTE
+    state.searchResults = [{ ...raw('P2', 'OPEN', new Date(now).toISOString(), true), mergeable: 'UNKNOWN' }]
+    await syncer.sync()
+    expect(store.items.get('P2')).toMatchObject({ merge: 'clean', checks: null })
+
+    // GitHub has worked it out: it conflicts now.
+    state.mergeable.P2 = 'CONFLICTING'
+    state.searchResults = []
+    now += MINUTE
+    state.calls = []
+    await syncer.sync()
+    expect(state.calls).toContain('checks')
+    expect(store.items.get('P2')?.merge).toBe('conflicts')
+    // Known again, it waits its usual turn.
+    now += MINUTE
+    state.calls = []
+    await syncer.sync()
+    expect(state.calls).not.toContain('checks')
+  })
+
   it('drops the checks and conflicts of a pull request once it merges', async () => {
     const { store, state, syncer } = await setup()
     state.mergeable.P2 = 'CONFLICTING'
