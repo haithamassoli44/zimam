@@ -210,7 +210,8 @@ export function reloadPull() {
 /**
  * Reads the open pull request again, as GitHub has it now, without starting over: what's on screen stays until the new
  * answer is in. When its head or base moved, what it changed is read again before the page takes the new answer, so
- * the diff never shows one head's files at another's. Asked again while it reads, it reads once more after.
+ * the diff never shows one head's files at another's. So is what it changed when that couldn't be read last time, and
+ * the commits shown. Asked again while it reads, it reads once more after.
  */
 export async function refreshPull() {
   const s = session.value
@@ -225,14 +226,16 @@ export async function refreshPull() {
     do {
       s.refreshAgain = false
       const before: Pull = s.pull
-      const moved: { read?: Promise<{ changes: Changes; attributes: string | null } | null> } = {}
-      const next = await readPull(s.gh, s.ref, (heads) => {
-        if (heads.headOid !== before.headOid || heads.baseOid !== before.baseOid)
-          moved.read = readChanges(s.gh, heads).catch(() => null)
+      const heads: { moved: boolean; read?: Promise<{ changes: Changes; attributes: string | null } | null> } = {
+        moved: false,
+      }
+      const next = await readPull(s.gh, s.ref, (found) => {
+        heads.moved = found.headOid !== before.headOid || found.baseOid !== before.baseOid
+        if (heads.moved || s.changes.get(ALL) === 'failed') heads.read = readChanges(s.gh, found).catch(() => null)
       })
-      const found = moved.read && (await moved.read)
+      const found = heads.read && (await heads.read)
       if (session.value !== s) return
-      if (moved.read) {
+      if (heads.read) {
         s.reads.delete(ALL)
         if (found) {
           s.reads.set(ALL, Promise.resolve(found.changes))
@@ -244,8 +247,10 @@ export async function refreshPull() {
       if (inSight()) recordVisit(s, next)
       s.pull = next
       readRuns(s, next)
+      const run = scope.value
+      if (run && s.changes.get(run.key) === 'failed') void changesOf(s, next, run)
       // New commits need their changes read for the commits list's ticks too.
-      if (moved.read && ticksCommits(s)) {
+      if (heads.moved && ticksCommits(s)) {
         s.commitsRead = false
         void readCommits(s, next)
       }

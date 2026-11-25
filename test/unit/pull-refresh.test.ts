@@ -6,8 +6,8 @@ import type { Changes } from '@/lib/changes'
 import type { GitHub } from '@/lib/github'
 import type { Pull } from '@/lib/pull'
 import { client, items } from '@/stores/data'
-import { pull, refreshPull, runs, shownFiles } from '@/stores/pull'
-import { openPull } from '@/stores/view'
+import { filesState, pull, refreshPull, runs, shownFiles } from '@/stores/pull'
+import { openPull, pullScope } from '@/stores/view'
 import type { Item } from '@/types'
 
 // GitHub as the pull request page reads it: the pull request, what it changed, and its files' texts.
@@ -21,6 +21,8 @@ const github = vi.hoisted(() => ({
   runHolds: new Map<string, Promise<void>>(),
   pullReads: 0,
   changeReads: [] as string[],
+  // The reads of what changed that fail, by head, or by the run of commits they're of.
+  failing: new Set<string>(),
 }))
 vi.mock('@/lib/pull', async (original) => ({
   ...(await original<typeof import('@/lib/pull')>()),
@@ -36,7 +38,13 @@ vi.mock('@/lib/changes', async (original) => ({
     github.changeReads.push(heads.headOid)
     await github.hold
     await github.holds.get(heads.headOid)
+    if (github.failing.has(heads.headOid)) throw new Error('network')
     return { changes: github.changes.get(heads.headOid)!, attributes: null }
+  },
+  readRange: async (_gh: unknown, _repo: string, base: string, head: string) => {
+    github.changeReads.push(`${base}..${head}`)
+    if (github.failing.has(`${base}..${head}`)) throw new Error('network')
+    return { mergeBase: base, files: [file('one.ts')], capped: false }
   },
   readTexts: async (_gh: unknown, _repo: string, at: string[]) =>
     at.map(() => ({ content: { text: 'a\n' }, version: 'v' })),
@@ -99,6 +107,17 @@ const file = (path: string) => ({
   blob: path,
 })
 
+const commit = (oid: string, parent: string) => ({
+  oid,
+  short: oid,
+  headline: oid,
+  body: '',
+  parent,
+  at: '2026-11-25T09:00:00Z',
+  author: { name: '', login: null, avatarUrl: '' },
+  checks: null,
+})
+
 function listItem(updatedAt: string, extra: Partial<Item> = {}): Item {
   return {
     id: 'P1',
@@ -133,6 +152,8 @@ async function opened(...pulls: Pull[]) {
 
 beforeEach(() => {
   openPull.value = null
+  pullScope.value = null
+  github.failing = new Set()
   client.value = {} as GitHub
   items.value = new Map()
   github.hold = null
@@ -256,6 +277,37 @@ describe('reading the open pull request again', () => {
     first.fail()
     await flushPromises()
     expect(shownFiles.value.map((shown) => shown.path)).toEqual(['one.ts', 'two.ts'])
+  })
+
+  it('reads again what a new head changed when reading it failed, though the head stays', async () => {
+    await opened(pullAt('h1'), pullAt('h2'))
+    github.failing.add('h2')
+    await refreshPull()
+    expect(pull.value?.headOid).toBe('h2')
+    expect(filesState.value).toBe('failed')
+    github.failing.delete('h2')
+    await refreshPull()
+    expect(filesState.value).toBe('ready')
+    expect(shownFiles.value.map((shown) => [shown.path, shown.at])).toEqual([
+      ['one.ts', 'h2'],
+      ['two.ts', 'h2'],
+    ])
+    // Once read, the same head's changes aren't read again.
+    await refreshPull()
+    expect(github.changeReads).toEqual(['h1', 'h2', 'h2'])
+  })
+
+  it('reads again what the commits shown changed when reading it failed', async () => {
+    const commits = [commit('c1', 'base'), commit('c2', 'c1')]
+    pullScope.value = { before: null, last: 'c2' }
+    github.failing.add('c1..c2')
+    await opened(pullAt('c2', { commits, commitCount: 2 }))
+    expect(filesState.value).toBe('failed')
+    github.failing.delete('c1..c2')
+    await refreshPull()
+    await flushPromises()
+    expect(filesState.value).toBe('ready')
+    expect(shownFiles.value.map((shown) => [shown.path, shown.at])).toEqual([['one.ts', 'c2']])
   })
 
   it("shows the newer head's checks when the older head's answer comes after", async () => {
