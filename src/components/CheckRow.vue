@@ -28,7 +28,7 @@ const { t } = useI18n()
     <UIcon
       v-if="run.url"
       name="i-octicon-link-external-16"
-      class="size-4 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-100"
+      class="size-4 shrink-0 text-muted reveal transition-opacity"
     />
   </component>
 </template>

@@ -102,13 +102,7 @@ defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
 <template>
   <div
     class="group relative flex cursor-pointer gap-3 border-b border-default px-4 transition-colors has-[a[data-row]:focus-visible]:bg-elevated has-[a[data-row]:focus-visible]:outline-2 has-[a[data-row]:focus-visible]:-outline-offset-2 has-[a[data-row]:focus-visible]:outline-primary sm:px-6"
-    :class="[
-      compact ? 'items-center py-2' : 'py-3',
-      fresh && 'arrived',
-      opened
-        ? 'bg-elevated before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary'
-        : 'hover:bg-elevated/60',
-    ]"
+    :class="[compact ? 'items-center py-2' : 'py-3', fresh && 'arrived', opened ? 'picked' : 'hover:bg-elevated/60']"
     :style="fresh ? { '--fresh': `${FRESH_MS}ms` } : undefined"
     @click="follow"
     @auxclick="follow"

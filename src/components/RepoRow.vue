@@ -91,11 +91,10 @@ const LINK = 'rounded-sm hover:underline focus-ring'
 // on hover, and always on a touch screen, but a pinned repository's pin always shows. Its handle sits with them on
 // narrow screens, away from the edge, where a swipe would go back a page, and at the start of the row on wide ones.
 const BUTTON = { color: 'neutral', variant: 'ghost', size: 'xs' } as const
-const ON_HOVER = 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100'
 const pin = computed(() => ({
   ...BUTTON,
   icon: 'i-octicon-pin-16',
-  class: !pinned.value && ON_HOVER,
+  class: !pinned.value && 'reveal',
   'aria-label': t('repos.pinLabel', { name: repo.value.fullName }),
   'aria-pressed': pinned.value,
   ui: { leadingIcon: pinned.value ? 'text-highlighted' : 'text-muted' },
@@ -117,7 +116,7 @@ const link = computed(() => ({
   target: '_blank',
   rel: 'noopener',
   icon: 'i-octicon-link-external-16',
-  class: ON_HOVER,
+  class: 'reveal',
   'aria-label': t('repos.onGitHub', { name: repo.value.fullName }),
   ui: { leadingIcon: 'text-muted' },
 }))

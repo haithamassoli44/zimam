@@ -12,7 +12,7 @@ afterEach(() => {
 type Bindings = Parameters<typeof useKeys>[0]
 
 /** A part that answers these shortcuts, at a level, holding a text box and a menu. In a dialog, it's the dialog. */
-function answering(bindings: Bindings, options: { level?: 'panel' | 'page' | 'app'; dialog?: boolean } = {}) {
+function answering(bindings: Bindings, options: { level?: 'focus' | 'panel' | 'page' | 'app'; dialog?: boolean } = {}) {
   return mount(
     defineComponent(() => {
       const root = ref<HTMLElement | null>(null)
@@ -83,6 +83,18 @@ describe('useKeys', () => {
     expect(calls.slice(2)).toEqual(['app'])
   })
 
+  it('asks a part that answers while it has the focus first, and only then', () => {
+    const diff = vi.fn()
+    const tree = vi.fn()
+    answering({ viewed: diff })
+    const focused = answering({ viewed: tree }, { level: 'focus' })
+    const v = { key: 'v', code: 'KeyV' }
+    press(v)
+    press(v, focused.get('.plain').element)
+    expect(diff).toHaveBeenCalledOnce()
+    expect(tree).toHaveBeenCalledOnce()
+  })
+
   it('in a dialog, lets only the part with the focus answer', () => {
     const behind = vi.fn()
     const issue = vi.fn()
@@ -102,6 +114,14 @@ describe('useKeys', () => {
     press({ key: '?', code: 'Slash', shiftKey: true }, dialog.get('.plain').element)
     press({ key: '?', code: 'Slash', shiftKey: true }, dialog.get('[role="menu"] button').element)
     expect(help).toHaveBeenCalledOnce()
+  })
+
+  it('in a dialog holding only a part that answers while it has the focus, like a sheet with the files tree, keeps what works everywhere quiet', () => {
+    const views = vi.fn()
+    answering({ views }, { level: 'app' })
+    const sheet = answering({ viewed: () => {} }, { level: 'focus', dialog: true })
+    press({ key: '1', code: 'Digit1' }, sheet.get('.plain').element)
+    expect(views).not.toHaveBeenCalled()
   })
 
   it('stops answering once the part is gone', () => {

@@ -1,4 +1,5 @@
-// How the pull request page's own things look: its files, its reviewers' verdicts, merging, and the timeline's events.
+// How the pull request page's own things look: its files and their ticks, its reviewers' verdicts, merging, and the
+// timeline's events.
 import { PULL_LOOKS, REVIEW_LOOKS } from '@/components/looks'
 import type { FileStatus } from '@/lib/changes'
 import type { Entry, MergeStanding, Verdict } from '@/lib/pull'
@@ -12,6 +13,11 @@ export const FILE_LOOKS: Record<FileStatus, { icon: string; color: string }> = {
   modified: { icon: 'i-octicon-diff-modified-16', color: 'text-muted' },
   changed: { icon: 'i-octicon-diff-modified-16', color: 'text-muted' },
 }
+
+const TICKED = { icon: 'i-octicon-check-circle-fill-16', color: 'text-primary' }
+const UNTICKED = { icon: 'i-octicon-circle-16', color: 'text-muted' }
+/** How a viewed tick looks, on a file, a folder or a commit, or the tick still to tick. */
+export const tickLook = (viewed: boolean) => (viewed ? TICKED : UNTICKED)
 
 /** How one reviewer's last word looks, beside their name and in the conversation. */
 export const VERDICT_LOOKS: Record<Verdict, { icon: string; color: string }> = {

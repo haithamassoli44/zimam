@@ -7,7 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowR
 import { useI18n } from 'vue-i18n'
 
 import LineCounts from '@/components/LineCounts.vue'
-import { FILE_LOOKS } from '@/components/pull/looks'
+import { FILE_LOOKS, tickLook } from '@/components/pull/looks'
 import { asked, reveal, scroller } from '@/components/pull/navigation'
 import ThreadCard from '@/components/pull/ThreadCard.vue'
 import SkeletonLines from '@/components/SkeletonLines.vue'
@@ -18,12 +18,12 @@ import type { ReviewThread } from '@/lib/pull'
 import { blobUrl } from '@/lib/refs'
 import { formatNumber } from '@/locale'
 import {
+  canTick,
   contentOf,
   diffOf,
   freshFile,
   pull,
   threadsByPath,
-  ticking,
   toggleViewed,
   viewedState,
   type PullFile,
@@ -397,22 +397,18 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
         />
       </UTooltip>
       <button
-        v-if="ticking"
         type="button"
-        class="tap inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] ring-1 transition-colors ring-inset"
+        class="tap inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] ring-1 transition-colors ring-inset disabled:opacity-50"
         :class="
           viewed === 'viewed'
             ? 'bg-elevated text-highlighted ring-accented'
-            : 'text-toned ring-default hover:bg-elevated hover:text-highlighted'
+            : 'text-toned ring-default enabled:hover:bg-elevated enabled:hover:text-highlighted'
         "
         :aria-pressed="viewed === 'viewed'"
-        @click="toggleViewed(file)"
+        :disabled="!canTick(file)"
+        @click="toggleViewed([file])"
       >
-        <UIcon
-          :name="viewed === 'viewed' ? 'i-octicon-check-circle-fill-16' : 'i-octicon-circle-16'"
-          class="size-4"
-          :class="viewed === 'viewed' && 'text-primary'"
-        />
+        <UIcon :name="tickLook(viewed === 'viewed').icon" class="size-4" :class="tickLook(viewed === 'viewed').color" />
         <span class="max-sm:sr-only">{{ t('pull.viewed') }}</span>
       </button>
     </header>

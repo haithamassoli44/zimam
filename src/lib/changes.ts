@@ -17,7 +17,7 @@ export interface FileChange {
   status: FileStatus
   additions: number
   deletions: number
-  /** The file's blob at the head, or at the base for a removed file. A viewed tick holds it, to see the file change. */
+  /** The file's blob at the head, or at the base for a removed file. */
   blob: string
 }
 
@@ -84,39 +84,74 @@ export async function readChanges(gh: GitHub, pull: Pull): Promise<{ changes: Ch
     }
     changes = { mergeBase: compared.mergeBase, files, capped: files.length >= PAGE * PAGES }
   }
-  const [attributes] = await readTexts(gh, repo, [blobAt(pull.headOid, '.gitattributes')])
-  return { changes, attributes: 'text' in attributes ? attributes.text : null }
+  const [{ content }] = await readTexts(gh, repo, [blobAt(pull.headOid, '.gitattributes')])
+  return { changes, attributes: 'text' in content ? content.text : null }
 }
 
-/** How many texts one read takes: 100 still cost a point. GitHub cuts a text off at 512,000 bytes. */
-export const TEXTS_PER_READ = 100
+/** How many blobs one read takes: 100 still cost a point. GitHub cuts a text off at 512,000 bytes. */
+export const BLOBS_PER_READ = 100
 
-/** The texts at `commit:path` expressions, in order: TEXTS_PER_READ at most. */
-export async function readTexts(gh: GitHub, repo: string, batch: string[]): Promise<Content[]> {
+/** A file's version at a commit is its blob's id, or NO_FILE where there's no such file there. */
+export const NO_FILE = ''
+
+/** What GitHub has at a `commit:path`: the file's text, or why there's none, and its version unless it can't say. */
+export interface Found {
+  content: Content
+  version: string | undefined
+}
+
+/** The texts at `commit:path` expressions, in order: BLOBS_PER_READ at most. A read that fails fails each of them. */
+export async function readTexts(gh: GitHub, repo: string, batch: string[]): Promise<Found[]> {
+  type Text = { text: string | null; isBinary: boolean; isTruncated: boolean; byteSize: number }
+  const blobs = await readBlobs<Text>(gh, repo, batch, 'text isBinary isTruncated byteSize').catch(() =>
+    batch.map(() => 'failed' as const),
+  )
+  return blobs.map((blob): Found => {
+    if (blob === 'failed') return { content: { failed: true }, version: undefined }
+    if (!blob) return { content: { missing: true }, version: NO_FILE }
+    if (blob.isBinary) return { content: { binary: true }, version: blob.oid }
+    if (blob.isTruncated) return { content: { tooBig: blob.byteSize }, version: blob.oid }
+    return { content: { text: blob.text ?? '' }, version: blob.oid }
+  })
+}
+
+/** The files' versions at `commit:path` expressions, without their texts, by expression: those GitHub could give. */
+export async function readVersions(gh: GitHub, repo: string, expressions: string[]): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  for (let start = 0; start < expressions.length; start += BLOBS_PER_READ) {
+    const batch = expressions.slice(start, start + BLOBS_PER_READ)
+    const blobs = await readBlobs(gh, repo, batch, '').catch(() => batch.map(() => 'failed' as const))
+    batch.forEach((at, index) => {
+      const blob = blobs[index]
+      if (blob !== 'failed') found.set(at, blob?.oid ?? NO_FILE)
+    })
+  }
+  return found
+}
+
+/** The blobs at `commit:path` expressions, in one query, with their ids and `fields`: null where there's no file. */
+async function readBlobs<T>(
+  gh: GitHub,
+  repo: string,
+  batch: string[],
+  fields: string,
+): Promise<((T & { oid: string }) | null | 'failed')[]> {
   const [owner, name] = repo.split('/')
   const variables: Record<string, string> = { owner, name }
-  const fields = batch.map((expression, index) => {
+  const asked = batch.map((expression, index) => {
     variables[`e${index}`] = expression
-    return `f${index}: object(expression: $e${index}) { ... on Blob { text isBinary isTruncated byteSize } }`
+    return `f${index}: object(expression: $e${index}) { ... on Blob { oid ${fields} } }`
   })
   const declared = batch.map((_, index) => `$e${index}: String!`).join(', ')
-  const query = `query($owner: String!, $name: String!, ${declared}) { repository(owner: $owner, name: $name) { ${fields.join(' ')} } }`
-  const { data, errors } = await gh.request<{
-    repository: Record<
-      string,
-      { text: string | null; isBinary: boolean; isTruncated: boolean; byteSize: number } | null
-    > | null
-  }>(query, variables)
-  // A text GitHub can't give comes back as an error at its place, beside the others.
+  const query = `query($owner: String!, $name: String!, ${declared}) { repository(owner: $owner, name: $name) { ${asked.join(' ')} } }`
+  const { data, errors } = await gh.request<{ repository: Record<string, (T & { oid: string }) | null> | null }>(
+    query,
+    variables,
+  )
+  // A blob GitHub can't give comes back as an error at its place, beside the others; without the repository, all fail.
+  if (!data.repository) return batch.map(() => 'failed' as const)
   const failed = new Set(errors.map((error) => error.path?.[1]))
-  return batch.map((_, index): Content => {
-    const blob = data.repository?.[`f${index}`]
-    if (failed.has(`f${index}`)) return { failed: true }
-    if (!blob) return { missing: true }
-    if (blob.isBinary) return { binary: true }
-    if (blob.isTruncated) return { tooBig: blob.byteSize }
-    return { text: blob.text ?? '' }
-  })
+  return batch.map((_, index) => (failed.has(`f${index}`) ? 'failed' : (data.repository?.[`f${index}`] ?? null)))
 }
 
 /** What each side of each file reads, as expressions: the old side at the merge base, the new side at the head. */

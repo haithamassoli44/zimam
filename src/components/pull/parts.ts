@@ -37,7 +37,7 @@ const ICONS: Record<PullPart, string> = {
 /**
  * The parts, in their order, with what's known of each. `count`: how many there are, or null while unknown. `fresh`:
  * how many are new since the last visit. `alert`: a look that asks for a look, as failing checks do. `viewed`: how
- * many files are viewed, where they take ticks.
+ * many files are viewed, once there are some.
  */
 interface Facts {
   count: number | null

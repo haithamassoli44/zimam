@@ -34,7 +34,7 @@ const emit = defineEmits<{ pick: [] }>()
     </button>
     <div
       v-if="$slots.actions"
-      class="absolute end-1 top-1/2 flex -translate-y-1/2 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 has-data-[state=open]:opacity-100 pointer-coarse:opacity-100"
+      class="absolute end-1 top-1/2 flex -translate-y-1/2 reveal has-data-[state=open]:opacity-100"
     >
       <slot name="actions" />
     </div>

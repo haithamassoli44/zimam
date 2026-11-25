@@ -73,16 +73,17 @@ export const kbds = (id: Id, index = 0) => keycaps(keysOf(id)[index])
 type Handler = (event: KeyboardEvent, index: number) => unknown
 
 /**
- * How what's on screen ranks: an open issue's panel before the page under it, and the page before what works
- * everywhere. Within a level, the latest shown is asked first.
+ * How what's on screen ranks: a part that answers only while the focus is in it, like the files tree's rows, first;
+ * then an open issue's panel before the page under it, and the page before what works everywhere. Within a level, the
+ * latest shown is asked first.
  */
-const LEVELS = ['panel', 'page', 'app'] as const
+const LEVELS = ['focus', 'panel', 'page', 'app'] as const
 type Level = (typeof LEVELS)[number]
 
 interface Layer {
   keys: Map<string, (event: KeyboardEvent) => unknown>
   level: Level
-  /** Where the part is: in a dialog, only the parts inside it answer. */
+  /** Where the part is: in a dialog, only parts inside it answer; at the focus level, only while it has the focus. */
   root?: Readonly<Ref<HTMLElement | null>>
 }
 
@@ -126,6 +127,9 @@ function nameOf(event: KeyboardEvent): string {
   return key
 }
 
+/** Whether a key comes with Ctrl, ⌘ or Alt: then it's the browser's or the system's. Shift makes a capital. */
+export const modified = (event: KeyboardEvent) => event.ctrlKey || event.metaKey || event.altKey
+
 /** Whether the page has no focus of its own: nothing, or the body. */
 export const nothingFocused = () => !document.activeElement || document.activeElement === document.body
 
@@ -158,14 +162,17 @@ const TYPING = 'input, textarea, select, [contenteditable]:not([contenteditable=
 const HOLDING = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]'
 
 addEventListener('keydown', (event) => {
-  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
+  if (event.defaultPrevented || event.isComposing || modified(event)) return
   if (nothingFocused() && SCROLLING.has(event.key)) return focusMain()
   const target = event.target instanceof Element ? event.target : null
   if (target?.closest(TYPING)) return
   const holder = target?.closest(HOLDING)
   const inside = (layer: Layer) => !!holder?.contains(layer.root?.value ?? null)
-  const hostsPart = layers.some(inside)
-  const answers = (layer: Layer) => !holder || inside(layer) || (layer.level === 'app' && hostsPart)
+  const hostsPart = layers.some((layer) => layer.level !== 'focus' && inside(layer))
+  const answers = (layer: Layer) =>
+    layer.level === 'focus'
+      ? !!target && !!layer.root?.value?.contains(target)
+      : !holder || inside(layer) || (layer.level === 'app' && hostsPart)
   const name = nameOf(event)
   const asked = LEVELS.flatMap((level) => layers.filter((layer) => layer.level === level).toReversed())
   for (const layer of asked) {
@@ -179,7 +186,7 @@ addEventListener('keydown', (event) => {
 /** The step an arrow key takes through a list: one down or up, or to its start or end. Null for any other key. */
 const STEPS: Record<string, 1 | -1 | 'start' | 'end'> = { ArrowDown: 1, ArrowUp: -1, Home: 'start', End: 'end' }
 export function stepOf(event: KeyboardEvent) {
-  return event.altKey || event.ctrlKey || event.metaKey ? null : (STEPS[event.key] ?? null)
+  return modified(event) ? null : (STEPS[event.key] ?? null)
 }
 
 /** ↓ and ↑ move the focus through a list's items, matched by `selector`, and Home and End to its ends. */

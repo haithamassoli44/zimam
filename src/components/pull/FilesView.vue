@@ -24,6 +24,7 @@ import ScopeCard from '@/components/pull/ScopeCard.vue'
 import SinceVisit from '@/components/pull/SinceVisit.vue'
 import { formatNumber } from '@/locale'
 import {
+  canTick,
   commitSteps,
   fileMode,
   filesState,
@@ -31,8 +32,8 @@ import {
   scope,
   setFileMode,
   shownFiles,
+  setViewed,
   stepCommits,
-  ticking,
   toggleViewed,
   viewedState,
 } from '@/stores/pull'
@@ -96,8 +97,8 @@ function step(by: -1 | 1) {
 
 function viewedAndNext() {
   const file = current.value
-  if (!file) return
-  if (ticking.value && viewedState(file) !== 'viewed') toggleViewed(file)
+  if (!file || !canTick(file)) return
+  if (viewedState(file) !== 'viewed') setViewed([file], true)
   step(1)
 }
 
@@ -142,7 +143,7 @@ useKeys({
   viewed: () => {
     const file = shownFiles.value.find((each) => each.path === activeFile.value)
     if (file && one.value) viewedAndNext()
-    else if (file) toggleViewed(file)
+    else if (file) toggleViewed([file])
   },
 })
 useMain(scroller)
@@ -306,9 +307,9 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
             color="neutral"
             variant="solid"
             size="sm"
-            :label="ticking ? t('pull.viewedNext') : t('pull.nextFile')"
+            :label="t('pull.viewedNext')"
             trailing-icon="i-octicon-arrow-right-16"
-            :disabled="!ticking && index >= shownFiles.length - 1"
+            :disabled="!canTick(current)"
             :ui="{ trailingIcon: 'rtl:-scale-x-100' }"
             @click="viewedAndNext"
           />

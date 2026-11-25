@@ -303,7 +303,7 @@
       "allChanges": "Show all changes",
       "changes": "Next or previous change",
       "files": "Next or previous file",
-      "viewed": "Mark the file viewed"
+      "viewed": "Mark the file viewed, or the file or folder focused in the files tree"
     }
   },
   "sync": {
@@ -449,7 +449,9 @@
     "generatedTag": "Generated",
     "onGitHub": "Open on GitHub",
     "viewed": "Viewed",
-    "unticked": "Changed since you viewed it, so it's no longer ticked",
+    "fileViewed": "{name} viewed",
+    "folderViewed": "Every file in {name} viewed",
+    "unticked": "Changed since you last viewed it",
     "looseThreads": "No threads off the current code | 1 thread on code that has since changed | {n} threads on code that has since changed",
     "binary": "Binary file, not shown",
     "tooBig": "Too big to show here.",

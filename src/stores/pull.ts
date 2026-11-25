@@ -6,9 +6,11 @@ import {
   blobAt,
   readChanges,
   readRange,
+  BLOBS_PER_READ,
+  NO_FILE,
   readTexts,
+  readVersions,
   sides,
-  TEXTS_PER_READ,
   type Changes,
   type Content,
   type FileChange,
@@ -19,6 +21,7 @@ import { generatedRules } from '@/lib/generated'
 import type { GitHub } from '@/lib/github'
 import { isPost, readPull, type Commit, type Pull, type ReviewThread } from '@/lib/pull'
 import { refKey, type IssueRef } from '@/lib/refs'
+import { BASE, changeKey, onAllChanges, readFile, tickFile, type FileTicks, type Reading } from '@/lib/ticks'
 import type { FileMode } from '@/types'
 
 import { client } from './data'
@@ -31,15 +34,16 @@ interface Seen {
   /** The last visit: when, and the head commit then. */
   at: number
   head: string
-  /** Viewed files, by path, with the blob that was viewed, or UNTICKED. */
-  viewed: Record<string, string>
+  /** The changes ticked viewed, by the file's path, as lib/ticks names them. */
+  ticked: Record<string, string[]>
+  /** Changes unticked by hand that would still read as viewed, by GitHub's tick or by other ticks leading there. */
+  unticked: Record<string, string[]>
   files?: FileMode
 }
 
-/** A file the reader unticked here, whatever GitHub says. */
-const UNTICKED = '-'
-// The pull requests a workspace remembers, the latest visited first.
-const REMEMBERED = 500
+// The pull requests a workspace remembers: the latest visited, as many as fit in about a megabyte, a share of the room
+// the browser gives the whole app.
+const ROOM = 1_000_000
 
 function readSeen(): Record<string, Seen> {
   try {
@@ -57,9 +61,13 @@ watch(
   },
 )
 watch(seenAll, () => {
-  const kept = Object.entries(seenAll)
-    .toSorted(([, a], [, b]) => b.at - a.at)
-    .slice(0, REMEMBERED)
+  const kept: [string, Seen][] = []
+  let used = 0
+  for (const entry of Object.entries(seenAll).toSorted(([, a], [, b]) => b.at - a.at)) {
+    used += entry[0].length + JSON.stringify(entry[1]).length
+    if (used > ROOM && kept.length) break
+    kept.push(entry)
+  }
   try {
     localStorage.setItem(seenKey(activeWorkspace.value?.id ?? ''), JSON.stringify(Object.fromEntries(kept)))
   } catch {
@@ -83,11 +91,17 @@ interface Session {
   runs: Read<CheckRuns>
   /** What each run of commits changed, by its key: ALL for the whole pull request. */
   changes: Map<string, Read<Changes>>
+  /** Those reads, by the same key, on their way or done. One that failed is asked again by whoever asks next. */
+  reads: Map<string, Promise<Changes | null>>
   /** The repository's .gitattributes at the head, for generated files. */
   attributes: string | null
   /** File texts by `commit:path`, and those asked for, here or on their way. */
   texts: Map<string, Content>
   asked: Set<string>
+  /** Files' versions by `commit:path`: read with their texts, or alone for the commits list's ticks. */
+  versions: Map<string, string>
+  /** Whether the commits list's reads have started. */
+  commitsRead: boolean
   textsDone: number
   textsTotal: number
   /** Files whose new side's text marks them generated, by path. */
@@ -107,9 +121,12 @@ function newSession(ref: IssueRef, gh: GitHub): Session {
     lastVisit: null,
     runs: null,
     changes: shallowReactive(new Map()),
+    reads: new Map(),
     attributes: null,
     texts: shallowReactive(new Map()),
     asked: new Set(),
+    versions: shallowReactive(new Map()),
+    commitsRead: false,
     textsDone: 0,
     textsTotal: 0,
     marked: shallowReactive(new Set()),
@@ -136,48 +153,74 @@ async function open(ref: IssueRef, gh: GitHub) {
     s.pull = 'failed'
     return
   }
+  if (session.value !== s) return
   const key = refKey(ref)
   const before = seenAll[key]
   if (!sessionVisits.has(key)) sessionVisits.set(key, before ? { at: before.at, head: before.head } : null)
   s.lastVisit = sessionVisits.get(key) ?? null
-  seenAll[key] = { ...before, viewed: before?.viewed ?? {}, at: Date.now(), head: pull.headOid }
+  seenAll[key] = {
+    ...before,
+    ticked: before?.ticked ?? {},
+    unticked: before?.unticked ?? {},
+    at: Date.now(),
+    head: pull.headOid,
+  }
   s.pull = pull
   if (pull.checks)
     readCheckRuns(gh, pull).then(
       (found) => (s.runs = found),
       () => (s.runs = 'failed'),
     )
-  // What the address shows first, then the whole pull request, which the marks since the last visit count in.
-  if (scope.value) void readRun(s, pull, scope.value)
-  void readRun(s, pull, null)
+  // What the address shows first, then the whole pull request, which the marks since the last visit count in, then
+  // what the commits list needs for its ticks, where the reader ticks commits.
+  if (scope.value) void changesOf(s, pull, scope.value)
+  const onCommits = !Object.values(seenAll[key].ticked).flat().every(onAllChanges)
+  void readWhole(s, pull).then(() => {
+    if (onCommits) void readCommits(s, pull)
+  })
 }
 
 export function reloadPull() {
   if (openPull.value && client.value) void open(openPull.value, client.value)
 }
 
-/** Reads what a run of commits changed, or the whole pull request (null), then its files' texts. Once a session. */
-async function readRun(s: Session, pull: Pull, run: Scope | null) {
-  const key = run?.key ?? ALL
-  if (s.changes.has(key)) return
-  s.changes.set(key, null)
-  let found: Changes
-  try {
-    if (run) found = await readRange(s.gh, pull.ref.repo, run.base, run.head)
-    else {
-      const answer = await readChanges(s.gh, pull)
-      s.attributes = answer.attributes
-      found = answer.changes
-    }
-  } catch {
-    s.changes.set(key, 'failed')
-    return
+/** What a run of commits changed, or the whole pull request (null): null when it can't be read. */
+function changesOf(s: Session, pull: Pull, run: Scope | null): Promise<Changes | null> {
+  const key = keyOf(run)
+  let read = s.reads.get(key)
+  if (!read) {
+    s.changes.set(key, null)
+    const asked = run
+      ? readRange(s.gh, pull.ref.repo, run.base, run.head)
+      : readChanges(s.gh, pull).then((answer) => {
+          s.attributes = answer.attributes
+          return answer.changes
+        })
+    read = asked.then(
+      (found) => (s.changes.set(key, found), found),
+      () => {
+        s.reads.delete(key)
+        s.changes.set(key, 'failed')
+        return null
+      },
+    )
+    s.reads.set(key, read)
   }
-  s.changes.set(key, found)
-  // Each file's two sides, and for the whole pull request its copy from the last visit, together, so the top of the
-  // page fills first.
-  const files = toFiles(s, found, run?.head ?? pull.headOid)
-  await readTextsInto(
+  return read
+}
+
+/** Reads what the whole pull request changed, then its files' texts. */
+async function readWhole(s: Session, pull: Pull) {
+  const found = await changesOf(s, pull, null)
+  if (found) await readTextsOf(s, pull, toFiles(s, found, pull.headOid), null)
+}
+
+/**
+ * Reads the texts of the files a run's diff shows, or all the changes': each file's two sides, and in all the changes
+ * its copy from the last visit, together, so the top of the page fills first.
+ */
+function readTextsOf(s: Session, pull: Pull, files: PullFile[], run: Scope | null) {
+  return readTextsInto(
     s,
     pull,
     files.flatMap((file) => [
@@ -197,23 +240,44 @@ async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null
   for (const { at } of fresh) s.asked.add(at)
   s.textsTotal += fresh.length
   const reads: (typeof fresh)[] = []
-  for (let start = 0, size = 24; start < fresh.length; start += size, size = TEXTS_PER_READ)
+  for (let start = 0, size = 24; start < fresh.length; start += size, size = BLOBS_PER_READ)
     reads.push(fresh.slice(start, start + size))
   await Promise.all(
     reads.map(async (read) => {
-      const answers: Content[] = await readTexts(
+      const answers = await readTexts(
         s.gh,
         pull.ref.repo,
         read.map((each) => each.at),
-      ).catch(() => read.map(() => ({ failed: true }) as const))
+      )
       read.forEach(({ at, path }, index) => {
-        const content = answers[index]
+        const { content, version } = answers[index]
         s.texts.set(at, content)
+        if (version !== undefined) s.versions.set(at, version)
         if (path && 'text' in content && isGenerated.value(path, content.text)) s.marked.add(path)
       })
       s.textsDone += read.length
     }),
   )
+}
+
+/**
+ * What each commit changed and its files' first versions, for the commits list's ticks: once a session, a commit at a
+ * time, then the versions without their texts. Commits GitHub listed only some files of never read viewed whole. Stops
+ * once another pull request opens.
+ */
+async function readCommits(s: Session, pull: Pull) {
+  if (s.commitsRead) return
+  s.commitsRead = true
+  const firsts: string[] = []
+  const coming = (at: string) => s.asked.has(at) && !s.texts.has(at)
+  for (const run of pull.commits.flatMap((_, index) => runOf(pull.commits, index, index) ?? [])) {
+    if (session.value !== s) return
+    const found = await changesOf(s, pull, run)
+    for (const file of found && !found.capped ? toFiles(s, found, run.head) : [])
+      if (file.oldAt && !s.versions.has(file.oldAt) && !coming(file.oldAt)) firsts.push(file.oldAt)
+  }
+  if (session.value !== s) return
+  for (const [at, version] of await readVersions(s.gh, pull.ref.repo, firsts)) s.versions.set(at, version)
 }
 
 // What the open session holds, as what's on screen reads it.
@@ -272,7 +336,7 @@ function comparePaths(a: string, b: string): number {
 /** A run's files, or the whole pull request's (null): read, on their way (null), or not to be had. */
 function filesOf(run: Scope | null): Read<PullFile[]> {
   const s = session.value
-  const found = s?.changes.get(run?.key ?? ALL)
+  const found = s?.changes.get(keyOf(run))
   if (!s || !pull.value || !found) return null
   return found === 'failed' ? 'failed' : toFiles(s, found, run?.head ?? pull.value.headOid)
 }
@@ -310,15 +374,21 @@ export const scope = computed<Scope | null>(() => {
     const after = at(before)
     from = after >= 0 ? after + 1 : commits[0].parent?.startsWith(before) ? 0 : -1
   } else from = to = at(last)
-  if (from < 0 || to < from) return null
-  const base = baseOf(commits, from)
-  if (!base) return null
-  const key = `${base}..${commits[to].oid}`
-  return { key, base, head: commits[to].oid, from, to, commits: commits.slice(from, to + 1) }
+  return from < 0 || to < from ? null : runOf(commits, from, to)
 })
+
+/** A run's key, or all the changes' (null). */
+const keyOf = (run: Scope | null) => run?.key ?? ALL
 
 /** Where a run starting at the `from`th commit starts: the commit before it. A root commit has none. */
 const baseOf = (commits: Commit[], from: number) => commits[from].parent ?? commits[from - 1]?.oid ?? null
+
+/** The run of commits from the `from`th to the `to`th, or null from a root commit. */
+function runOf(commits: Commit[], from: number, to: number): Scope | null {
+  const base = baseOf(commits, from)
+  const head = commits[to].oid
+  return base ? { key: `${base}..${head}`, base, head, from, to, commits: commits.slice(from, to + 1) } : null
+}
 
 /** Shows a run of commits, from the `from`th to the `to`th, or one alone. All of them shows all the changes. */
 export function showCommits(from: number, to = from) {
@@ -346,19 +416,25 @@ export function stepCommits(by: -1 | 1) {
   if (to !== null) showCommits(to)
 }
 
-watch(scope, (run) => {
-  const s = session.value
-  if (run && s && pull.value) void readRun(s, pull.value, run)
-})
-
 /** The files the diff can show: the pull request's, or those the commits shown changed. */
 const files = computed(() => filesOf(scope.value))
-export const filesState = computed(() => (files.value === 'failed' ? 'failed' : files.value ? 'ready' : 'loading'))
-/** GitHub listed only the first files of the changes shown. */
-export const filesCapped = computed(() => {
-  const found = session.value?.changes.get(scope.value?.key ?? ALL)
-  return !!found && found !== 'failed' && found.capped
+
+// The diff shown reads its files' texts once its files are known, whoever read them.
+watch(scope, (run) => {
+  const s = session.value
+  if (s && pull.value) void changesOf(s, pull.value, run)
 })
+watch(files, (found) => {
+  const s = session.value
+  if (s && pull.value && Array.isArray(found)) void readTextsOf(s, pull.value, found, scope.value)
+})
+export const filesState = computed(() => (files.value === 'failed' ? 'failed' : files.value ? 'ready' : 'loading'))
+/** Whether GitHub listed only the first files a run of commits changed, or the whole pull request (null). */
+function cappedOf(run: Scope | null) {
+  const found = session.value?.changes.get(keyOf(run))
+  return !!found && found !== 'failed' && found.capped
+}
+export const filesCapped = computed(() => cappedOf(scope.value))
 
 const listed = computed(() => (Array.isArray(files.value) ? files.value : []))
 export const generatedFiles = computed(() => listed.value.filter((file) => file.generated))
@@ -368,10 +444,9 @@ export const showGenerated = computed({
     if (session.value) session.value.showGenerated = value
   },
 })
-/** The files the tree and the diff show. */
-export const shownFiles = computed(() =>
-  showGenerated.value ? listed.value : listed.value.filter((file) => !file.generated),
-)
+/** Files as the tree and the diff show them: without the generated ones, unless asked for. */
+const shownOf = (found: PullFile[]) => (showGenerated.value ? found : found.filter((file) => !file.generated))
+export const shownFiles = computed(() => shownOf(listed.value))
 
 /** The pull request's lines added and removed, without generated files, whatever commits the diff shows. */
 export const totals = computed(() => sizeOf(allFiles.value))
@@ -499,37 +574,134 @@ export const freshCounts = computed(() => {
 
 const seenNow = computed(() => (openPull.value ? seenAll[refKey(openPull.value)] : undefined))
 
-/** Whether files take viewed ticks: a tick is for a file as the whole pull request leaves it, as on GitHub. */
-export const ticking = computed(() => !scope.value)
+/** A file's version at a `commit:path`, NO_FILE for a side it doesn't have, or undefined while it isn't known. */
+const versionAt = (s: Session, at: string | null) => (at === null ? NO_FILE : s.versions.get(at))
+/** A file's version as a diff leaves it. */
+const lastVersion = (file: PullFile) => (file.newAt ? file.blob : NO_FILE)
 
-type ViewedState = 'viewed' | 'changed' | null
+/** The pull request's own files, by path, and by the path a renamed one came from: all the changes start them. */
+const wholeFiles = computed(() => {
+  const byPath = new Map<string, PullFile>()
+  for (const file of allFiles.value) {
+    byPath.set(file.path, file)
+    if (file.oldPath) byPath.set(file.oldPath, file)
+  }
+  return byPath
+})
+
+/**
+ * A file's change in a run's diff, from its first version to its last, or in all the changes (null), from BASE. Null
+ * while a run's first version isn't known.
+ */
+function changeOf(s: Session, file: PullFile, run: Scope | null) {
+  const from = run ? versionAt(s, file.oldAt) : BASE
+  return from === undefined ? null : { from, to: lastVersion(file) }
+}
+
+/** A file's version at the pull request's base, once known. */
+function baseVersion(s: Session, file: PullFile) {
+  const whole = wholeFiles.value.get(file.path)
+  return whole && versionAt(s, whole.oldAt)
+}
 
 const viewedOnGitHub = computed(() => new Map(pull.value?.files.map((file) => [file.path, file.viewedOnGitHub])))
 
-/** Viewed, viewed but changed since (so no longer ticked), or not. GitHub's own tick counts too. */
-export function viewedState(file: PullFile): ViewedState {
-  if (!ticking.value) return null
-  const blob = seenNow.value?.viewed[file.path]
-  if (blob === UNTICKED) return null
-  if (blob) return blob === file.blob ? 'viewed' : 'changed'
-  const onGitHub = viewedOnGitHub.value.get(file.path)
-  if (onGitHub === 'VIEWED') return 'viewed'
-  if (onGitHub === 'DISMISSED') return 'changed'
-  return null
+/** GitHub's own tick on a file, which is on all the changes: VIEWED, DISMISSED once a change took it off, or none. */
+function gitHubOf(file: PullFile) {
+  const whole = wholeFiles.value.get(file.path)
+  return whole && { state: viewedOnGitHub.value.get(whole.path), at: lastVersion(whole) }
 }
 
-export function toggleViewed(file: PullFile) {
+// A file's ticks by path. Only a list is ticks: the record's object has names of its own, like `constructor`.
+function ticksAt(record: Record<string, string[]> | undefined, path: string | null | undefined): string[] {
+  const ticks = record && path ? record[path] : undefined
+  return Array.isArray(ticks) ? ticks : []
+}
+
+/** A file's own ticks, under its path in a diff. */
+function ownOf(file: PullFile): FileTicks {
   const seen = seenNow.value
-  if (!seen || !ticking.value) return
-  seen.viewed[file.path] = viewedState(file) === 'viewed' ? UNTICKED : file.blob
+  return { ticked: ticksAt(seen?.ticked, file.path), unticked: ticksAt(seen?.unticked, file.path) }
 }
 
-/** How many of the files shown are viewed, of how many, or null where files take no ticks. */
-export const viewed = computed(() =>
-  ticking.value
-    ? { n: shownFiles.value.filter((file) => viewedState(file) === 'viewed').length, of: shownFiles.value.length }
-    : null,
-)
+/** The ticks a file reads by besides its own: those under its names before or after a rename, and GitHub's own tick. */
+function othersOf(file: PullFile): string[] {
+  const whole = wholeFiles.value.get(file.path)
+  const names = new Set([file.oldPath, whole?.path, whole?.oldPath])
+  names.delete(file.path)
+  const ticks = [...names].flatMap((name) => ticksAt(seenNow.value?.ticked, name))
+  const onGitHub = gitHubOf(file)
+  return onGitHub?.state === 'VIEWED' ? [...ticks, changeKey(BASE, onGitHub.at)] : ticks
+}
+
+/** How a file's change in a run's diff, or all the changes' (null), reads, or undefined while that can't be told. */
+function readingOf(file: PullFile, run: Scope | null): Reading | undefined {
+  const s = session.value
+  const change = s && changeOf(s, file, run)
+  if (!s || !change) return undefined
+  return readFile(ownOf(file), othersOf(file), change, baseVersion(s, file), gitHubOf(file)?.state === 'DISMISSED')
+}
+
+const readings = computed(() => new Map(listed.value.map((file) => [file.path, readingOf(file, scope.value)])))
+
+/** How a file of the diff shown reads: viewed, viewed but changed since (so no longer ticked), or not. */
+export const viewedState = (file: PullFile): Reading => readings.value.get(file.path) ?? null
+/** Whether a file of the diff shown takes a tick: once its first version is known, in a run of commits. */
+export const canTick = (file: PullFile) => readings.value.get(file.path) !== undefined
+
+/** Ticks files of the diff shown viewed, or unticks them. A tick on a commit starts the commits list's reads. */
+export function setViewed(picked: PullFile[], on: boolean) {
+  const s = session.value
+  const seen = seenNow.value
+  const run = scope.value
+  if (!s || !seen) return
+  for (const file of picked) {
+    const change = changeOf(s, file, run)
+    if (!change) continue
+    const next = tickFile(ownOf(file), othersOf(file), change, baseVersion(s, file), on)
+    keep(seen.ticked, file.path, next.ticked)
+    keep(seen.unticked, file.path, next.unticked)
+  }
+  if (on && run && pull.value) void readCommits(s, pull.value)
+}
+
+/** Unticks files of the diff shown when they're all viewed, and ticks them otherwise. */
+export const toggleViewed = (picked: PullFile[]) => setViewed(picked, !allViewed(picked))
+
+// A file without ticks leaves no trace.
+function keep(record: Record<string, string[]>, path: string, ticks: readonly string[]) {
+  if (ticks.length) record[path] = [...ticks]
+  else delete record[path]
+}
+
+/** Whether files all read viewed by `read`. None isn't viewed. */
+const allOf = (found: PullFile[], read: (file: PullFile) => Reading | undefined) =>
+  found.length > 0 && found.every((file) => read(file) === 'viewed')
+
+/** Whether files of the diff shown all read viewed, as a folder's. */
+export const allViewed = (found: PullFile[]) => allOf(found, viewedState)
+
+/** How many of the files shown are viewed, of how many, once there are some. */
+export const viewed = computed(() => {
+  const of = shownFiles.value.length
+  return of ? { n: shownFiles.value.filter((file) => viewedState(file) === 'viewed').length, of } : null
+})
+
+/** Whether a run's diff, or all the changes', reads viewed whole: every file it shows, and none GitHub left out. */
+function viewedThrough(run: Scope | null) {
+  const found = filesOf(run)
+  return Array.isArray(found) && !cappedOf(run) && allOf(shownOf(found), (file) => readingOf(file, run))
+}
+
+/** Whether all the changes are viewed, and the commits viewed whole, of those whose changes are read. */
+export const viewedWhole = computed(() => {
+  const commits = pull.value?.commits ?? []
+  const done = commits.filter((_, index) => {
+    const run = runOf(commits, index, index)
+    return !!run && viewedThrough(run)
+  })
+  return { all: viewedThrough(null), commits: new Set(done.map((commit) => commit.oid)) }
+})
 
 /** One file at a time, or all in one scroll: this pull request's choice, or the setting. */
 export const fileMode = computed<FileMode>(() => seenNow.value?.files ?? settings.files)

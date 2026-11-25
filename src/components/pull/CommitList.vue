@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// The pull request's commits, newest last, with their checks and what's new since the last visit. Picking one
-// shows its changes alone in the diff, and Shift picks the run from the one picked before. All the changes come first.
+// The pull request's commits, newest last, with their checks, what's new since the last visit, and those viewed whole.
+// Picking one shows its changes alone in the diff, and Shift picks the run from the one picked before. All the changes
+// come first.
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import { useI18n } from 'vue-i18n'
 
@@ -9,18 +10,14 @@ import LineCounts from '@/components/LineCounts.vue'
 import { CHECK_LOOKS } from '@/components/looks'
 import PersonLink from '@/components/PersonLink.vue'
 import { toDiff } from '@/components/pull/navigation'
+import ViewedMark from '@/components/pull/ViewedMark.vue'
 import SkeletonLines from '@/components/SkeletonLines.vue'
 import TimeAgo from '@/components/TimeAgo.vue'
 import { commitUrl } from '@/lib/refs'
 import { formatNumber } from '@/locale'
-import { freshCommit, pull, scope, showAllChanges, showCommits, totals } from '@/stores/pull'
+import { freshCommit, pull, scope, showAllChanges, showCommits, totals, viewedWhole } from '@/stores/pull'
 
 const { t } = useI18n()
-
-const PICKED = 'bg-elevated before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary'
-// The row's button covers the row, under its links, so a click anywhere else on it picks.
-const COVER =
-  'min-w-0 flex-1 text-start after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-primary'
 
 // Where a run picked with Shift starts: the commit shown alone, or the one a run grew from.
 let anchor: number | null = null
@@ -49,14 +46,15 @@ const picked = (index: number) => !!scope.value && index >= scope.value.from && 
   <ul v-else class="pb-6 text-[13px]" @keydown="arrows">
     <li
       class="relative flex items-center gap-3 border-b border-default px-4 py-3 transition-colors"
-      :class="!scope ? PICKED : 'hover:bg-elevated/60'"
+      :class="!scope ? 'picked' : 'hover:bg-elevated/60'"
     >
       <UIcon name="i-octicon-diff-16" class="size-5 shrink-0 text-muted" />
-      <button type="button" :class="COVER" :aria-pressed="!scope" @click="all">
+      <button type="button" class="cover min-w-0 flex-1 text-start" :aria-pressed="!scope" @click="all">
         <span class="block font-medium text-highlighted">{{ t('pull.scope.all') }}</span>
         <span class="text-muted">
           {{ t('pull.filesCount', { n: formatNumber(totals.files) }, totals.files) }}
           <LineCounts :additions="totals.additions" :deletions="totals.deletions" class="ms-1 text-[12px]" />
+          <ViewedMark v-if="viewedWhole.all" class="ms-2" />
         </span>
       </button>
     </li>
@@ -64,7 +62,7 @@ const picked = (index: number) => !!scope.value && index >= scope.value.from && 
       v-for="(commit, index) in pull.commits"
       :key="commit.oid"
       class="relative flex items-start gap-3 border-b border-default px-4 py-3 transition-colors"
-      :class="picked(index) ? PICKED : 'hover:bg-elevated/60'"
+      :class="picked(index) ? 'picked' : 'hover:bg-elevated/60'"
     >
       <span
         v-if="freshCommit(commit)"
@@ -78,7 +76,12 @@ const picked = (index: number) => !!scope.value && index >= scope.value.from && 
         tabindex="-1"
         class="relative z-1 mt-0.5 flex shrink-0 rounded-full"
       />
-      <button type="button" :class="COVER" :aria-pressed="picked(index)" @click="pick(index, $event)">
+      <button
+        type="button"
+        class="cover min-w-0 flex-1 text-start"
+        :aria-pressed="picked(index)"
+        @click="pick(index, $event)"
+      >
         <bdi class="line-clamp-2 font-medium text-highlighted" dir="auto">{{ commit.headline }}</bdi>
         <span class="text-muted">
           <template v-if="commit.author.login !== pull.post.author?.login"
@@ -86,6 +89,7 @@ const picked = (index: number) => !!scope.value && index >= scope.value.from && 
           </template>
           <TimeAgo :at="commit.at" />
           <span v-if="freshCommit(commit)" class="ms-1 font-medium text-primary">{{ t('pull.new') }}</span>
+          <ViewedMark v-if="viewedWhole.commits.has(commit.oid)" class="ms-2" />
         </span>
       </button>
       <UIcon
