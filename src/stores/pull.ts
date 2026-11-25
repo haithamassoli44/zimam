@@ -105,10 +105,11 @@ interface Session {
   refreshing: Promise<boolean> | null
   refreshAgain: boolean
   /**
-   * The list's copy it was last read again for. The page can still be behind it after, as when GitHub's search runs
-   * ahead of the pull request: it isn't read again for the same copy, unless that read failed.
+   * The list's copy it was last read again for, the sync that brought it, and how many reads it had, until the page
+   * and the list agree. The page can still be behind it after a read, as when GitHub's search runs ahead of the pull
+   * request: it's read again on the next syncs, a few times.
    */
-  readFor: string | null
+  readFor: { copy: string; syncedAt: number | null; reads: number } | null
   /**
    * The checks and conflicts the list's copy had when the page's last read started, each until a copy agrees with the
    * page on it: a copy that differs from them and the page has news, where one that differs from the page alone is just
@@ -277,7 +278,7 @@ async function readAgain(s: Session): Promise<boolean> {
       // A tab out of sight reads it again for when it's back, which isn't a visit.
       if (inSight()) recordVisit(s, next)
       s.pull = next
-      s.listed = listed
+      s.listed = listedAfter(listed, s.listed, next)
       s.readAt = readAt
       readRuns(s, next)
       const run = scope.value
@@ -336,6 +337,20 @@ async function readWhole(s: Session, pull: Pull) {
 /** The checks and conflicts of the list's copy of a pull request, as far as it has one. */
 type ListStatus = Partial<Pick<Item, 'checks' | 'merge'>>
 const statusOf = (item: Item | undefined): ListStatus => (item ? { checks: item.checks, merge: item.merge } : {})
+
+/**
+ * What the next copies' news counts from after the page was read again: what the list's copy had as the read started,
+ * `started`, but what it counted from before, `before`, where the page came back without the list's news then, as when
+ * GitHub's pull request lags behind its list. That news stays news, for the next syncs to read it again.
+ */
+function listedAfter(started: ListStatus, before: ListStatus, page: Pull): ListStatus {
+  const after = { ...started }
+  if (!('checks' in started)) return after
+  const differ = differences({ checks: started.checks ?? null, merge: started.merge ?? null }, page)
+  if (differ.checks && 'checks' in before) after.checks = before.checks
+  if (differ.merge && 'merge' in before) after.merge = before.merge
+  return after
+}
 
 /** The list's copy of the pull request a ref names, before the page says its id. */
 function listCopy(ref: IssueRef): Item | undefined {
@@ -893,7 +908,7 @@ export function showThreadsFile(thread: ReviewThread) {
 const inSight = () => globalThis.document?.visibilityState !== 'hidden'
 
 /** Where the list's copy of the open pull request and the page differ in checks and conflicts. */
-function differences(item: Item, shown: Pull) {
+function differences(item: Pick<Item, 'checks' | 'merge'>, shown: Pull) {
   return { checks: item.checks !== shown.checks, merge: item.merge !== null && item.merge !== shown.merge }
 }
 
@@ -933,19 +948,32 @@ watch(
   },
 )
 
+// How many times the page is read for one copy of the list's, a sync apart, when each read leaves it behind.
+const READS = 3
+
 /** Reads the open pull request again when the list says it's behind, once its tab is in sight. */
 function catchUp() {
   const s = session.value
+  if (!s) return
   const copy = behindBy.value
-  if (!s || !copy || copy === s.readFor || !inSight()) return
-  s.readFor = copy
+  // Once the page and the list agree, the same news counts again, as checks that run again.
+  if (!copy) {
+    s.readFor = null
+    return
+  }
+  const last = s.readFor?.copy === copy ? s.readFor : null
+  const syncedAt = status.value.syncedAt
+  if ((last && (last.syncedAt === syncedAt || last.reads >= READS)) || !inSight()) return
+  const reading = { copy, syncedAt, reads: (last?.reads ?? 0) + 1 }
+  s.readFor = reading
   void refreshPull().then((done) => {
-    if (!done && s.readFor === copy) s.readFor = null
+    // A read that failed doesn't count.
+    if (!done && s.readFor === reading) s.readFor = { ...reading, reads: reading.reads - 1 }
   })
 }
 
 // Every sync reads the list's copy again: whichever comes first, the page or the copy, they're compared once both are
-// here, and again after each sync while a read for the copy failed.
+// here, and again after each sync while the page is behind it.
 watch([behindBy, () => status.value.syncedAt], catchUp)
 globalThis.document?.addEventListener('visibilitychange', catchUp)
 

@@ -572,14 +572,82 @@ describe('reading the open pull request again', () => {
     expect(github.pullReads).toBe(3)
   })
 
-  it("doesn't read it again after each sync when GitHub's pull request lags behind its list", async () => {
+  it("reads it again on the next syncs when GitHub's pull request lags behind its list, but only a few", async () => {
     await opened(pullAt('h1'))
     listed('2026-11-25T10:05:00Z')
     await flushPromises()
     expect(github.pullReads).toBe(2)
     expect(pull.value?.updatedAt).toBe('2026-11-25T10:00:00Z')
-    status.value.syncedAt = Date.now() + 120_000
+    const reads: number[] = []
+    for (let minutes = 1; minutes <= 4; minutes++) {
+      status.value.syncedAt = Date.now() + minutes * 60_000
+      await flushPromises()
+      reads.push(github.pullReads)
+    }
+    expect(reads).toEqual([3, 4, 4, 4])
+  })
+
+  it('reads it again on a later sync when a read for a newer copy came back behind it', async () => {
+    await opened(pullAt('h1'), pullAt('h1'), pullAt('h1', { updatedAt: '2026-11-25T10:05:00Z' }))
+    listed('2026-11-25T10:05:00Z')
     await flushPromises()
     expect(github.pullReads).toBe(2)
+    expect(pull.value?.updatedAt).toBe('2026-11-25T10:00:00Z')
+    status.value.syncedAt = Date.now() + 60_000
+    await flushPromises()
+    expect(github.pullReads).toBe(3)
+    expect(pull.value?.updatedAt).toBe('2026-11-25T10:05:00Z')
+  })
+
+  it('reads it again on the next syncs when a read comes back with older checks than the list', async () => {
+    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
+    await opened(
+      pullAt('h1', { checks: 'pending' }),
+      pullAt('h1', { checks: 'pending' }),
+      pullAt('h1', { checks: 'success' }),
+    )
+    // A sync: the checks finished, which GitHub's pull request doesn't say yet.
+    status.value.syncedAt = Date.now() + 60_000
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    expect(pull.value?.checks).toBe('pending')
+    status.value.syncedAt = Date.now() + 120_000
+    await flushPromises()
+    expect(github.pullReads).toBe(3)
+    expect(pull.value?.checks).toBe('success')
+    status.value.syncedAt = Date.now() + 180_000
+    await flushPromises()
+    expect(github.pullReads).toBe(3)
+  })
+
+  it('reads it again when the checks run again, after an earlier run ended as this one starts', async () => {
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    await opened(
+      pullAt('h1', { checks: 'success' }),
+      pullAt('h1', { checks: 'pending' }),
+      pullAt('h1', { checks: 'success' }),
+      pullAt('h1', { checks: 'pending' }),
+    )
+    expect(github.pullReads).toBe(1)
+    // A sync: the checks run.
+    status.value.syncedAt = Date.now() + 60_000
+    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    expect(pull.value?.checks).toBe('pending')
+    // They finish, and the reader reads it again before the next sync, which catches the list up.
+    await refreshPull()
+    expect(pull.value?.checks).toBe('success')
+    status.value.syncedAt = Date.now() + 120_000
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    await flushPromises()
+    expect(github.pullReads).toBe(3)
+    // They run again.
+    status.value.syncedAt = Date.now() + 180_000
+    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
+    await flushPromises()
+    expect(github.pullReads).toBe(4)
+    expect(pull.value?.checks).toBe('pending')
   })
 })
