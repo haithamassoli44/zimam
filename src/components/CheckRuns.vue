@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import CheckRow from '@/components/CheckRow.vue'
@@ -16,10 +16,27 @@ const { t } = useI18n()
 
 const answer = ref<CheckRuns | null>(null)
 const failed = ref(false)
-// Read once the popover opens, so only the checks someone looks at cost anything.
-checkRuns(props.item).then(
-  (runs) => (answer.value = runs),
-  () => (failed.value = true),
+// Read once the popover opens, so only the checks someone looks at cost anything, and again when a sync finds them
+// changed while it's open. What it shows stays until the new answer is in, and an answer to an earlier read is let go.
+// A sync makes items anew for other changes too, so only these say the checks may have changed.
+let reads = 0
+watch(
+  [() => props.item.id, () => props.item.updatedAt, () => props.item.checks],
+  ([id], before) => {
+    const read = ++reads
+    if (before && id !== before[0]) answer.value = null
+    failed.value = false
+    checkRuns(props.item).then(
+      (runs) => {
+        if (read === reads) answer.value = runs
+      },
+      // The runs already shown stay when reading them again fails.
+      () => {
+        if (read === reads && !answer.value) failed.value = true
+      },
+    )
+  },
+  { immediate: true },
 )
 
 const summary = computed(() => runsSummary(answer.value?.runs ?? []))
