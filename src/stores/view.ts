@@ -18,7 +18,7 @@ import { i18n } from '@/locale'
 import type { ItemKind, View } from '@/types'
 
 import { context, itemRef, items } from './data'
-import { activeWorkspace, WORKSPACE_PARAM } from './settings'
+import { activeWorkspace, settings, WORKSPACE_PARAM } from './settings'
 
 export const filters = reactive<Filters>(fromQuery(location.search))
 export const query = computed(() => toQuery(filters))
@@ -119,6 +119,8 @@ const OPENED = 'zimamIssue'
 const PAGE_LOAD = randomId()
 // Set while going back over that entry, until the browser gets there.
 let closing = false
+// The workspace going back or forward switched to, whose entry's filters stay when the switch resets them otherwise.
+let restoredWorkspace: string | null = null
 
 /**
  * Opens an issue beside the list, as a new entry in the browser's history, so Back closes it. One opened in its place
@@ -156,10 +158,18 @@ export function closeIssue() {
 
 addEventListener('popstate', () => {
   closing = false
+  // The entry's own workspace first: its filters, and what it opens, are that workspace's.
+  const named = new URLSearchParams(location.search).get(WORKSPACE_PARAM)
+  const switched = !!named && named !== activeWorkspace.value?.id && settings.workspaces.some((ws) => ws.id === named)
+  if (switched) {
+    restoredWorkspace = named
+    settings.activeWorkspaceId = named
+  }
   page.value = pageAt(location.pathname)
   // The same filters, as when an issue closes, would still be new lists: the list would look through every item again.
   const next = fromQuery(location.search)
   if (page.value === 'items' && toQuery(next) !== query.value) Object.assign(filters, next)
+  else if (page.value !== 'items' && switched) resetFilters()
   openIssue.value = page.value === 'items' ? issueAt(location.search) : null
   const pull = parsePullPath(location.pathname)
   openPull.value = pull?.ref ?? null
@@ -184,6 +194,10 @@ export function showItems(picked: Partial<Filters>) {
 watch(
   () => activeWorkspace.value?.id,
   (id, previous) => {
+    if (id === restoredWorkspace) {
+      restoredWorkspace = null
+      return
+    }
     if (previous && id !== previous) {
       resetFilters()
       openIssue.value = null
