@@ -486,7 +486,7 @@ export class Syncer {
    * as it takes: shorter times, down to a second, then fewer sources, then one kind, open or closed, then one
    * repository, as when a thousand issues change at once. What one of those still finds too many of goes into
    * `found.tooMany`. Each search counts and is saved as soon as it's done, so a long search shows what it finds as it
-   * goes and keeps it should it stop. Says whether it went through the time, or stopped short.
+   * goes and keeps it should it stop. Says how many changes GitHub counted, or that it stopped short.
    */
   private async findChanges(
     group: Source[],
@@ -495,32 +495,48 @@ export class Syncer {
     found: Found,
     whole = true,
     part: Part | null = null,
-  ): Promise<'all' | 'stopped'> {
+  ): Promise<number | 'stopped'> {
     // The first search runs to now, so it also finds what changed since this run started, which the next one looks at
     // again anyway. The parts of a time cut up end where it ends.
     const span = whole ? `>=${isoSecond(from)}` : `${isoSecond(from)}..${isoSecond(to)}`
     const q = [...group.map(qualifier), ...(part ? [partTerms(part)] : []), `updated:${span}`].join(' ')
     const items: Item[] = []
     let after: string | null = null
+    let count = 0
     do {
       if (this.stopped || !this.hasBudget(RESERVE)) return 'stopped'
       const data: Searched = await this.gh.query(SEARCH, { q, after })
-      const count = data.search.issueCount
+      count = data.search.issueCount
       if (count > SEARCH_MOST) {
-        // A second of one part of a source comes up again while it's in the time each search looks back over, where
-        // searching it all again would cost the most. Read again from its repositories, it has nothing new for the
-        // search: what changes after leaves the second. Searched repository by repository, it has only what the search
-        // indexed late, which makes it hold more.
-        const last = part && from === to
-        const done = last ? this.cache.crowded?.[q] : undefined
-        if (done && (done.count === null || count <= done.count)) return 'all'
+        // A second of one part of a source comes up again while it's in the time each search looks back over. Read
+        // again from its repository, it has nothing new for the search: the read had all of its changes, those the
+        // search indexes late too, and what changes after leaves the second.
+        const crowded = !!part && from === to
+        const done = crowded ? this.cache.crowded?.[q] : undefined
+        if (done && !done.repos) return count
         const searches = narrower({ sources: group, from, to, part }, count, (source) => this.reposIn(source))
-        if (!searches.length && part) found.tooMany.push({ source: group[0], ...part })
-        for (const each of searches)
-          if ((await this.findChanges(each.sources, each.from, each.to, found, false, each.part)) === 'stopped')
-            return 'stopped'
-        if (last) found.crowded[q] = { second: from, count: searches.length ? count : null }
-        return 'all'
+        if (!searches.length && part) {
+          found.tooMany.push({ source: group[0], ...part })
+          found.crowded[q] = { second: from, repos: null }
+          return count
+        }
+        // Searched repository by repository, it's searched so again, as the search may have indexed some of its changes
+        // late, whether or not it holds more: in the repositories that held its changes, then in the others, unless
+        // those still hold all it does.
+        const repoOf = (search: ChangesSearch) => search.sources[0].name
+        const held = done?.repos
+        const first = held ? searches.filter((each) => held.includes(repoOf(each))) : searches
+        const holding: string[] = []
+        let counted = 0
+        for (const each of [...first, ...searches.filter((other) => !first.includes(other))]) {
+          if (!first.includes(each) && counted >= count) break
+          const counts = await this.findChanges(each.sources, each.from, each.to, found, false, each.part)
+          if (counts === 'stopped') return 'stopped'
+          counted += counts
+          if (counts) holding.push(repoOf(each))
+        }
+        if (crowded) found.crowded[q] = { second: from, repos: holding }
+        return count
       }
       for (const node of data.search.nodes) if (node && 'id' in node) items.push(toItem(node as RawItem))
       after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null
@@ -530,7 +546,7 @@ export class Syncer {
       found.changed = this.put(items.filter((item) => this.store.repos.has(item.repoId))) || found.changed
       await this.save(true)
     }
-    return 'all'
+    return count
   }
 
   /** The repositories a source of several brings, as sources of their own, to search one by one. */
@@ -931,7 +947,8 @@ const partTerms = ({ kind, open }: Part) => `is:${KINDS[kind].item} is:${open ? 
 
 /**
  * What a search for changes found, whether what it already counted changed anything, the parts of a source that
- * changed more in one second than a search lists, and the searches of such a second that are done with, by query.
+ * changed more in one second than a search lists, to read again from the repositories, and the searches of such
+ * seconds, by query, as the cache keeps them.
  */
 type Found = {
   items: Item[]

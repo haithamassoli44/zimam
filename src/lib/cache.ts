@@ -33,11 +33,11 @@ export interface Cache {
    */
   openHidden?: Record<string, Item['kind'][]>
   /**
-   * The searches of a second that held more changes than a search lists, by query, once the changes were found
-   * repository by repository, with how many the search found then, or read again from the repositories (null): later
-   * searches over that second leave them, unless the search finds more. Missing from a cache saved before it was kept.
+   * The searches of a second of one part of a source that held more changes than a search lists, by query: the second,
+   * and the repositories that held its changes when it was searched repository by repository, or null when even one
+   * did, so its changes were read again from it. Missing from a cache saved before it was kept.
    */
-  crowded?: Record<string, { second: number; count: number | null }>
+  crowded?: Record<string, { second: number; repos: string[] | null }>
   /** Each repository's closed history: a cursor to resume from, or `true` once complete. */
   history: Record<string, { issues?: string | true; prs?: string | true }>
   /** Whose token reads the workspace, and the open pull requests that ask them for a review. */
