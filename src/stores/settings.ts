@@ -1,9 +1,15 @@
 import { computed, reactive, watch } from 'vue'
 
 import { defaultFilters, fromQuery, toQuery, type Filters } from '@/lib/filters'
+import type { Post } from '@/lib/issue'
 import { COUNTS } from '@/lib/repos'
 import { randomId } from '@/lib/text'
 import {
+  BOT_POSTS,
+  type BotPosts,
+  DIFF_VIEWS,
+  FILE_MODES,
+  LONG_LINES,
   DENSITIES,
   INVOLVEMENTS,
   LOCALES,
@@ -30,6 +36,12 @@ function defaults(): Settings {
   const arabic = globalThis.navigator?.languages?.some((language) => language.startsWith('ar')) ?? false
   return {
     version: VERSION,
+    bots: 'collapse',
+    longLines: 'scroll',
+    diffView: 'split',
+    files: 'all',
+    ignoreSpace: true,
+    generated: [],
     locale: arabic ? 'ar' : 'en',
     theme: 'system',
     density: 'comfortable',
@@ -67,6 +79,12 @@ function parse(raw: unknown): Settings {
   }
   return {
     version: VERSION,
+    bots: pick(BOT_POSTS, data.bots, base.bots),
+    longLines: pick(LONG_LINES, data.longLines, base.longLines),
+    diffView: pick(DIFF_VIEWS, data.diffView, base.diffView),
+    files: pick(FILE_MODES, data.files, base.files),
+    ignoreSpace: typeof data.ignoreSpace === 'boolean' ? data.ignoreSpace : base.ignoreSpace,
+    generated: isIds(data.generated) ? data.generated : base.generated,
     locale: pick(LOCALES, data.locale, base.locale),
     theme: pick(THEMES, data.theme, base.theme),
     density: pick(DENSITIES, data.density, base.density),
@@ -124,6 +142,13 @@ try {
 
 const loaded = read(stored)
 export const settings = reactive<Settings>(loaded ?? defaults())
+
+/** How a post shows, by its author: a bot's as Settings say, anyone else's in full. */
+export const postLook = (author: { bot: boolean } | null | undefined): BotPosts =>
+  author?.bot ? settings.bots : 'show'
+/** Whether a post shows folded to a line: hidden on GitHub, or a bot's that Settings fold. */
+export const postFolds = (post: Pick<Post, 'author' | 'hidden'>, look = postLook(post.author)) =>
+  post.hidden !== null || look === 'collapse'
 
 // What this tab last wrote or took from another tab. Writing that back would bounce between tabs that have
 // different workspaces open.

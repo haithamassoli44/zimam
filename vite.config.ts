@@ -61,7 +61,8 @@ export default defineConfig(({ command }) => ({
         kbd: { base: 'font-mono font-normal' },
       },
       // Only bundled icons are allowed: the page may not call the Iconify API.
-      icon: { clientBundle: { scan: true, icons: Object.values(uiIcons) } },
+      // The scan reads .ts too: icons named in tables like components/looks.ts appear in no template.
+      icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] }, icons: Object.values(uiIcons) } },
       experimental: { componentDetection: command === 'build' },
     }),
     VueI18nPlugin({ include: fileURLToPath(new URL('./src/locales/*.json', import.meta.url)) }),

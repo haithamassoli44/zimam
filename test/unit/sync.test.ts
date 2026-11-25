@@ -91,6 +91,7 @@ function fakeGitHub() {
   const gh: GitHub = {
     scopes: () => ['repo'],
     rate: () => null,
+    rest: () => Promise.reject(new Error('unused')),
     async probe(path: string) {
       state.calls.push('probe')
       state.probed.push(path)
@@ -283,6 +284,7 @@ describe('Syncer', () => {
     const gh: GitHub = {
       scopes: () => ['repo'],
       rate: () => null,
+      rest: () => Promise.reject(new Error('unused')),
       probe: async () => 'same',
       request: async () => ({ data: null as never, errors: [] }),
       async query<T>(text: string, variables: Record<string, unknown> = {}): Promise<T> {

@@ -7,6 +7,7 @@ import BrandMark from '@/components/BrandMark.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import IssuePanel from '@/components/IssuePanel.vue'
 import ItemList from '@/components/ItemList.vue'
+import PullPage from '@/components/pull/PullPage.vue'
 import ReposPage from '@/components/ReposPage.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import SideBar from '@/components/SideBar.vue'
@@ -19,7 +20,11 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <div class="flex h-dvh">
+  <template v-if="page === 'pull'">
+    <PullPage />
+    <SettingsPanel />
+  </template>
+  <div v-else class="flex h-dvh">
     <aside class="hidden w-66 shrink-0 border-e border-default bg-muted lg:flex">
       <SideBar />
     </aside>

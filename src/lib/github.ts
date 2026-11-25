@@ -50,6 +50,8 @@ export interface GitHub {
    * answer against any limit, and none of these count against the GraphQL points the rest of the sync spends.
    */
   probe(path: string): Promise<Probe>
+  /** Reads a REST address. GitHub counts these against its REST allowance, apart from the GraphQL points. */
+  rest<T>(path: string): Promise<T>
   /** The token's classic OAuth scopes, or null for fine-grained tokens, which report none. */
   scopes(): string[] | null
   /** The hourly allowance as of the last answer, or null before the first and once that hour is over. */
@@ -158,6 +160,28 @@ export function createGitHub(token: string): GitHub {
     })
   }
 
+  function rest<T>(path: string): Promise<T> {
+    return slot(async () => {
+      let response: Response
+      try {
+        response = await fetch(`${API}${path}`, {
+          headers: { Authorization: `bearer ${token}`, Accept: 'application/vnd.github+json' },
+          signal: AbortSignal.timeout(TIMEOUT),
+        })
+      } catch {
+        throw new GitHubError('network', 'network')
+      }
+      if (response.status === 401) throw new GitHubError('Bad credentials', 'auth')
+      if (response.status === 403 || response.status === 429) {
+        if (response.status === 429 || retryTime(response)) throw rateLimited('Rate limited', response)
+        throw new GitHubError('Forbidden', 'auth')
+      }
+      if (response.status === 404) throw new GitHubError('Not found', 'query')
+      if (!response.ok) throw new GitHubError(`GitHub answered ${response.status}`, 'server')
+      return (await response.json()) as T
+    })
+  }
+
   function readHeaders(headers: Headers) {
     const oauthScopes = headers.get('x-oauth-scopes')
     if (oauthScopes !== null)
@@ -183,6 +207,7 @@ export function createGitHub(token: string): GitHub {
     query,
     request,
     probe,
+    rest,
     scopes: () => scopes,
     // Once the hour it describes is over, the allowance is full again whatever it said.
     rate: () => (rate && Date.now() < rate.resetAt ? rate : null),

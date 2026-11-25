@@ -31,7 +31,7 @@ type Role = (typeof ROLES)[number]
 const HIDDEN = ['abuse', 'offTopic', 'outdated', 'resolved', 'duplicate', 'spam', 'other'] as const
 type Hidden = (typeof HIDDEN)[number]
 
-interface Author extends Person {
+export interface Author extends Person {
   bot: boolean
 }
 
@@ -72,20 +72,22 @@ export class IssueMissing extends Error {}
 
 // A page of comments as large as still costs one point, with the issue around the first.
 const PAGE = 100
+/** Who wrote something, and whether a bot did. */
+export const AUTHOR_FIELDS = `kind: __typename ${PERSON}`
+/** A post's fields, as toPost() reads them: a comment, or (PROTOTYPE) a pull request's review or thread comment. */
+export const POST_FIELDS = `id url createdAt lastEditedAt isMinimized minimizedReason authorAssociation bodyHTML author { ${AUTHOR_FIELDS} }`
+
 const COMMENTS = `
   totalCount
   pageInfo { hasNextPage endCursor }
-  nodes {
-    id url createdAt lastEditedAt isMinimized minimizedReason authorAssociation bodyHTML
-    author { kind: __typename ${PERSON} }
-  }`
+  nodes { ${POST_FIELDS} }`
 
 const ISSUE = `
   query($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
       issue(number: $number) {
         id url title state stateReason createdAt lastEditedAt authorAssociation bodyHTML
-        author { kind: __typename ${PERSON} }
+        author { ${AUTHOR_FIELDS} }
         ${LABELS}
         ${ASSIGNEES}
         comments(first: ${PAGE}) { ${COMMENTS} }
@@ -140,7 +142,7 @@ interface RawIssue {
   comments: RawComments
 }
 
-const toAuthor = (raw: RawAuthor | null): Author | null =>
+export const toAuthor = (raw: RawAuthor | null): Author | null =>
   raw && { login: raw.login, avatarUrl: raw.avatarUrl, bot: raw.kind === 'Bot' }
 
 const toRole = (association: string): Role | null => {
@@ -157,7 +159,7 @@ function toHidden(raw: RawComment): Hidden | null {
   return (HIDDEN as readonly string[]).includes(reason) ? (reason as Hidden) : 'other'
 }
 
-const toPost = (raw: RawComment): Post => ({
+export const toPost = (raw: RawComment): Post => ({
   id: raw.id,
   url: raw.url,
   author: toAuthor(raw.author),

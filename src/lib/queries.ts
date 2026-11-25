@@ -256,7 +256,7 @@ export function toStatus(raw: RawStatus, open: boolean): Pick<Item, (typeof STAT
 }
 
 // GitHub gives no decision where the branch doesn't require a review, even after someone approves.
-function toReview(raw: Pick<RawItem, 'isDraft' | 'reviewDecision'>): Review {
+export function toReview(raw: Pick<RawItem, 'isDraft' | 'reviewDecision'>): Review {
   if (raw.isDraft) return 'draft'
   if (raw.reviewDecision === 'APPROVED') return 'approved'
   if (raw.reviewDecision === 'CHANGES_REQUESTED') return 'changes'
@@ -264,7 +264,7 @@ function toReview(raw: Pick<RawItem, 'isDraft' | 'reviewDecision'>): Review {
   return 'optional'
 }
 
-function toMerge(raw: Pick<RawItem, 'mergeable'>): Merge | null {
+export function toMerge(raw: Pick<RawItem, 'mergeable'>): Merge | null {
   if (raw.mergeable === 'CONFLICTING') return 'conflicts'
   if (raw.mergeable === 'MERGEABLE') return 'clean'
   return null

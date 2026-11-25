@@ -117,7 +117,7 @@ const FRESH = 60_000
 const recentFor = new WeakMap<GitHub, Map<string, { key: string; at: number; answer: Promise<CheckRuns> }>>()
 
 /** Reads the checks on a pull request's last commit. Each read costs a point. */
-export function readCheckRuns(gh: GitHub, item: Item): Promise<CheckRuns> {
+export function readCheckRuns(gh: GitHub, item: Pick<Item, 'id' | 'updatedAt' | 'checks'>): Promise<CheckRuns> {
   const recent = recentFor.get(gh) ?? new Map()
   recentFor.set(gh, recent)
   const key = `${item.updatedAt} ${item.checks}`

@@ -6,8 +6,8 @@ import { randomId } from '@/lib/text'
 import { i18n } from '@/locale'
 import type { View } from '@/types'
 
-import { context, items } from './data'
-import { activeWorkspace, WORKSPACE_PARAM } from './settings'
+import { context, itemRef, items } from './data'
+import { activeWorkspace, settings, WORKSPACE_PARAM } from './settings'
 
 export const filters = reactive<Filters>(fromQuery(location.search))
 export const query = computed(() => toQuery(filters))
@@ -16,15 +16,49 @@ export const query = computed(() => toQuery(filters))
 export type Page = 'items' | 'repos'
 
 const BASE = import.meta.env.BASE_URL
-const pageAt = (path: string): Page => (path.replace(/\/+$/, '') === `${BASE}repos` ? 'repos' : 'items')
 
-export const page = ref<Page>(pageAt(location.pathname))
+// PROTOTYPE: a pull request's address is GitHub's, on Zimam's host: swap the host of any pull request link to open it.
+// Its last segment names the part beside the diff, as GitHub's names its tab; the conversation has none.
+export const PULL_PARTS = ['files', 'conversation', 'commits', 'checks'] as const
+export type PullPart = (typeof PULL_PARTS)[number]
+const PULL_PATH = new RegExp(
+  `^/([\\w.-]+)/([\\w.-]+)/pull/([1-9]\\d{0,8})(?:/(${PULL_PARTS.filter((part) => part !== 'conversation').join('|')}))?/?$`,
+)
+function pullAt(path: string): { ref: IssueRef; part: PullPart } | null {
+  const match = PULL_PATH.exec(path.slice(BASE.length - 1))
+  return match
+    ? {
+        ref: { repo: `${match[1]}/${match[2]}`, number: Number(match[3]) },
+        part: (match[4] as PullPart) ?? 'conversation',
+      }
+    : null
+}
+
+/** A page, or (PROTOTYPE) a pull request's own page. */
+const pageAt = (path: string): Page | 'pull' =>
+  pullAt(path) ? 'pull' : path.replace(/\/+$/, '') === `${BASE}repos` ? 'repos' : 'items'
+
+export const page = ref<Page | 'pull'>(pageAt(location.pathname))
 
 const ISSUE_PARAM = 'issue'
 const issueAt = (search: string) => parseRef(new URLSearchParams(search).get(ISSUE_PARAM))
 
 /** The issue read beside the list. The list's address names it too. */
 export const openIssue = ref<IssueRef | null>(page.value === 'items' ? issueAt(location.search) : null)
+
+/** The pull request on its own page, and the part of it shown beside the diff. */
+export const openPull = ref<IssueRef | null>(pullAt(location.pathname)?.ref ?? null)
+export const pullPart = ref<PullPart>(pullAt(location.pathname)?.part ?? 'conversation')
+
+// PROTOTYPE: opened by its address alone, a pull request opens in the workspace that brings its repository.
+if (openPull.value && !new URLSearchParams(location.search).get(WORKSPACE_PARAM)) {
+  const repo = openPull.value.repo.toLowerCase()
+  const owner = repo.split('/')[0]
+  const ws = settings.workspaces.find((each) =>
+    each.sources.some((source) => source.name.toLowerCase() === (source.kind === 'repo' ? repo : owner)),
+  )
+  if (ws) settings.activeWorkspaceId = ws.id
+}
 
 function address(ws: string | undefined, search: string, issue: IssueRef | null = null): string {
   const params = new URLSearchParams(ws ? { [WORKSPACE_PARAM]: ws } : {})
@@ -38,12 +72,18 @@ function link(to: Page, ws: string | undefined, search: string, issue: IssueRef 
   return to === 'repos' ? `${BASE}repos${address(ws, '')}` : `${BASE}${address(ws, search, issue)}`
 }
 
+const pullLink = (pull: IssueRef, part: PullPart, ws: string | undefined) =>
+  `${BASE}${pull.repo}/pull/${pull.number}${part === 'conversation' ? '' : `/${part}`}${address(ws, '')}`
+
 // Keeps the entry's state, which says whether opening the issue added the entry: see closeIssue().
 watch(
-  [query, () => activeWorkspace.value?.id, page, openIssue],
-  ([search, ws, current, issue]) => {
-    const next = link(current, ws, search, issue)
-    if (next !== location.pathname + location.search) history.replaceState(history.state, '', next)
+  [query, () => activeWorkspace.value?.id, page, openIssue, openPull, pullPart],
+  ([search, ws, current, issue, pull, part]) => {
+    const next =
+      current === 'pull' && pull
+        ? pullLink(pull, part, ws)
+        : link(current === 'pull' ? 'items' : current, ws, search, issue)
+    if (next !== location.pathname + location.search) history.replaceState(history.state, '', next + location.hash)
   },
   { immediate: true },
 )
@@ -53,7 +93,29 @@ export function go(to: Page) {
   if (page.value === to) return
   page.value = to
   openIssue.value = null
+  openPull.value = null
   history.pushState(null, '', link(to, activeWorkspace.value?.id, query.value))
+}
+
+// PROTOTYPE: what an entry added by opening a pull request from the list remembers, so its Back goes back to the list.
+const FROM_LIST = 'zimamPull'
+
+/** Opens a pull request on its own page. One opened from another pull request's page takes over its entry. */
+export function showPull(pull: IssueRef, part: PullPart = 'conversation') {
+  const replace = page.value === 'pull'
+  openIssue.value = null
+  openPull.value = pull
+  pullPart.value = part
+  page.value = 'pull'
+  const next = pullLink(pull, part, activeWorkspace.value?.id)
+  if (replace) history.replaceState(history.state, '', next)
+  else history.pushState({ [FROM_LIST]: PAGE_LOAD }, '', next)
+}
+
+/** Leaves the pull request for the list it was opened from, or the list when it was opened by its address. */
+export function leavePull() {
+  if (history.state?.[FROM_LIST] === PAGE_LOAD) history.back()
+  else go('items')
 }
 
 // What an entry added by opening an issue remembers: the page load that added it, and the filters it was opened over.
@@ -102,6 +164,9 @@ addEventListener('popstate', () => {
   page.value = pageAt(location.pathname)
   if (page.value === 'items') Object.assign(filters, fromQuery(location.search))
   openIssue.value = page.value === 'items' ? issueAt(location.search) : null
+  const pull = pullAt(location.pathname)
+  openPull.value = pull?.ref ?? null
+  if (pull) pullPart.value = pull.part
 })
 
 /** The address of the list with these filters, on top of the defaults. */
@@ -196,3 +261,15 @@ export function deleteView(view: View) {
 export function viewLink(view: View): string {
   return `${location.origin}${link('items', activeWorkspace.value?.id, view.query)}`
 }
+
+// PROTOTYPE: moving between the list's pull requests, from one's page.
+
+const listed = computed(() => result.value.items.flatMap((item) => (item.kind === 'pr' ? (itemRef(item) ?? []) : [])))
+const position = computed(() => listed.value.findIndex((each) => sameRef(each, openPull.value)))
+export const neighbors = computed(() => ({
+  previous: position.value > 0 ? listed.value[position.value - 1] : null,
+  next: position.value >= 0 ? (listed.value[position.value + 1] ?? null) : null,
+  at: position.value,
+  of: listed.value.length,
+}))
+export const movePull = (to: IssueRef | null) => to && showPull(to, pullPart.value)

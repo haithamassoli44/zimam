@@ -16,3 +16,15 @@ _api.setAPIModule('', {
 })
 
 createApp(App).use(ui).use(i18n).mount('#app')
+
+// PROTOTYPE: on a fresh origin, start with a Nuxt workspace read with this machine's gh token, so pull requests open at once.
+if (import.meta.env.DEV) {
+  void (async () => {
+    const { settings, createWorkspace } = await import('./stores/settings')
+    if (settings.workspaces.length) return
+    const { DEV_TOKEN_PATH } = await import('./dev')
+    const response = await fetch(DEV_TOKEN_PATH)
+    if (!response.ok) return
+    createWorkspace({ name: 'Nuxt', token: (await response.text()).trim(), sources: [{ kind: 'org', name: 'nuxt' }] })
+  })()
+}

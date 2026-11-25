@@ -60,9 +60,29 @@ export interface Workspace {
   pinned: string[]
 }
 
+// PROTOTYPE: the pull request page's settings.
+export const BOT_POSTS = ['show', 'collapse', 'hide'] as const
+export const LONG_LINES = ['wrap', 'scroll'] as const
+export const DIFF_VIEWS = ['split', 'unified'] as const
+export const FILE_MODES = ['all', 'one'] as const
+export type BotPosts = (typeof BOT_POSTS)[number]
+export type LongLines = (typeof LONG_LINES)[number]
+export type DiffView = (typeof DIFF_VIEWS)[number]
+export type FileMode = (typeof FILE_MODES)[number]
+
 export interface Settings {
   /** Which of the changes in settings.ts these settings have had. */
   version: number
+  /** How posts by bots show: as any other, folded to a line, or not at all. */
+  bots: BotPosts
+  longLines: LongLines
+  diffView: DiffView
+  /** Every changed file in one scroll, or one at a time. A pull request can override it. */
+  files: FileMode
+  /** Hide changes in whitespace alone. */
+  ignoreSpace: boolean
+  /** Paths to treat as generated, besides GitHub's own list and each repository's .gitattributes. */
+  generated: string[]
   locale: Locale
   theme: Theme
   density: Density

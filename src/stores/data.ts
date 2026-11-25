@@ -1,10 +1,12 @@
 import { computed, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 
 import { deleteCache } from '@/lib/cache'
+import { readChanges, readTexts, type Changes, type Content } from '@/lib/changes'
 import { readCheckRuns, type CheckRuns } from '@/lib/checks'
 import type { Context } from '@/lib/filters'
 import { createGitHub, type GitHub } from '@/lib/github'
 import { readIssue, readMoreComments, type Thread } from '@/lib/issue'
+import { readPull, type Pull } from '@/lib/pull'
 import type { IssueRef } from '@/lib/refs'
 import { idleStatus, syncKey, Syncer, TICK, type SyncStatus, type SyncStore } from '@/lib/sync'
 import { noOne, type Item, type Me, type Repo, type Workspace } from '@/types'
@@ -28,11 +30,14 @@ export const loaded = ref(false)
 export const owners = computed(() => new Map([...repos.value.values()].map((repo) => [repo.owner, repo.ownerAvatar])))
 const oneOwner = computed(() => owners.value.size <= 1)
 
-/** Where a listed issue lives, or null for a pull request or a repository that isn't loaded. */
-export function issueRef(item: Item): IssueRef | null {
+/** Where a listed item lives, or null for a repository that isn't loaded. */
+export function itemRef(item: Item): IssueRef | null {
   const repo = repos.value.get(item.repoId)
-  return item.kind === 'issue' && repo ? { repo: repo.fullName, number: item.number } : null
+  return repo ? { repo: repo.fullName, number: item.number } : null
 }
+
+/** Where a listed issue lives, or null for a pull request or a repository that isn't loaded. */
+export const issueRef = (item: Item): IssueRef | null => (item.kind === 'issue' ? itemRef(item) : null)
 
 export function displayRepo(fullName: string): string {
   return oneOwner.value ? (fullName.split('/')[1] ?? fullName) : fullName
@@ -135,7 +140,7 @@ export function syncNow(manual = false) {
 }
 
 /** The checks on an open pull request's last commit, read from GitHub when asked for. */
-export function checkRuns(item: Item): Promise<CheckRuns> {
+export function checkRuns(item: Pick<Item, 'id' | 'updatedAt' | 'checks'>): Promise<CheckRuns> {
   if (!github) return Promise.reject(new Error('No workspace'))
   return readCheckRuns(github, item)
 }
@@ -149,6 +154,24 @@ export function issueThread(issue: IssueRef, version?: string): Promise<Thread> 
 export function moreComments(thread: Thread): Promise<Thread> {
   if (!github) return Promise.reject(new Error('No workspace'))
   return readMoreComments(github, thread)
+}
+
+/** PROTOTYPE: a pull request with its conversation, read with the open workspace's token. */
+export function pullRequest(pull: IssueRef): Promise<Pull> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  return readPull(github, pull)
+}
+
+/** PROTOTYPE: a pull request's changed files and where its diff starts. */
+export function pullChanges(repo: string, pull: Parameters<typeof readChanges>[2]): Promise<Changes> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  return readChanges(github, repo, pull)
+}
+
+/** PROTOTYPE: files' texts at commits, by `commit:path` expressions. */
+export function pullTexts(repo: string, expressions: string[]): Promise<Content[]> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  return readTexts(github, repo, expressions)
 }
 
 /** Drops what this browser saved for the open workspace and fetches it again. */

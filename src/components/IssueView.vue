@@ -16,6 +16,7 @@ import { issueUrl, refKey, sameRef, type IssueRef } from '@/lib/refs'
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { displayRepo, issueRef, issueThread, items, loaded, moreComments } from '@/stores/data'
+import { postFolds, postLook } from '@/stores/settings'
 import { closeIssue, openIssue, result, showIssue } from '@/stores/view'
 
 /**
@@ -166,7 +167,13 @@ onBeforeUnmount(() => {
 
 const state = computed(() => thread.value?.state ?? (listed.value ? stateOf(listed.value) : 'open'))
 
-const posts = computed<Post[]>(() => (thread.value ? [thread.value.post, ...thread.value.comments] : []))
+// PROTOTYPE: bots' comments show, fold or hide, as Settings say.
+const posts = computed<Post[]>(() =>
+  thread.value ? [thread.value.post, ...thread.value.comments.filter((post) => postLook(post.author) !== 'hide')] : [],
+)
+// The description is the issue itself, not a comment, so a bot's never folds as one.
+const folded = (post: Post) =>
+  postFolds(post, post === thread.value?.post ? 'show' : undefined) && !unhidden.has(post.id)
 const url = computed(() => thread.value?.url ?? issueUrl(props.issue))
 const ago = (time: string) => relativeTime(Date.parse(time), now.value)
 const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text-toned ring-1 ring-accented ring-inset'
@@ -336,15 +343,13 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           v-for="post in posts"
           :key="post.id"
           class="border-t border-default px-4 sm:px-6"
-          :class="post.hidden && !unhidden.has(post.id) ? 'py-2' : 'py-4'"
+          :class="folded(post) ? 'py-2' : 'py-4'"
         >
-          <div
-            v-if="post.hidden && !unhidden.has(post.id)"
-            class="flex min-h-8 items-center gap-2 text-[13px] text-muted"
-          >
+          <div v-if="folded(post)" class="flex min-h-8 items-center gap-2 text-[13px] text-muted">
             <UIcon name="i-octicon-eye-closed-16" class="size-4 shrink-0" />
             <span class="min-w-0 flex-1">
-              <bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi> · {{ t(`issue.hidden.${post.hidden}`) }}
+              <bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi> ·
+              {{ post.hidden ? t(`issue.hidden.${post.hidden}`) : t('issue.bot') }}
             </span>
             <UButton color="neutral" variant="ghost" size="sm" :label="t('issue.show')" @click="unhide(post)" />
           </div>

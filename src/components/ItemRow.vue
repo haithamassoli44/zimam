@@ -14,13 +14,13 @@ import { useI18n } from 'vue-i18n'
 
 import CheckRuns from '@/components/CheckRuns.vue'
 import LabelTag from '@/components/LabelTag.vue'
-import { CHECK_LOOKS, ISSUE_LOOKS } from '@/components/looks'
+import { CHECK_LOOKS, ISSUE_LOOKS, PULL_LOOKS, REVIEW_LOOKS } from '@/components/looks'
 import { stateOf } from '@/lib/queries'
 import { formatList, formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { FRESH_MS, issueRef } from '@/stores/data'
+import { FRESH_MS, itemRef } from '@/stores/data'
 import { settings } from '@/stores/settings'
-import { openIssue, showIssue } from '@/stores/view'
+import { openIssue, showIssue, showPull } from '@/stores/view'
 import type { Item } from '@/types'
 
 const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fresh?: boolean; opened?: boolean }>()
@@ -30,14 +30,6 @@ const link = useTemplateRef<HTMLElement>('link')
 const compact = computed(() => settings.density === 'compact')
 const open = computed(() => props.item.state === 'open')
 
-// GitHub's glyphs already tell the state by shape.
-const PR_LOOKS = {
-  open: { icon: 'i-octicon-git-pull-request-16', color: 'text-toned' },
-  draft: { icon: 'i-octicon-git-pull-request-draft-16', color: 'text-muted' },
-  merged: { icon: 'i-octicon-git-merge-16', color: 'text-merged' },
-  closed: { icon: 'i-octicon-git-pull-request-closed-16', color: 'text-error' },
-}
-
 const state = computed(() => {
   const { item } = props
   if (item.kind === 'issue') {
@@ -45,7 +37,7 @@ const state = computed(() => {
     return { look: ISSUE_LOOKS[value], text: t(`item.issue.${value}`) }
   }
   const value = item.state === 'open' ? (item.review === 'draft' ? 'draft' : 'open') : item.state
-  return { look: PR_LOOKS[value], text: t(`item.pr.${value}`) }
+  return { look: PULL_LOOKS[value], text: t(`item.pr.${value}`) }
 })
 
 const conflicts = computed(() => props.item.merge === 'conflicts')
@@ -54,15 +46,12 @@ const stateText = computed(() =>
 )
 
 // A draft says so by its icon, and a review no branch rule asks for says nothing.
-const REVIEWS = {
-  approved: { icon: 'i-octicon-check-circle-16', color: 'text-success' },
-  changes: { icon: 'i-octicon-file-diff-16', color: 'text-error' },
-  required: { icon: 'i-octicon-code-review-16', color: 'text-muted' },
-}
-
+const ROW_REVIEWS = ['approved', 'changes', 'required'] as const
 const review = computed(() => {
   const value = props.item.review
-  return open.value && value && value in REVIEWS ? (value as keyof typeof REVIEWS) : null
+  return open.value && value && (ROW_REVIEWS as readonly string[]).includes(value)
+    ? (value as (typeof ROW_REVIEWS)[number])
+    : null
 })
 const diff = computed(() => (open.value && settings.show.size ? props.item.diff : null))
 const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), now.value))
@@ -71,13 +60,14 @@ const LABELS = 3
 const labels = computed(() => props.item.labels.slice(0, LABELS))
 const moreLabels = computed(() => props.item.labels.slice(LABELS).map((label) => label.name))
 
-// An issue opens in Zimam's issue panel. A pull request, or an issue clicked with a key held or the middle button, opens
-// on GitHub in a new tab.
+// An issue opens in Zimam's issue panel, and a pull request on its own page (PROTOTYPE), at its files. Clicked with a
+// key held or the middle button, either opens on GitHub in a new tab.
 function read(event: MouseEvent): boolean {
-  const issue = issueRef(props.item)
-  if (!issue || event.button !== 0) return false
-  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
-  showIssue(issue)
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
+  const ref = itemRef(props.item)
+  if (!ref) return false
+  if (props.item.kind === 'pr') showPull(ref, 'files')
+  else showIssue(ref)
   return true
 }
 
@@ -197,7 +187,7 @@ watch(
     <div class="flex shrink-0 items-center gap-4 text-xs text-muted" :class="!compact && 'h-6 self-start'">
       <span v-if="settings.show.review" class="flex w-4 justify-center" :class="!review && 'max-sm:hidden'">
         <UTooltip v-if="review" :text="t(`filters.review.${review}`)">
-          <UIcon :name="REVIEWS[review].icon" class="size-4" :class="REVIEWS[review].color" />
+          <UIcon :name="REVIEW_LOOKS[review].icon" class="size-4" :class="REVIEW_LOOKS[review].color" />
         </UTooltip>
         <span v-if="review" class="sr-only">{{ t(`filters.review.${review}`) }}</span>
       </span>

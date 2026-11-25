@@ -5,6 +5,7 @@ import UInput from '@nuxt/ui/components/Input.vue'
 import USeparator from '@nuxt/ui/components/Separator.vue'
 import USlideover from '@nuxt/ui/components/Slideover.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
+import UTextarea from '@nuxt/ui/components/Textarea.vue'
 import { useToast } from '@nuxt/ui/composables'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -15,7 +16,17 @@ import { install, installed, installPrompt, manualInstall } from '@/pwa'
 import { deleteWorkspace, reloadWorkspace } from '@/stores/data'
 import { activeWorkspace, exportSettings, importSettings, settings, updateWorkspace } from '@/stores/settings'
 import { openSetup, ui } from '@/stores/ui'
-import { DENSITIES, LOCALES, ROW_PARTS, THEMES, type Workspace } from '@/types'
+import {
+  BOT_POSTS,
+  DENSITIES,
+  DIFF_VIEWS,
+  FILE_MODES,
+  LOCALES,
+  LONG_LINES,
+  ROW_PARTS,
+  THEMES,
+  type Workspace,
+} from '@/types'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -40,6 +51,42 @@ const groups = computed(() => [
     pick: (value: string) => (settings.density = value as typeof settings.density),
   },
 ])
+
+// PROTOTYPE: how pull requests read.
+const pullGroups = computed(() => [
+  {
+    key: 'bots',
+    choices: BOT_POSTS.map((value) => ({ value, label: t(`settings.pull.bots.${value}`) })),
+    picked: (value: string) => settings.bots === value,
+    pick: (value: string) => (settings.bots = value as typeof settings.bots),
+  },
+  {
+    key: 'longLines',
+    choices: LONG_LINES.map((value) => ({ value, label: t(`settings.pull.longLines.${value}`) })),
+    picked: (value: string) => settings.longLines === value,
+    pick: (value: string) => (settings.longLines = value as typeof settings.longLines),
+  },
+  {
+    key: 'diffView',
+    choices: DIFF_VIEWS.map((value) => ({ value, label: t(`pull.views.${value}`) })),
+    picked: (value: string) => settings.diffView === value,
+    pick: (value: string) => (settings.diffView = value as typeof settings.diffView),
+  },
+  {
+    key: 'files',
+    choices: FILE_MODES.map((value) => ({ value, label: t(`pull.modes.${value}`) })),
+    picked: (value: string) => settings.files === value,
+    pick: (value: string) => (settings.files = value as typeof settings.files),
+  },
+])
+const generatedText = computed({
+  get: () => settings.generated.join('\n'),
+  set: (text: string) =>
+    (settings.generated = text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)),
+})
 
 async function reload() {
   ui.settingsOpen = false
@@ -99,6 +146,30 @@ async function upload(event: Event) {
             :ui="{ root: 'items-center', label: 'pointer-coarse:py-3' }"
           />
         </fieldset>
+
+        <USeparator />
+        <section class="space-y-4">
+          <h3 class="font-medium text-highlighted">{{ t('settings.pull.title') }}</h3>
+          <div v-for="group in pullGroups" :key="group.key" class="space-y-2">
+            <p class="text-sm text-toned" aria-hidden="true">{{ t(`settings.pull.${group.key}.title`) }}</p>
+            <ChoiceGroup
+              :label="t(`settings.pull.${group.key}.title`)"
+              :choices="group.choices"
+              :picked="group.picked"
+              class="w-full *:flex-1 *:justify-center"
+              @pick="group.pick"
+            />
+          </div>
+          <UFormField :label="t('settings.pull.generated.title')" :help="t('settings.pull.generated.help')">
+            <UTextarea
+              v-model.lazy="generatedText"
+              :rows="3"
+              autoresize
+              class="w-full font-mono"
+              placeholder="packages/*/dist/**"
+            />
+          </UFormField>
+        </section>
 
         <template v-if="activeWorkspace">
           <USeparator />
