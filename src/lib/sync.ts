@@ -52,6 +52,10 @@ const PROBE_LIMIT = 50
 // Search can't report what disappeared, such as deleted or transferred issues, so open items are refetched now and then.
 const RECONCILE_EVERY = 6 * HOUR
 const RECONCILE_MANUAL = 10 * MINUTE
+// A closed history GitHub won't show for now, as when an organization's SAML sign-on has lapsed, is asked for again
+// after this long, twice as long each time after, up to the longest. A refresh asks again at once.
+const HISTORY_RETRY = 5 * MINUTE
+const HISTORY_RETRY_MOST = HOUR
 // The hourly allowance is shared with every other tool on the same GitHub account, so some of it is always left.
 const RESERVE = 0.02
 const HISTORY_RESERVE = 0.15
@@ -137,6 +141,8 @@ export class Syncer {
   private askedRequested = false
   // How many times in a row GitHub hasn't known whether a pull request conflicts.
   private unknownMerge = new Map<string, number>()
+  // Closed histories GitHub wouldn't show, by repository and kind: when to ask again, and how long the wait was.
+  private historyWaits = new Map<string, { until: number; wait: number }>()
   // Repositories the search finds changes in that the workspace doesn't hold, such as those left out of a source.
   private outside = new Set<string>()
   // The buckets of items changed since the last save, which the next one writes, or null for all of them.
@@ -243,6 +249,7 @@ export class Syncer {
     // A refused token stays refused until it's replaced, which opens the workspace anew.
     if (this.stopped || this.status.error === 'auth' || (this.status.pausedUntil ?? 0) > started) return
     this.status.pausedUntil = null
+    if (manual) this.historyWaits.clear()
     const peerJustSynced = (await this.adoptStored()) && started - syncedMarker(this.ws.id) < 0.75 * TICK
     if (peerJustSynced && !manual) return
 
@@ -625,16 +632,22 @@ export class Syncer {
         const key = KINDS[kind].history
         const saved = entry[key]
         const resume = typeof saved === 'string' ? saved : null
+        let shown = true
         for await (const page of this.pages(repo, kind, KINDS[kind].closed, resume)) {
-          // A repository GitHub won't show has no history to load.
-          if (!page) break
+          if (!page) {
+            shown = false
+            break
+          }
+          this.historyWaits.delete(`${repo.id} ${kind}`)
           this.put(page.items)
           entry[key] = page.cursor ?? true
           this.saveSoon()
           if (!more()) return
         }
         if (this.stopped) return
-        entry[key] = true
+        // What GitHub won't show isn't all there is: it keeps its place, to be asked for again in a while.
+        if (shown) entry[key] = true
+        else this.waitForHistory(repo, kind)
         this.showProgress()
       }
     })
@@ -667,9 +680,23 @@ export class Syncer {
       )
   }
 
+  // A history waiting to be asked for again doesn't count as left meanwhile: it isn't loading.
   private historyKinds(repo: Repo): ListKind[] {
     const entry = this.cache.history[repo.id] ?? {}
-    return LIST_KINDS.filter((kind) => hasClosed(repo, kind) && entry[KINDS[kind].history] !== true)
+    const now = Date.now()
+    return LIST_KINDS.filter(
+      (kind) =>
+        hasClosed(repo, kind) &&
+        entry[KINDS[kind].history] !== true &&
+        (this.historyWaits.get(`${repo.id} ${kind}`)?.until ?? 0) <= now,
+    )
+  }
+
+  private waitForHistory(repo: Repo, kind: ListKind) {
+    const key = `${repo.id} ${kind}`
+    const last = this.historyWaits.get(key)?.wait
+    const wait = last ? Math.min(2 * last, HISTORY_RETRY_MOST) : HISTORY_RETRY
+    this.historyWaits.set(key, { until: Date.now() + wait, wait })
   }
 
   // GitHub times out on heavy pages, so any page that times out is asked for again at half the size. A repository

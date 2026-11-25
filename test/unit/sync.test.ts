@@ -89,6 +89,8 @@ function fakeGitHub() {
     // whose items were asked for.
     more: [] as string[],
     itemsOf: [] as string[],
+    // The lists asked for, as `kind states`, like `issues CLOSED`.
+    lists: [] as string[],
     probes: {} as Record<string, Probe>,
     probed: [] as string[],
     seen: new Set<string>(),
@@ -193,6 +195,7 @@ function fakeGitHub() {
     const states = variables.states as string[]
     const list = text.includes('issues(') ? state.issues : state.prs
     const kind = text.includes('issues(') ? 'issues' : 'pullRequests'
+    state.lists.push(`${kind} ${states.join(',')}`)
     if (state.hidden.includes(kind))
       return done(kind === 'issues' ? { repository: null } : { repository: { [kind]: null } })
     const matching = list.filter((node) => states.includes(node.state))
@@ -628,6 +631,58 @@ describe('Syncer', () => {
     expect(state.calls).toContain('items')
     expect(state.calls).not.toContain('nodes')
     expect(store.items.has('I1')).toBe(true)
+  })
+
+  it("asks again in a while for a closed history GitHub won't show for now, rather than counting it complete", async () => {
+    const { store, state, status, syncer } = await setup()
+    // As when an organization's SAML sign-on lapses for a moment.
+    state.hidden = ['issues']
+    await syncer.sync()
+    expect(store.items.has('I3')).toBe(false)
+    expect(store.items.get('P4')?.state).toBe('merged')
+    // Nothing else is loading meanwhile.
+    expect(status.left).toEqual({})
+
+    state.hidden = []
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const closedIssues = async (minutes: number) => {
+      now += minutes * MINUTE
+      state.lists = []
+      await syncer.sync()
+      return state.lists.filter((list) => list === 'issues CLOSED').length
+    }
+    expect(await closedIssues(1)).toBe(0)
+    expect(await closedIssues(4)).toBe(1)
+    expect(store.items.get('I3')?.state).toBe('closed')
+    expect(await closedIssues(60)).toBe(0)
+  })
+
+  it("waits longer each time GitHub still won't show a closed history, and asks again at once on a refresh", async () => {
+    const { store, state, syncer } = await setup()
+    state.hidden = ['issues']
+    await syncer.sync()
+    // No second try right after the first, as the next slice of the history would be.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(state.lists.filter((list) => list === 'issues CLOSED')).toHaveLength(1)
+
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const tries: number[] = []
+    for (let minute = 1; minute <= 30; minute++) {
+      now += MINUTE
+      state.lists = []
+      await syncer.sync()
+      if (state.lists.includes('issues CLOSED')) tries.push(minute)
+    }
+    // After five minutes, then ten more, then twenty more.
+    expect(tries).toEqual([5, 15])
+
+    state.hidden = []
+    now += 11 * MINUTE
+    await syncer.sync(true)
+    expect(store.items.get('I1')?.state).toBe('open')
+    expect(store.items.get('I3')?.state).toBe('closed')
   })
 
   it('finds the pull requests that ask the viewer for a review every five minutes', async () => {
