@@ -40,6 +40,12 @@ const viewer = ref<Viewer | null>(null)
 const scopes = ref<string[] | null>(null)
 const checking = ref(false)
 const tokenError = ref('')
+// The token GitHub last accepted. What the field holds counts only while it's that token: one changed since is checked
+// before it's saved, so a token GitHub didn't accept, or no token, never takes a working one's place.
+const checkedToken = ref('')
+const checked = computed(() => !!viewer.value && token.value.trim() === checkedToken.value)
+// Each check's turn: an answer to one asked before the last is let go.
+let checks = 0
 const picked = ref<Source[]>(workspace ? [...workspace.sources] : [])
 const extra = ref<SourceChoice[]>([])
 const another = ref('')
@@ -67,7 +73,8 @@ const choices = computed<SourceChoice[]>(() => {
   return [...known, ...extra.value, ...unknown]
 })
 
-const noPrivate = computed(() => scopes.value !== null && !scopes.value.includes('repo'))
+// About the token checked, so only while the field still holds it.
+const noPrivate = computed(() => checked.value && scopes.value !== null && !scopes.value.includes('repo'))
 const defaultName = computed(() => {
   const first = picked.value[0]
   if (!first) return viewer.value?.login ?? 'Zimam'
@@ -80,24 +87,31 @@ const defaultName = computed(() => {
 if (workspace) void check()
 
 async function check() {
+  const asked = token.value.trim()
+  const turn = ++checks
   checking.value = true
   tokenError.value = ''
   try {
-    const client = createGitHub(token.value.trim())
-    viewer.value = await findViewer(client)
+    const client = createGitHub(asked)
+    const found = await findViewer(client)
+    if (turn !== checks) return
+    viewer.value = found
     scopes.value = client.scopes()
     gh.value = client
+    checkedToken.value = asked
     if (!picked.value.length) {
       const org = viewer.value.organizations[0]
       picked.value = [org ? { kind: 'org', name: org.login } : { kind: 'user', name: viewer.value.login }]
     }
   } catch (error) {
+    if (turn !== checks) return
     viewer.value = null
     gh.value = null
+    checkedToken.value = ''
     tokenError.value =
       error instanceof GitHubError && error.kind === 'network' ? t('setup.offline') : t('setup.badToken')
   } finally {
-    checking.value = false
+    if (turn === checks) checking.value = false
   }
 }
 
@@ -146,7 +160,8 @@ async function addAnother() {
   adding.value = true
   anotherError.value = ''
   try {
-    const choice = await findSource(createGitHub(token.value.trim()), another.value)
+    if (!gh.value) throw new Error('No token')
+    const choice = await findSource(gh.value, another.value)
     if (!choice) throw new Error('Not found')
     if (!choices.value.some((known) => sameSource(known.source, choice.source))) extra.value.push(choice)
     if (!isPicked(choice.source)) picked.value.push(choice.source)
@@ -159,7 +174,8 @@ async function addAnother() {
 }
 
 function finish() {
-  const fields = { name: name.value.trim() || defaultName.value, token: token.value.trim(), sources: picked.value }
+  if (!checked.value) return
+  const fields = { name: name.value.trim() || defaultName.value, token: checkedToken.value, sources: picked.value }
   if (workspace) updateWorkspace(workspace.id, fields)
   else createWorkspace(fields)
   ui.setup = null
@@ -247,10 +263,13 @@ function finish() {
             icon="i-octicon-alert-16"
             :title="tokenError"
           />
-          <div v-if="viewer" class="enter flex items-center gap-2 text-sm text-toned">
+          <div v-if="viewer && checked" class="enter flex items-center gap-2 text-sm text-toned">
             <UAvatar :src="viewer.avatarUrl" :alt="viewer.login" size="2xs" />
             <span>{{ t('setup.readingAs', { login: viewer.name || viewer.login }) }}</span>
           </div>
+          <p v-else-if="viewer && !checking && token.trim()" class="enter text-sm text-toned">
+            {{ t('setup.checkAgain') }}
+          </p>
           <UAlert
             v-if="noPrivate"
             color="warning"
@@ -366,7 +385,7 @@ function finish() {
             v-if="viewer"
             color="neutral"
             size="lg"
-            :disabled="!picked.length || unpicked"
+            :disabled="!checked || !picked.length || unpicked"
             :label="workspace ? t('setup.save') : t('setup.open')"
             trailing-icon="i-octicon-arrow-right-16"
             :ui="{ base: 'h-11 px-5', trailingIcon: 'rtl:rotate-180' }"

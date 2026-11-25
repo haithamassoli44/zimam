@@ -17,6 +17,7 @@
     "useGh": "Use my gh CLI token",
     "continue": "Continue",
     "badToken": "GitHub didn't accept this token",
+    "checkAgain": "The token changed. Press Continue to check it.",
     "offline": "Couldn't reach GitHub, check your connection",
     "readingAs": "Reading as {login}",
     "noPrivate": "This token can't read private repositories. Add the repo scope to see them.",
