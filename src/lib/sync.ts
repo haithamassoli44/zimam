@@ -814,7 +814,9 @@ export class Syncer {
         if (incoming.merge === null) this.unknownMerge.set(item.id, this.unknownMerge.get(item.id) ?? 0)
         else this.unknownMerge.delete(item.id)
       }
-      if (old && old.updatedAt === item.updatedAt && sameStatus(old, item)) continue
+      // A copy kept from before up to 100 labels were read can have fewer than GitHub gives now, with the same time.
+      const same = old && old.updatedAt === item.updatedAt && old.labels.length === item.labels.length
+      if (same && sameStatus(old, item)) continue
       this.keep(item, old)
       changed = true
       if (old?.updatedAt !== item.updatedAt && Date.parse(item.updatedAt) > this.newsSince) fresh.push(item.id)

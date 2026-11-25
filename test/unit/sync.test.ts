@@ -53,6 +53,7 @@ const size = (kind: 'issues' | 'pullRequests', open: boolean) => repoItems(kind,
 
 const done = (data: unknown) => ({ data, errors: [] as QueryError[] })
 const second = (time: string) => Math.floor(Date.parse(time) / 1000)
+const labels = (many: number) => ({ nodes: Array.from({ length: many }, (_, n) => ({ name: `l${n}`, color: '' })) })
 
 /** A GitHub whose answers to queries are `query`'s, with nothing changed since the last look and nothing else to read. */
 const answering = (query: GitHub['query']): GitHub => ({
@@ -444,6 +445,19 @@ describe('Syncer', () => {
     await syncer.sync()
     expect(state.searched[0]).toBe('since')
     expect(state.searchResults.every((node) => store.items.has(node.id))).toBe(true)
+  })
+
+  it('takes the labels a copy kept from before lacks, when the open items are read again', async () => {
+    const { store, state, syncer } = await setup()
+    state.issues[0] = { ...state.issues[0], labels: labels(20) }
+    await syncer.sync()
+    expect(store.items.get('I1')?.labels).toHaveLength(20)
+    // GitHub gives all 25 now, and the issue hasn't changed since.
+    state.issues[0] = { ...state.issues[0], labels: labels(25) }
+    const later = Date.now() + HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => later)
+    await syncer.sync(true)
+    expect(store.items.get('I1')?.labels).toHaveLength(25)
   })
 
   it('keeps the newer copy when an older one arrives later', async () => {
