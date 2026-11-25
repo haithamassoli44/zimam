@@ -1,7 +1,7 @@
 import { computed, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 
-import { deleteCache } from '@/lib/cache'
-import { readCheckRuns, type CheckRuns } from '@/lib/checks'
+import { deleteCache, seenKey } from '@/lib/cache'
+import { readCheckRuns, type CheckRuns, type CheckSubject } from '@/lib/checks'
 import type { Context } from '@/lib/filters'
 import { createGitHub, type GitHub } from '@/lib/github'
 import { readIssue, readMoreComments, type Thread } from '@/lib/issue'
@@ -28,11 +28,14 @@ export const loaded = ref(false)
 export const owners = computed(() => new Map([...repos.value.values()].map((repo) => [repo.owner, repo.ownerAvatar])))
 const oneOwner = computed(() => owners.value.size <= 1)
 
-/** Where a listed issue lives, or null for a pull request or a repository that isn't loaded. */
-export function issueRef(item: Item): IssueRef | null {
+/** Where a listed item lives, or null for a repository that isn't loaded. */
+export function itemRef(item: Item): IssueRef | null {
   const repo = repos.value.get(item.repoId)
-  return item.kind === 'issue' && repo ? { repo: repo.fullName, number: item.number } : null
+  return repo ? { repo: repo.fullName, number: item.number } : null
 }
+
+/** Where a listed issue lives, or null for a pull request or a repository that isn't loaded. */
+export const issueRef = (item: Item): IssueRef | null => (item.kind === 'issue' ? itemRef(item) : null)
 
 export function displayRepo(fullName: string): string {
   return oneOwner.value ? (fullName.split('/')[1] ?? fullName) : fullName
@@ -82,8 +85,15 @@ export function gathered(size: () => number) {
 }
 
 let syncer: Syncer | null = null
-let github: GitHub | null = null
 let opening = 0
+
+/** The open workspace's GitHub client, from the moment it's chosen. */
+export const client = shallowRef<GitHub | null>(null)
+/** The open workspace's GitHub client. Throws without one. */
+export function gitHub(): GitHub {
+  if (!client.value) throw new Error('No workspace')
+  return client.value
+}
 
 function session(): SyncStore {
   const store: SyncStore = {
@@ -109,15 +119,13 @@ async function open(ws: Workspace | null) {
   const ticket = ++opening
   syncer?.stop()
   syncer = null
-  github = null
   loaded.value = false
   const store = session()
-  if (!ws) return
-  const gh = createGitHub(ws.token)
-  const next = await Syncer.open(ws, gh, store, status.value)
+  client.value = ws && createGitHub(ws.token)
+  if (!ws || !client.value) return
+  const next = await Syncer.open(ws, client.value, store, status.value)
   if (ticket !== opening) return
   syncer = next
-  github = gh
   loaded.value = true
   void next.start()
 }
@@ -134,22 +142,17 @@ export function syncNow(manual = false) {
   return syncer ? syncer.sync(manual) : Promise.resolve()
 }
 
+/** A read with the open workspace's client, which fails, rather than throws, without one. */
+const asking = <T>(read: () => Promise<T>): Promise<T> => Promise.resolve().then(read)
+
 /** The checks on an open pull request's last commit, read from GitHub when asked for. */
-export function checkRuns(item: Item): Promise<CheckRuns> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readCheckRuns(github, item)
-}
+export const checkRuns = (item: CheckSubject): Promise<CheckRuns> => asking(() => readCheckRuns(gitHub(), item))
 
 /** An issue and its first comments, read from GitHub with the open workspace's token when it's opened. */
-export function issueThread(issue: IssueRef, version?: string): Promise<Thread> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readIssue(github, issue, version)
-}
+export const issueThread = (issue: IssueRef, version?: string): Promise<Thread> =>
+  asking(() => readIssue(gitHub(), issue, version))
 
-export function moreComments(thread: Thread): Promise<Thread> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readMoreComments(github, thread)
-}
+export const moreComments = (thread: Thread): Promise<Thread> => asking(() => readMoreComments(gitHub(), thread))
 
 /** Drops what this browser saved for the open workspace and fetches it again. */
 export async function reloadWorkspace() {
@@ -165,6 +168,11 @@ export async function deleteWorkspace() {
   if (!ws) return
   syncer?.stop()
   await deleteCache(ws.id)
+  try {
+    localStorage.removeItem(seenKey(ws.id))
+  } catch {
+    // Without storage, nothing was kept.
+  }
   removeWorkspace(ws.id)
 }
 

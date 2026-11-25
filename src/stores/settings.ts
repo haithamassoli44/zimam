@@ -1,9 +1,16 @@
 import { computed, reactive, watch } from 'vue'
 
 import { defaultFilters, fromQuery, toQuery, type Filters } from '@/lib/filters'
+import { parsePullPath } from '@/lib/refs'
 import { COUNTS } from '@/lib/repos'
+import { belongsTo } from '@/lib/sources'
 import { randomId } from '@/lib/text'
 import {
+  BOT_POSTS,
+  type BotPosts,
+  DIFF_VIEWS,
+  FILE_MODES,
+  LONG_LINES,
   DENSITIES,
   INVOLVEMENTS,
   LOCALES,
@@ -30,6 +37,12 @@ function defaults(): Settings {
   const arabic = globalThis.navigator?.languages?.some((language) => language.startsWith('ar')) ?? false
   return {
     version: VERSION,
+    bots: 'collapse',
+    longLines: 'scroll',
+    diffView: 'split',
+    files: 'all',
+    ignoreSpace: true,
+    generated: [],
     locale: arabic ? 'ar' : 'en',
     theme: 'system',
     density: 'comfortable',
@@ -67,6 +80,12 @@ function parse(raw: unknown): Settings {
   }
   return {
     version: VERSION,
+    bots: pick(BOT_POSTS, data.bots, base.bots),
+    longLines: pick(LONG_LINES, data.longLines, base.longLines),
+    diffView: pick(DIFF_VIEWS, data.diffView, base.diffView),
+    files: pick(FILE_MODES, data.files, base.files),
+    ignoreSpace: typeof data.ignoreSpace === 'boolean' ? data.ignoreSpace : base.ignoreSpace,
+    generated: isIds(data.generated) ? data.generated : base.generated,
     locale: pick(LOCALES, data.locale, base.locale),
     theme: pick(THEMES, data.theme, base.theme),
     density: pick(DENSITIES, data.density, base.density),
@@ -125,6 +144,12 @@ try {
 const loaded = read(stored)
 export const settings = reactive<Settings>(loaded ?? defaults())
 
+/** How a post shows, by its author: a bot's as Settings say, anyone else's in full. */
+export const postLook = (author: { bot: boolean } | null | undefined): BotPosts =>
+  author?.bot ? settings.bots : 'show'
+/** Whether a post shows at all: Settings may hide the bots'. */
+export const postShown = (author: { bot: boolean } | null | undefined) => postLook(author) !== 'hide'
+
 // What this tab last wrote or took from another tab. Writing that back would bounce between tabs that have
 // different workspaces open.
 let known = stored
@@ -144,8 +169,14 @@ function save() {
 // couldn't be read are left alone.
 if (loaded) save()
 
+// The address picks the workspace: the one it names, or, for a pull request's page alone, one that brings its
+// repository.
 const requested = new URLSearchParams(globalThis.location?.search).get(WORKSPACE_PARAM)
-if (requested && settings.workspaces.some((ws) => ws.id === requested)) settings.activeWorkspaceId = requested
+const pullRepo = parsePullPath(globalThis.location?.pathname ?? '')?.ref.repo
+const picked = requested
+  ? settings.workspaces.find((ws) => ws.id === requested)
+  : pullRepo && settings.workspaces.find((ws) => ws.sources.some((source) => belongsTo(pullRepo, source)))
+if (picked) settings.activeWorkspaceId = picked.id
 
 watch(settings, save, { deep: true })
 

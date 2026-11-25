@@ -50,6 +50,8 @@ export interface GitHub {
    * answer against any limit, and none of these count against the GraphQL points the rest of the sync spends.
    */
   probe(path: string): Promise<Probe>
+  /** Reads a REST address. GitHub counts these against its REST allowance, apart from the GraphQL points. */
+  rest<T>(path: string): Promise<T>
   /** The token's classic OAuth scopes, or null for fine-grained tokens, which report none. */
   scopes(): string[] | null
   /** The hourly allowance as of the last answer, or null before the first and once that hour is over. */
@@ -85,44 +87,59 @@ export function createGitHub(token: string): GitHub {
     return slot(() => send<T>(text, variables))
   }
 
-  async function send<T>(text: string, variables: Record<string, unknown>, attempt = 0): Promise<Answer<T>> {
+  /**
+   * Asks GitHub, and tries again twice when the network fails. Gives a good answer, parsed, or throws why GitHub said
+   * no. The body is read under the same time limit, since it can stall too.
+   */
+  async function ask(
+    path: string,
+    init: { method?: string; headers: Record<string, string>; body?: string },
+    attempt = 0,
+  ): Promise<{ response: Response; body: unknown }> {
     let response: Response
-    let body: { data?: T | null; errors?: QueryError[] } | null = null
+    let body: unknown
     try {
-      response = await fetch(`${API}/graphql`, {
-        method: 'POST',
-        headers: { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: text, variables }),
+      response = await fetch(`${API}${path}`, {
+        ...init,
+        headers: { Authorization: `bearer ${token}`, ...init.headers },
         signal: AbortSignal.timeout(TIMEOUT),
       })
       readHeaders(response.headers)
-      // The body can stall too, so it is read under the same time limit.
-      if (response.ok) body = (await response.json()) as typeof body
-      else if (response.status === 403 || response.status === 429)
-        body = { errors: [{ message: await response.text() }] }
+      body = await (response.ok ? response.json() : response.text())
     } catch {
       if (attempt >= NETWORK_RETRIES) throw new GitHubError('network', 'network')
       await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt))
-      return send<T>(text, variables, attempt + 1)
+      return ask(path, init, attempt + 1)
     }
+    if (!response.ok) throw refusal(response, String(body))
+    return { response, body }
+  }
 
-    if (response.status === 401) throw new GitHubError('Bad credentials', 'auth')
+  /** Why GitHub said no. `message`: what it said, where its limits only say so in words. */
+  function refusal(response: Response, message: string): GitHubError {
+    if (response.status === 401) return new GitHubError('Bad credentials', 'auth')
     if (response.status === 403 || response.status === 429) {
-      const message = body?.errors?.[0]?.message ?? ''
       // GitHub's secondary limits once called themselves abuse detection, and some answers still do.
       const limited = response.status === 429 || retryTime(response) || /rate limit|abuse/i.test(message)
-      if (limited) throw rateLimited('Rate limited', response)
       // Any other 403 is the token being refused, such as by an organization's SAML single sign-on.
-      throw new GitHubError('Forbidden', 'auth')
+      return limited ? rateLimited('Rate limited', response) : new GitHubError('Forbidden', 'auth')
     }
-    if (response.status >= 500) throw new GitHubError(`GitHub answered ${response.status}`, 'server')
+    if (response.status === 404) return new GitHubError('Not found', 'query')
+    return new GitHubError(`GitHub answered ${response.status}`, 'server')
+  }
 
-    const errors = body?.errors ?? []
+  async function send<T>(text: string, variables: Record<string, unknown>): Promise<Answer<T>> {
+    const { response, body } = await ask('/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: text, variables }),
+    })
+    const { data, errors = [] } = (body ?? {}) as { data?: T | null; errors?: QueryError[] }
     const limit = errors.find((error) => error.type === 'RATE_LIMITED')
     if (limit) throw rateLimited(limit.message, response)
-    if (!body?.data) throw new GitHubError(errors[0]?.message ?? 'Empty answer', 'query')
+    if (!data) throw new GitHubError(errors[0]?.message ?? 'Empty answer', 'query')
     strikes = 0
-    return { data: body.data, errors }
+    return { data, errors }
   }
 
   async function probe(path: string): Promise<Probe> {
@@ -158,6 +175,14 @@ export function createGitHub(token: string): GitHub {
     })
   }
 
+  function rest<T>(path: string): Promise<T> {
+    return slot(async () => {
+      const { body } = await ask(path, { headers: { Accept: 'application/vnd.github+json' } })
+      strikes = 0
+      return body as T
+    })
+  }
+
   function readHeaders(headers: Headers) {
     const oauthScopes = headers.get('x-oauth-scopes')
     if (oauthScopes !== null)
@@ -183,6 +208,7 @@ export function createGitHub(token: string): GitHub {
     query,
     request,
     probe,
+    rest,
     scopes: () => scopes,
     // Once the hour it describes is over, the allowance is full again whatever it said.
     rate: () => (rate && Date.now() < rate.resetAt ? rate : null),

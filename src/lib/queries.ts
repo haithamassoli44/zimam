@@ -1,4 +1,16 @@
-import type { Checks, IssueState, Item, ItemKind, Language, Merge, Person, Repo, Review } from '@/types'
+import type {
+  Checks,
+  IssueState,
+  Item,
+  ItemKind,
+  ItemState,
+  Language,
+  Merge,
+  Person,
+  PullState,
+  Repo,
+  Review,
+} from '@/types'
 
 export const PERSON = 'login avatarUrl(size: 64)'
 export const ASSIGNEES = `assignees(first: 10) { nodes { ${PERSON} } }`
@@ -231,7 +243,7 @@ export function toItem(raw: RawItem): Item {
     number: raw.number,
     title: raw.title,
     url: raw.url,
-    state: raw.state === 'OPEN' ? 'open' : raw.state === 'MERGED' ? 'merged' : 'closed',
+    state: toState(raw.state),
     notPlanned: closedAs(raw.stateReason) !== 'completed',
     author: raw.author,
     assignees: raw.assignees.nodes,
@@ -256,7 +268,7 @@ export function toStatus(raw: RawStatus, open: boolean): Pick<Item, (typeof STAT
 }
 
 // GitHub gives no decision where the branch doesn't require a review, even after someone approves.
-function toReview(raw: Pick<RawItem, 'isDraft' | 'reviewDecision'>): Review {
+export function toReview(raw: Pick<RawItem, 'isDraft' | 'reviewDecision'>): Review {
   if (raw.isDraft) return 'draft'
   if (raw.reviewDecision === 'APPROVED') return 'approved'
   if (raw.reviewDecision === 'CHANGES_REQUESTED') return 'changes'
@@ -264,7 +276,7 @@ function toReview(raw: Pick<RawItem, 'isDraft' | 'reviewDecision'>): Review {
   return 'optional'
 }
 
-function toMerge(raw: Pick<RawItem, 'mergeable'>): Merge | null {
+export function toMerge(raw: Pick<RawItem, 'mergeable'>): Merge | null {
   if (raw.mergeable === 'CONFLICTING') return 'conflicts'
   if (raw.mergeable === 'MERGEABLE') return 'clean'
   return null
@@ -275,6 +287,13 @@ const CLOSED_AS: Partial<Record<string, ClosedAs>> = { NOT_PLANNED: 'notPlanned'
 
 /** Why a closed issue was closed, as GitHub's `stateReason` says. Done, unless it says otherwise. */
 export const closedAs = (reason: string | null | undefined): ClosedAs => CLOSED_AS[reason ?? ''] ?? 'completed'
+
+/** An issue's or pull request's state, as GitHub's `state` says. */
+export const toState = (state: RawItem['state']): ItemState =>
+  state === 'OPEN' ? 'open' : state === 'MERGED' ? 'merged' : 'closed'
+
+/** A pull request's state, with a draft apart from the others that are open. */
+export const pullState = (state: ItemState, draft: boolean): PullState => (state === 'open' && draft ? 'draft' : state)
 
 /** The state of an issue as toItem() keeps it, which counts a duplicate as not planned. */
 export const stateOf = (item: Pick<Item, 'state' | 'notPlanned'>): Exclude<IssueState, 'duplicate'> =>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import UButton from '@nuxt/ui/components/Button.vue'
 
-import { languageName, otherLocale, switchLanguage } from '@/locale'
+import { setLook } from '@/components/motion'
+import { languageName, otherLocale } from '@/locale'
 </script>
 
 <template>
@@ -11,6 +12,6 @@ import { languageName, otherLocale, switchLanguage } from '@/locale'
     :lang="otherLocale"
     :label="languageName(otherLocale)"
     :ui="{ base: 'px-2 text-toned' }"
-    @click="switchLanguage"
+    @click="setLook('locale', otherLocale)"
   />
 </template>

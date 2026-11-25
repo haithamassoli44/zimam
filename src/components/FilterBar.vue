@@ -5,12 +5,12 @@ import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
-import { defineShortcuts } from '@nuxt/ui/composables'
 import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import FacetMenu, { type Option } from '@/components/FacetMenu.vue'
+import { useKeys } from '@/components/keys'
 import { CHOICES, NONE, singlePick, SORTS, toggleValue, type Facet } from '@/lib/filters'
 import { formatNumber } from '@/locale'
 import { displayRepo, historyPercent, owners, people, status } from '@/stores/data'
@@ -29,7 +29,7 @@ import {
 const { t } = useI18n()
 const search = useTemplateRef<{ inputRef: HTMLInputElement | null }>('search')
 
-defineShortcuts({ '/': () => search.value?.inputRef?.focus() })
+useKeys({ search: () => search.value?.inputRef?.focus() })
 
 const counts = computed(() => result.value.counts)
 const selected = (facet: Facet) => filters[facet] as string[]
@@ -164,7 +164,7 @@ const historyShown = computed(() => {
                   <li v-for="[key, example] in SYNTAX" :key="key">
                     <button
                       type="button"
-                      class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-start transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                      class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-start focus-ring-inset transition-colors hover:bg-elevated focus-visible:bg-elevated"
                       @click="(close(), addToSearch(example))"
                     >
                       <code class="font-mono text-xs text-highlighted" dir="ltr">{{ example }}</code>
@@ -194,13 +194,14 @@ const historyShown = computed(() => {
             v-if="lastView"
             color="neutral"
             variant="ghost"
-            class="hidden sm:inline-flex lg:@max-[47rem]:hidden"
+            class="enter hidden sm:inline-flex lg:@max-[47rem]:hidden"
             :label="t('views.update', { name: viewName(lastView) })"
             @click="updateView(lastView)"
           />
           <UButton
             color="neutral"
             icon="i-octicon-bookmark-16"
+            class="enter"
             :label="t('views.save')"
             :ui="{ label: 'hidden sm:block', leadingIcon: 'sm:hidden' }"
             @click="askToSave"
@@ -241,7 +242,14 @@ const historyShown = computed(() => {
         @toggle="(value) => toggle(facet, value)"
       />
 
-      <UButton v-if="!isDefault" color="neutral" variant="link" :label="t('filters.clear')" @click="resetFilters" />
+      <UButton
+        v-if="!isDefault"
+        color="neutral"
+        variant="link"
+        class="enter"
+        :label="t('filters.clear')"
+        @click="resetFilters"
+      />
 
       <span v-if="historyShown !== null" class="text-xs text-muted sm:ms-auto">{{
         t('results.historyLoading', { percent: historyShown })

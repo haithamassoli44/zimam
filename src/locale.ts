@@ -39,16 +39,13 @@ const LANGUAGES: Record<Locale, { name: string; dir: 'rtl' | 'ltr'; intl: string
 const language = computed(() => LANGUAGES[settings.locale])
 export const languageName = (locale: Locale) => LANGUAGES[locale].name
 export const otherLocale = computed(() => LOCALES.find((locale) => locale !== settings.locale) ?? settings.locale)
-const rtl = computed(() => language.value.dir === 'rtl')
+/** Whether the page reads from right to left. */
+export const rtl = computed(() => language.value.dir === 'rtl')
 // Nuxt UI places panels by physical side, so the reading start and end swap with the language.
 export const sides = computed(() =>
   rtl.value ? ({ start: 'right', end: 'left' } as const) : ({ start: 'left', end: 'right' } as const),
 )
 export const uiLocale = computed(() => language.value.ui)
-
-export function switchLanguage() {
-  settings.locale = otherLocale.value
-}
 
 watchEffect(() => {
   i18n.global.locale.value = settings.locale
@@ -61,10 +58,16 @@ const numbers = computed(() => new Intl.NumberFormat(language.value.intl))
 const relative = computed(() => new Intl.RelativeTimeFormat(language.value.intl, { numeric: 'auto' }))
 const dates = computed(() => new Intl.DateTimeFormat(language.value.intl, { dateStyle: 'long', timeStyle: 'short' }))
 const clock = computed(() => new Intl.DateTimeFormat(language.value.intl, { timeStyle: 'short' }))
+const months = computed(() => new Intl.DateTimeFormat(language.value.intl, { month: 'long', year: 'numeric' }))
+const compact = computed(() => new Intl.NumberFormat(language.value.intl, { notation: 'compact' }))
 
 export const formatNumber = (value: number) => numbers.value.format(value)
 export const fullDate = (time: string | number) => dates.value.format(new Date(time))
 export const clockTime = (time: number) => clock.value.format(new Date(time))
+/** A month and its year: «March 2014». */
+export const monthYear = (time: string | number) => months.value.format(new Date(time))
+/** A number rounded to a short form: «1.2K». */
+export const compactNumber = (value: number) => compact.value.format(value)
 export const formatList = (values: string[]) => values.join(language.value.comma)
 
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

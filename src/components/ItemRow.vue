@@ -5,38 +5,32 @@ export const ROW_HEIGHT = { compact: 41, comfortable: 73 } as const
 
 <script setup lang="ts">
 import UAvatar from '@nuxt/ui/components/Avatar.vue'
-import UAvatarGroup from '@nuxt/ui/components/AvatarGroup.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import CheckRuns from '@/components/CheckRuns.vue'
+import { stepOf } from '@/components/keys'
 import LabelTag from '@/components/LabelTag.vue'
-import { CHECK_LOOKS, ISSUE_LOOKS } from '@/components/looks'
-import { stateOf } from '@/lib/queries'
+import { CHECK_LOOKS, ISSUE_LOOKS, PULL_LOOKS, REVIEW_LOOKS } from '@/components/looks'
+import PersonLink from '@/components/PersonLink.vue'
+import { pullState, stateOf } from '@/lib/queries'
 import { formatList, formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { FRESH_MS, issueRef } from '@/stores/data'
+import { FRESH_MS, itemRef } from '@/stores/data'
 import { settings } from '@/stores/settings'
-import { openIssue, showIssue } from '@/stores/view'
+import { showIssue, showPull } from '@/stores/view'
 import type { Item } from '@/types'
 
 const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fresh?: boolean; opened?: boolean }>()
+const emit = defineEmits<{ move: [by: 1 | -1] }>()
 const { t } = useI18n()
 const link = useTemplateRef<HTMLElement>('link')
 
 const compact = computed(() => settings.density === 'compact')
 const open = computed(() => props.item.state === 'open')
-
-// GitHub's glyphs already tell the state by shape.
-const PR_LOOKS = {
-  open: { icon: 'i-octicon-git-pull-request-16', color: 'text-toned' },
-  draft: { icon: 'i-octicon-git-pull-request-draft-16', color: 'text-muted' },
-  merged: { icon: 'i-octicon-git-merge-16', color: 'text-merged' },
-  closed: { icon: 'i-octicon-git-pull-request-closed-16', color: 'text-error' },
-}
 
 const state = computed(() => {
   const { item } = props
@@ -44,8 +38,8 @@ const state = computed(() => {
     const value = stateOf(item)
     return { look: ISSUE_LOOKS[value], text: t(`item.issue.${value}`) }
   }
-  const value = item.state === 'open' ? (item.review === 'draft' ? 'draft' : 'open') : item.state
-  return { look: PR_LOOKS[value], text: t(`item.pr.${value}`) }
+  const value = pullState(item.state, item.review === 'draft')
+  return { look: PULL_LOOKS[value], text: t(`item.pr.${value}`) }
 })
 
 const conflicts = computed(() => props.item.merge === 'conflicts')
@@ -54,30 +48,32 @@ const stateText = computed(() =>
 )
 
 // A draft says so by its icon, and a review no branch rule asks for says nothing.
-const REVIEWS = {
-  approved: { icon: 'i-octicon-check-circle-16', color: 'text-success' },
-  changes: { icon: 'i-octicon-file-diff-16', color: 'text-error' },
-  required: { icon: 'i-octicon-code-review-16', color: 'text-muted' },
-}
-
+const ROW_REVIEWS = ['approved', 'changes', 'required'] as const
 const review = computed(() => {
   const value = props.item.review
-  return open.value && value && value in REVIEWS ? (value as keyof typeof REVIEWS) : null
+  return open.value && value && (ROW_REVIEWS as readonly string[]).includes(value)
+    ? (value as (typeof ROW_REVIEWS)[number])
+    : null
 })
 const diff = computed(() => (open.value && settings.show.size ? props.item.diff : null))
 const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), now.value))
+
+const FACES = 3
+const faces = computed(() => props.item.assignees.slice(0, FACES))
+const moreFaces = computed(() => props.item.assignees.slice(FACES).map((person) => person.login))
 
 const LABELS = 3
 const labels = computed(() => props.item.labels.slice(0, LABELS))
 const moreLabels = computed(() => props.item.labels.slice(LABELS).map((label) => label.name))
 
-// An issue opens in Zimam's issue panel. A pull request, or an issue clicked with a key held or the middle button, opens
-// on GitHub in a new tab.
+// An issue opens in Zimam's issue panel, and a pull request on its own page, at its files. Clicked with a
+// key held or the middle button, either opens on GitHub in a new tab.
 function read(event: MouseEvent): boolean {
-  const issue = issueRef(props.item)
-  if (!issue || event.button !== 0) return false
-  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
-  showIssue(issue)
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
+  const ref = itemRef(props.item)
+  if (!ref) return false
+  if (props.item.kind === 'pr') showPull(ref, 'files')
+  else showIssue(ref)
   return true
 }
 
@@ -93,29 +89,20 @@ function clickTitle(event: MouseEvent) {
   if (read(event)) event.preventDefault()
 }
 
-// The panel beside the list takes the focus it had with it when it closes, and the focus comes back to the issue's row.
-// Over the list, the dialog gives it back itself.
-watch(
-  () => props.opened,
-  (opened, was) => {
-    if (was && !opened && !openIssue.value && document.activeElement === document.body) {
-      link.value?.focus({ preventScroll: true })
-    }
-  },
-  { flush: 'post' },
-)
+/** ↓ and ↑ from the title go to the next or previous row. */
+function onKey(event: KeyboardEvent) {
+  const step = stepOf(event)
+  if (step !== 1 && step !== -1) return
+  event.preventDefault()
+  emit('move', step)
+}
+defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
 </script>
 
 <template>
   <div
     class="group relative flex cursor-pointer gap-3 border-b border-default px-4 transition-colors has-[a[data-row]:focus-visible]:bg-elevated has-[a[data-row]:focus-visible]:outline-2 has-[a[data-row]:focus-visible]:-outline-offset-2 has-[a[data-row]:focus-visible]:outline-primary sm:px-6"
-    :class="[
-      compact ? 'items-center py-2' : 'py-3',
-      fresh && 'arrived',
-      opened
-        ? 'bg-elevated before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary'
-        : 'hover:bg-elevated/60',
-    ]"
+    :class="[compact ? 'items-center py-2' : 'py-3', fresh && 'arrived', opened ? 'picked' : 'hover:bg-elevated/60']"
     :style="fresh ? { '--fresh': `${FRESH_MS}ms` } : undefined"
     @click="follow"
     @auxclick="follow"
@@ -128,7 +115,7 @@ watch(
     />
 
     <UTooltip :text="stateText">
-      <span class="relative flex shrink-0" :class="!compact && 'mt-1'">
+      <span class="relative flex shrink-0" :class="!compact && 'mt-1 self-start'">
         <UIcon :name="state.look.icon" class="size-4" :class="state.look.color" />
         <span
           v-if="conflicts"
@@ -155,6 +142,7 @@ watch(
           :class="compact && 'truncate'"
           :dir="compact ? 'auto' : undefined"
           @click="clickTitle"
+          @keydown="onKey"
           ><span class="sr-only" dir="auto">{{ stateText }}: </span><template v-if="compact">{{ item.title }}</template
           ><bdi v-else>{{ item.title }}</bdi></a
         >
@@ -174,14 +162,12 @@ watch(
           >{{ repoName }}<span class="text-muted">#{{ item.number }}</span></span
         >
         <span v-if="archived">{{ t('item.archived') }}</span>
-        <span v-if="settings.show.author && item.author" class="inline-flex items-center gap-1.5">
-          <UAvatar :src="item.author.avatarUrl" :alt="item.author.login" size="3xs" />
-          <i18n-t keypath="item.by" tag="span" scope="global">
-            <template #login>
-              <bdi>{{ item.author.login }}</bdi>
-            </template>
-          </i18n-t>
-        </span>
+        <!-- Out of the Tab order, like the faces: the row's stops are its title and its checks. -->
+        <i18n-t v-if="settings.show.author && item.author" keypath="item.by" tag="span" scope="global">
+          <template #login>
+            <PersonLink :who="item.author" tabindex="-1" class="align-bottom" />
+          </template>
+        </i18n-t>
         <UTooltip :text="t('item.opened', { time: fullDate(item.createdAt) })">
           <span>{{ t('item.updated', { time: updated }) }}</span>
         </UTooltip>
@@ -197,7 +183,7 @@ watch(
     <div class="flex shrink-0 items-center gap-4 text-xs text-muted" :class="!compact && 'h-6 self-start'">
       <span v-if="settings.show.review" class="flex w-4 justify-center" :class="!review && 'max-sm:hidden'">
         <UTooltip v-if="review" :text="t(`filters.review.${review}`)">
-          <UIcon :name="REVIEWS[review].icon" class="size-4" :class="REVIEWS[review].color" />
+          <UIcon :name="REVIEW_LOOKS[review].icon" class="size-4" :class="REVIEW_LOOKS[review].color" />
         </UTooltip>
         <span v-if="review" class="sr-only">{{ t(`filters.review.${review}`) }}</span>
       </span>
@@ -207,7 +193,7 @@ watch(
           <UTooltip :text="t(`filters.checks.${item.checks}`)">
             <button
               type="button"
-              class="tap flex rounded-sm transition-colors hover:text-highlighted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              class="tap flex rounded-sm focus-ring transition-colors hover:text-highlighted focus-visible:outline-offset-2"
               :aria-label="t('checks.show', { state: t(`filters.checks.${item.checks}`) })"
             >
               <UIcon :name="CHECK_LOOKS[item.checks].icon" class="size-4" :class="CHECK_LOOKS[item.checks].color" />
@@ -219,14 +205,34 @@ watch(
         </UPopover>
       </span>
       <span v-if="settings.show.assignees" class="hidden w-14 justify-end sm:flex">
-        <UTooltip
-          v-if="item.assignees.length"
-          :text="t('item.assignees', { names: formatList(item.assignees.map((person) => person.login)) })"
-        >
-          <UAvatarGroup size="2xs" :max="3">
-            <UAvatar v-for="person in item.assignees" :key="person.login" :src="person.avatarUrl" :alt="person.login" />
-          </UAvatarGroup>
-        </UTooltip>
+        <span v-if="item.assignees.length" class="flex flex-row-reverse items-center">
+          <span class="sr-only">{{
+            t('item.assignees', { names: formatList(item.assignees.map((p) => p.login)) })
+          }}</span>
+          <UTooltip v-if="moreFaces.length" :text="formatList(moreFaces)">
+            <span
+              class="relative -ms-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-elevated px-1 font-mono text-[10px] text-toned ring-2 ring-(--ui-bg) group-hover:ring-(--ui-bg-elevated)"
+              aria-hidden="true"
+              >+{{ formatNumber(moreFaces.length) }}</span
+            >
+          </UTooltip>
+          <PersonLink
+            v-for="person in faces.toReversed()"
+            :key="person.login"
+            :who="person"
+            :name="false"
+            tabindex="-1"
+            aria-hidden="true"
+            class="relative -ms-1.5 flex rounded-full last:ms-0 hover:z-1"
+          >
+            <UAvatar
+              :src="person.avatarUrl"
+              alt=""
+              size="2xs"
+              class="ring-2 ring-(--ui-bg) transition-colors group-hover:ring-(--ui-bg-elevated)"
+            />
+          </PersonLink>
+        </span>
       </span>
       <span v-if="settings.show.comments" class="flex w-10 items-center justify-end gap-1 font-mono tabular-nums">
         <template v-if="item.comments">

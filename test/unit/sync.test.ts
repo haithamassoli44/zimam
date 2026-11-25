@@ -53,6 +53,18 @@ const size = (kind: 'issues' | 'pullRequests', open: boolean) => repoItems(kind,
 
 const done = (data: unknown) => ({ data, errors: [] as QueryError[] })
 
+/** A GitHub whose answers to queries are `query`'s, with nothing changed since the last look and nothing else to read. */
+const answering = (query: GitHub['query']): GitHub => ({
+  scopes: () => ['repo'],
+  rate: () => null,
+  rest: () => Promise.reject(new Error('unused')),
+  probe: async () => 'same',
+  async request<T>(text: string, variables?: Record<string, unknown>) {
+    return { data: await query<T>(text, variables), errors: [] }
+  },
+  query,
+})
+
 // A GitHub with one repository: one open and one closed issue, one open and one merged pull request.
 function fakeGitHub() {
   const issues = [raw('I1', 'OPEN', ago(24)), raw('I3', 'CLOSED', ago(240))]
@@ -89,8 +101,7 @@ function fakeGitHub() {
   const status = (id: string) => ({ mergeable: state.mergeable[id] ?? 'MERGEABLE', commits: { nodes: [rollup(id)] } })
 
   const gh: GitHub = {
-    scopes: () => ['repo'],
-    rate: () => null,
+    ...answering(async (text, variables) => (await answer(text, variables ?? {})).data as never),
     async probe(path: string) {
       state.calls.push('probe')
       state.probed.push(path)
@@ -98,9 +109,6 @@ function fakeGitHub() {
       const first = !state.seen.has(path)
       state.seen.add(path)
       return state.probes[path] ?? (first ? 'new' : 'same')
-    },
-    async query<T>(text: string, variables: Record<string, unknown> = {}): Promise<T> {
-      return (await gh.request<T>(text, variables)).data
     },
     async request<T>(text: string, variables: Record<string, unknown> = {}): Promise<Answer<T>> {
       const { data, errors } = await answer(text, variables)
@@ -280,35 +288,29 @@ describe('Syncer', () => {
       ['unknown', false, null],
     ] as const
     const started: string[] = []
-    const gh: GitHub = {
-      scopes: () => ['repo'],
-      rate: () => null,
-      probe: async () => 'same',
-      request: async () => ({ data: null as never, errors: [] }),
-      async query<T>(text: string, variables: Record<string, unknown> = {}): Promise<T> {
-        if (text === REVIEW_REQUESTED) return { viewer: { login: 'ali' }, search: page([]) } as T
-        if (text === ORG_REPOS) {
-          const nodes: RawRepo[] = repos.map(([name, isArchived, pushedAt]) => ({
-            id: name,
-            name,
-            nameWithOwner: `acme/${name}`,
-            description: null,
-            isPrivate: false,
-            isArchived,
-            pushedAt,
-            owner: { login: 'acme', avatarUrl: '' },
-            primaryLanguage: null,
-            openIssues: { totalCount: 0 },
-            openPrs: { totalCount: 0 },
-            allIssues: { totalCount: 1 },
-            allPrs: { totalCount: 0 },
-          }))
-          return { organization: { repositories: page(nodes) } } as T
-        }
-        started.push(variables.name as string)
-        return { repository: { issues: page([]) } } as T
-      },
-    }
+    const gh = answering(async <T>(text: string, variables: Record<string, unknown> = {}): Promise<T> => {
+      if (text === REVIEW_REQUESTED) return { viewer: { login: 'ali' }, search: page([]) } as T
+      if (text === ORG_REPOS) {
+        const nodes: RawRepo[] = repos.map(([name, isArchived, pushedAt]) => ({
+          id: name,
+          name,
+          nameWithOwner: `acme/${name}`,
+          description: null,
+          isPrivate: false,
+          isArchived,
+          pushedAt,
+          owner: { login: 'acme', avatarUrl: '' },
+          primaryLanguage: null,
+          openIssues: { totalCount: 0 },
+          openPrs: { totalCount: 0 },
+          allIssues: { totalCount: 1 },
+          allPrs: { totalCount: 0 },
+        }))
+        return { organization: { repositories: page(nodes) } } as T
+      }
+      started.push(variables.name as string)
+      return { repository: { issues: page([]) } } as T
+    })
     const store: SyncStore = {
       repos: new Map(),
       items: new Map(),

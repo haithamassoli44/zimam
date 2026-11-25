@@ -32,7 +32,7 @@ const CHECK_RUNS = `
   }`
 
 /** How a check ended, or that it hasn't. In this order, the ones that need a look first. */
-export const RUN_STATES = ['failure', 'pending', 'success', 'skipped'] as const
+const RUN_STATES = ['failure', 'pending', 'success', 'skipped'] as const
 
 export type RunState = (typeof RUN_STATES)[number]
 
@@ -44,6 +44,9 @@ export interface CheckRun {
   /** Its log or page, where GitHub has one. */
   url: string | null
 }
+
+/** What a pull request's checks are read for: which it is, and what says they may have changed. */
+export type CheckSubject = Pick<Item, 'id' | 'updatedAt' | 'checks'>
 
 export interface CheckRuns {
   runs: CheckRun[]
@@ -117,7 +120,7 @@ const FRESH = 60_000
 const recentFor = new WeakMap<GitHub, Map<string, { key: string; at: number; answer: Promise<CheckRuns> }>>()
 
 /** Reads the checks on a pull request's last commit. Each read costs a point. */
-export function readCheckRuns(gh: GitHub, item: Item): Promise<CheckRuns> {
+export function readCheckRuns(gh: GitHub, item: CheckSubject): Promise<CheckRuns> {
   const recent = recentFor.get(gh) ?? new Map()
   recentFor.set(gh, recent)
   const key = `${item.updatedAt} ${item.checks}`
@@ -134,3 +137,9 @@ export function readCheckRuns(gh: GitHub, item: Item): Promise<CheckRuns> {
   answer.catch(() => recent.get(item.id)?.answer === answer && recent.delete(item.id))
   return answer
 }
+
+/** The runs grouped by how they ended, the ones that need a look first. */
+export const groupRuns = (runs: CheckRun[]) =>
+  RUN_STATES.map((state) => ({ state, runs: runs.filter((run) => run.state === state) })).filter(
+    (group) => group.runs.length,
+  )

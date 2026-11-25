@@ -95,7 +95,7 @@ const pushed = (repo: Repo) => (repo.pushedAt ? relativeTime(Date.parse(repo.pus
     </div>
     <div
       v-else
-      class="max-h-72 overflow-y-auto rounded-md border border-default"
+      class="enter max-h-72 overflow-y-auto rounded-md border border-default"
       role="group"
       :aria-label="t('setup.pickFrom', { name: source.name })"
     >

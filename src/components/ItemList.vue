@@ -1,16 +1,35 @@
+<script lang="ts">
+import type { VirtualItem } from '@tanstack/vue-virtual'
+
+// Where the list was scrolled to as it went, with the heights of the rows it had measured: back from a pull request or
+// the repositories, the same workspace, density and filters show the list where it was.
+let left = null as { key: string; offset: number; rows: VirtualItem[] } | null
+</script>
+
 <script setup lang="ts">
 import UButton from '@nuxt/ui/components/Button.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ItemRow, { ROW_HEIGHT } from '@/components/ItemRow.vue'
+import { nothingFocused, useKeys, useMain } from '@/components/keys'
 import SyncFailed from '@/components/SyncFailed.vue'
 import { sameRef } from '@/lib/refs'
-import { displayRepo, gathered, highlighted, issueRef, items, repos } from '@/stores/data'
-import { settings } from '@/stores/settings'
-import { isDefault, openIssue, query, resetFilters, result } from '@/stores/view'
+import { displayRepo, gathered, highlighted, issueRef, itemRef, items, repos } from '@/stores/data'
+import { activeWorkspace, settings } from '@/stores/settings'
+import {
+  activeView,
+  closedLast,
+  isDefault,
+  lastView,
+  openIssue,
+  query,
+  resetFilters,
+  result,
+  viewName,
+} from '@/stores/view'
 import type { Item } from '@/types'
 
 const { t } = useI18n()
@@ -30,6 +49,9 @@ function rowProps(item: Item) {
   }
 }
 
+const place = computed(() => `${activeWorkspace.value?.id} ${settings.density} ${query.value}`)
+const back = left?.key === place.value ? left : null
+
 const virtualizer = useVirtualizer(
   computed(() => ({
     count: rows.value.length,
@@ -37,8 +59,15 @@ const virtualizer = useVirtualizer(
     estimateSize: () => ROW_HEIGHT[settings.density],
     getItemKey: (index: number) => rows.value[index]?.id ?? index,
     overscan: 12,
+    initialOffset: back?.offset ?? 0,
+    initialMeasurementsCache: back?.rows ?? [],
   })),
 )
+
+onBeforeUnmount(() => {
+  const offset = scroller.value?.scrollTop ?? 0
+  left = { key: place.value, offset, rows: virtualizer.value.takeSnapshot() }
+})
 
 const virtualRows = computed(() => virtualizer.value.getVirtualItems())
 
@@ -60,10 +89,65 @@ watch(
 )
 
 const { gathering, failed } = gathered(() => items.value.size)
+
+// --- The focus, from row to row: j and k, or ↓ and ↑ from a row ---
+
+// The rows drawn, by index, and the one to focus once it's drawn: the list draws a row only once it's in sight.
+const drawn = new Map<number, { focus(): void }>()
+let wanted: number | null = null
+function takeFocus() {
+  const row = wanted === null ? undefined : drawn.get(wanted)
+  if (!row) return
+  wanted = null
+  row.focus()
+}
+// The rows the scroll to it draws are its one more chance: a row that never came in sight doesn't take the focus later.
+watch(
+  virtualRows,
+  () => {
+    takeFocus()
+    wanted = null
+  },
+  { flush: 'post' },
+)
+
+/** Gives a row's title the focus, scrolling it into sight first. */
+function focusRow(index: number) {
+  const count = rows.value.length
+  if (!count) return
+  wanted = Math.max(0, Math.min(count - 1, index))
+  virtualizer.value.scrollToIndex(wanted, { align: 'auto' })
+  takeFocus()
+}
+/** The row that has the focus, or the first in sight. */
+function rowAt(): { index: number; focused: boolean } {
+  const row = document.activeElement?.closest<HTMLElement>('li[data-index]')
+  if (row && scroller.value?.contains(row)) return { index: Number(row.dataset.index), focused: true }
+  const top = scroller.value?.scrollTop ?? 0
+  return { index: virtualRows.value.find((each) => each.end > top + 1)?.index ?? 0, focused: false }
+}
+function moveFocus(by: -1 | 1) {
+  const { index, focused } = rowAt()
+  focusRow(focused ? index + by : index)
+}
+useKeys({ rows: [() => moveFocus(1), () => moveFocus(-1)] })
+useMain(scroller)
+
+// The row of what was just closed takes the focus back, unless something else has it: an issue's panel beside the list,
+// or, as the list comes back, a pull request's page. Over the list, the issue's dialog gives it back itself.
+function takeBack() {
+  const closed = closedLast.value
+  closedLast.value = null
+  if (!closed || !nothingFocused()) return
+  const index = rows.value.findIndex((item) => sameRef(itemRef(item), closed))
+  if (index >= 0) focusRow(index)
+}
+watch(closedLast, takeBack, { flush: 'post' })
+onMounted(takeBack)
 </script>
 
 <template>
-  <div ref="scroller" class="overflow-y-auto">
+  <div ref="scroller" class="overflow-y-auto focus:outline-none" tabindex="-1">
     <div v-if="gathering" aria-busy="true">
       <p class="px-4 py-3 text-sm text-muted sm:px-6">{{ t('results.gathering') }}</p>
       <div
@@ -95,7 +179,14 @@ const { gathering, failed } = gathered(() => items.value.size)
       />
     </div>
 
-    <ul v-else class="relative" :style="{ height: `${virtualizer.getTotalSize()}px` }">
+    <!-- Another saved view fades in, rather than its rows taking the last one's places at once. -->
+    <ul
+      v-else
+      :key="lastView?.id"
+      class="enter relative"
+      :style="{ height: `${virtualizer.getTotalSize()}px` }"
+      :aria-label="activeView ? viewName(activeView) : t('results.custom')"
+    >
       <li
         v-for="row in virtualRows"
         :key="String(row.key)"
@@ -104,7 +195,11 @@ const { gathering, failed } = gathered(() => items.value.size)
         class="absolute inset-x-0 top-0"
         :style="{ transform: `translateY(${row.start}px)` }"
       >
-        <ItemRow v-bind="rowProps(rows[row.index]!)" />
+        <ItemRow
+          :ref="(found) => (found ? drawn.set(row.index, found as never) : drawn.delete(row.index))"
+          v-bind="rowProps(rows[row.index]!)"
+          @move="(by) => focusRow(row.index + by)"
+        />
       </li>
     </ul>
   </div>

@@ -20,6 +20,18 @@ export default defineConfig(({ command }) => ({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: { host: '127.0.0.1', port: 5190, strictPort: true, allowedHosts: remoteHost ? [remoteHost] : [] },
   preview: { host: '127.0.0.1', port: 5191, strictPort: true },
+  build: {
+    rollupOptions: {
+      output: {
+        // Each syntax grammar loads only when a diff needs it. There are some 250, so they get a folder of their own,
+        // which the service worker leaves out.
+        chunkFileNames: (chunk) =>
+          chunk.facadeModuleId?.includes('/@shikijs/langs/')
+            ? 'assets/grammars/[name]-[hash].js'
+            : 'assets/[name]-[hash].js',
+      },
+    },
+  },
   plugins: [
     vue(),
     ui({
@@ -58,10 +70,12 @@ export default defineConfig(({ command }) => ({
         },
         modal: { slots: { title: 'font-medium' } },
         slideover: { slots: { title: 'font-medium' } },
-        kbd: { base: 'font-mono font-normal' },
+        // Keys as they're typed: `j`, `Shift`, `Enter`, not capitals.
+        kbd: { base: 'font-mono font-normal normal-case' },
       },
       // Only bundled icons are allowed: the page may not call the Iconify API.
-      icon: { clientBundle: { scan: true, icons: Object.values(uiIcons) } },
+      // The scan reads .ts too: icons named in tables like components/looks.ts appear in no template.
+      icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] }, icons: Object.values(uiIcons) } },
       experimental: { componentDetection: command === 'build' },
     }),
     VueI18nPlugin({ include: fileURLToPath(new URL('./src/locales/*.json', import.meta.url)) }),
@@ -109,7 +123,7 @@ export default defineConfig(({ command }) => ({
       workbox: {
         // The app itself, so it opens offline. GitHub's API is never cached: the list's own cache is IndexedDB.
         globPatterns: ['**/*.{html,js,css,woff2,svg,ico,png}'],
-        globIgnores: ['og.png', 'screenshots/**'],
+        globIgnores: ['og.png', 'screenshots/**', 'assets/grammars/**'],
         // Cloudflare serves these, like the analytics endpoint; they aren't pages of the app.
         navigateFallbackDenylist: [/^\/cdn-cgi\//],
       },

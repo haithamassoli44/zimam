@@ -11,7 +11,7 @@ const emit = defineEmits<{ pick: [] }>()
   <div class="group relative">
     <button
       type="button"
-      class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-start text-sm transition-colors focus-visible:outline-2 focus-visible:outline-primary pointer-coarse:h-11"
+      class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-start text-sm focus-ring transition-colors pointer-coarse:h-11"
       :class="[
         active
           ? 'bg-elevated font-medium text-highlighted ring-1 ring-default ring-inset'
@@ -34,7 +34,7 @@ const emit = defineEmits<{ pick: [] }>()
     </button>
     <div
       v-if="$slots.actions"
-      class="absolute end-1 top-1/2 flex -translate-y-1/2 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 has-data-[state=open]:opacity-100 pointer-coarse:opacity-100"
+      class="absolute end-1 top-1/2 flex -translate-y-1/2 reveal has-data-[state=open]:opacity-100"
     >
       <slot name="actions" />
     </div>

@@ -1,7 +1,8 @@
 import type { IssueState, Label, Person } from '@/types'
 
 import type { GitHub } from './github'
-import { ASSIGNEES, closedAs, LABELS, PERSON } from './queries'
+import { DESCRIPTION_FIELDS, POST_FIELDS, toPost, type Post, type RawAuthor, type RawComment } from './posts'
+import { ASSIGNEES, closedAs, LABELS } from './queries'
 import { refKey, type IssueRef } from './refs'
 
 // GitHub signs the links to the files people upload, on this host, anew in every answer. Each lasts five minutes.
@@ -22,32 +23,6 @@ export function unsigned(address: string): string {
 
 /** Whether the signed links in this thread stop working within a minute. */
 export const expiring = (thread: Thread) => Date.now() - thread.readAt > SIGNED_FOR - 60_000
-
-/** How the author of a post is tied to the repository, where GitHub says so. */
-const ROLES = ['owner', 'member', 'collaborator', 'contributor'] as const
-type Role = (typeof ROLES)[number]
-
-/** Why someone hid a comment. */
-const HIDDEN = ['abuse', 'offTopic', 'outdated', 'resolved', 'duplicate', 'spam', 'other'] as const
-type Hidden = (typeof HIDDEN)[number]
-
-interface Author extends Person {
-  bot: boolean
-}
-
-/** The description of an issue, or one of its comments. */
-export interface Post {
-  id: string
-  url: string
-  /** Null for an account that was deleted. */
-  author: Author | null
-  role: Role | null
-  createdAt: string
-  edited: boolean
-  /** GitHub's rendering of the Markdown. It must go through clean() before it is shown. */
-  html: string
-  hidden: Hidden | null
-}
 
 export interface Thread {
   id: string
@@ -75,17 +50,13 @@ const PAGE = 100
 const COMMENTS = `
   totalCount
   pageInfo { hasNextPage endCursor }
-  nodes {
-    id url createdAt lastEditedAt isMinimized minimizedReason authorAssociation bodyHTML
-    author { kind: __typename ${PERSON} }
-  }`
+  nodes { ${POST_FIELDS} }`
 
 const ISSUE = `
   query($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
       issue(number: $number) {
-        id url title state stateReason createdAt lastEditedAt authorAssociation bodyHTML
-        author { kind: __typename ${PERSON} }
+        ${DESCRIPTION_FIELDS} title state stateReason
         ${LABELS}
         ${ASSIGNEES}
         comments(first: ${PAGE}) { ${COMMENTS} }
@@ -99,24 +70,6 @@ const MORE = `
       ... on Issue { comments(first: ${PAGE}, after: $after) { ${COMMENTS} } }
     }
   }`
-
-interface RawAuthor {
-  kind: string
-  login: string
-  avatarUrl: string
-}
-
-interface RawComment {
-  id: string
-  url: string
-  createdAt: string
-  lastEditedAt: string | null
-  isMinimized: boolean
-  minimizedReason: string | null
-  authorAssociation: string
-  bodyHTML: string
-  author: RawAuthor | null
-}
 
 interface RawComments {
   totalCount: number
@@ -140,34 +93,6 @@ interface RawIssue {
   comments: RawComments
 }
 
-const toAuthor = (raw: RawAuthor | null): Author | null =>
-  raw && { login: raw.login, avatarUrl: raw.avatarUrl, bot: raw.kind === 'Bot' }
-
-const toRole = (association: string): Role | null => {
-  const role = association.toLowerCase()
-  return (ROLES as readonly string[]).includes(role) ? (role as Role) : null
-}
-
-// GitHub has written the reasons as `off-topic` and as `OFF_TOPIC`.
-function toHidden(raw: RawComment): Hidden | null {
-  if (!raw.isMinimized) return null
-  const reason = (raw.minimizedReason ?? '')
-    .toLowerCase()
-    .replace(/[-_](\w)/g, (_, letter: string) => letter.toUpperCase())
-  return (HIDDEN as readonly string[]).includes(reason) ? (reason as Hidden) : 'other'
-}
-
-const toPost = (raw: RawComment): Post => ({
-  id: raw.id,
-  url: raw.url,
-  author: toAuthor(raw.author),
-  role: toRole(raw.authorAssociation),
-  createdAt: raw.createdAt,
-  edited: raw.lastEditedAt !== null,
-  html: raw.bodyHTML,
-  hidden: toHidden(raw),
-})
-
 const present = <T>(nodes: (T | null)[] | undefined): T[] => (nodes ?? []).filter((node): node is T => node !== null)
 
 function toThread(ref: IssueRef, raw: RawIssue, readAt: number): Thread {
@@ -179,7 +104,7 @@ function toThread(ref: IssueRef, raw: RawIssue, readAt: number): Thread {
     state: raw.state === 'CLOSED' ? closedAs(raw.stateReason) : 'open',
     labels: present(raw.labels?.nodes),
     assignees: present(raw.assignees?.nodes),
-    post: toPost({ ...raw, isMinimized: false, minimizedReason: null }),
+    post: toPost(raw),
     comments: present(raw.comments.nodes).map(toPost),
     total: raw.comments.totalCount,
     after: raw.comments.pageInfo.hasNextPage ? raw.comments.pageInfo.endCursor : null,

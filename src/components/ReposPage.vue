@@ -6,11 +6,11 @@ import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
-import { defineShortcuts } from '@nuxt/ui/composables'
 import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
+import { useKeys, useMain } from '@/components/keys'
 import { useReorder } from '@/components/reorder'
 import RepoRow, { REPO_COLUMN_WIDTHS, REPO_COLUMNS, REPO_GRID } from '@/components/RepoRow.vue'
 import SyncFailed from '@/components/SyncFailed.vue'
@@ -24,7 +24,8 @@ const { t } = useI18n()
 const search = useTemplateRef<{ inputRef: HTMLInputElement | null }>('search')
 const scroller = useTemplateRef<HTMLElement>('scroller')
 
-defineShortcuts({ '/': () => search.value?.inputRef?.focus() })
+useKeys({ search: () => search.value?.inputRef?.focus() })
+useMain(scroller)
 
 const shown = computed(() => repoResult.value.pinned.length + repoResult.value.rest.length)
 
@@ -134,12 +135,19 @@ const { gathering, failed } = gathered(() => repos.value.size)
 
       <div class="flex items-center gap-2 px-4 py-3 sm:px-6">
         <ChoiceGroup :label="t('filters.status.title')" :choices="statuses" :picked="isPicked" @pick="pick" />
-        <UButton v-if="filtered" color="neutral" variant="link" :label="t('filters.clear')" @click="clear" />
+        <UButton
+          v-if="filtered"
+          color="neutral"
+          variant="link"
+          class="enter"
+          :label="t('filters.clear')"
+          @click="clear"
+        />
       </div>
     </div>
 
     <!-- Relative, so what's placed absolutely in the list, like the hidden announcement, can't stretch the window. -->
-    <div ref="scroller" class="relative min-h-0 flex-1 overflow-y-auto">
+    <div ref="scroller" class="relative min-h-0 flex-1 overflow-y-auto focus:outline-none" tabindex="-1">
       <div v-if="gathering" aria-busy="true">
         <p class="px-4 py-3 text-sm text-muted sm:px-6">{{ t('results.gathering') }}</p>
         <div
@@ -167,7 +175,7 @@ const { gathering, failed } = gathered(() => repos.value.size)
         />
       </div>
 
-      <template v-else>
+      <div v-else class="enter">
         <div
           class="sticky top-0 z-10 hidden min-h-9 items-center border-b border-default bg-default px-6 py-1.5 text-xs leading-4 text-muted"
           :class="REPO_GRID"
@@ -176,7 +184,7 @@ const { gathering, failed } = gathered(() => repos.value.size)
             <button
               v-if="column.sort"
               type="button"
-              class="inline-flex items-center gap-1 rounded-sm text-balance transition-colors hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary"
+              class="inline-flex items-center gap-1 rounded-sm text-balance focus-ring transition-colors hover:text-highlighted"
               :class="[
                 column.start ? 'justify-self-start text-start' : 'justify-self-end text-end',
                 repoFilters.sort === column.sort && 'font-medium text-highlighted',
@@ -205,7 +213,7 @@ const { gathering, failed } = gathered(() => repos.value.size)
           <h2 v-if="repoResult.rest.length" :class="GROUP">{{ t('repos.rest') }}</h2>
         </template>
         <RepoRow v-for="row in repoResult.rest" :key="row.repo.id" :row="row" />
-      </template>
+      </div>
       <p class="sr-only" aria-live="polite">{{ moved }}</p>
     </div>
   </div>

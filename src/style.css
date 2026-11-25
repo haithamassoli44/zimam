@@ -14,9 +14,11 @@
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
 
-  /* Nuxt UI's menus animate with --ease-out too. */
+  /* Every move eases out on one curve, Nuxt UI's menus too, and src/components/motion.ts reads it from here. Feedback
+     takes the default duration; what enters, a little longer. */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --default-transition-duration: 160ms;
+  --enter-duration: 240ms;
   --default-transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -95,6 +97,78 @@
   color: var(--merged);
 }
 
+/* Where the keyboard is: a ring around the focused element, or inside it where a ring around it would be cut off. */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--ui-primary);
+  }
+}
+@utility focus-ring-inset {
+  &:focus-visible {
+    outline: 2px solid var(--ui-primary);
+    outline-offset: -2px;
+  }
+}
+
+/*
+ * A row's own button, covering the row under the controls raised above it: a click anywhere else on the row is the
+ * button's, and its focus ring is the row's. The row is `relative`.
+ */
+@utility cover {
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+  }
+  &:focus-visible {
+    outline: none;
+  }
+  &:focus-visible::after {
+    outline: 2px solid var(--ui-primary);
+    outline-offset: -2px;
+  }
+}
+
+/* A bar along a row's start edge: the row picked, or one holding it out of sight. The row is `relative`. */
+@utility picked-bar {
+  &::before {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 2px;
+    background-color: var(--ui-primary);
+  }
+}
+/* The row picked: the issue open, the file being read, the commits shown. */
+@utility picked {
+  @apply picked-bar bg-elevated;
+}
+
+/* A row's control that shows while the row, its `group`, has the pointer or the focus, and always on touch screens. */
+@utility reveal {
+  opacity: 0;
+  :where(.group):is(:hover, :focus-within) & {
+    opacity: 1;
+  }
+  @media (pointer: coarse) {
+    opacity: 1;
+  }
+}
+
+/* A small word beside a name or a file: a bot, a role, outdated, generated. */
+@utility tag {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: 1.125rem;
+  padding-inline: 0.375rem;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--ui-text-toned);
+  box-shadow: inset 0 0 0 1px var(--ui-border-accented);
+}
+
 /* On a touch screen, a control that looks smaller than 48px still takes a tap 48px across, centered on it. */
 @utility tap {
   @media (pointer: coarse) {
@@ -142,6 +216,47 @@ body {
 @media (prefers-reduced-motion: no-preference) {
   .arrived {
     animation: arrived var(--fresh) var(--ease-out);
+  }
+}
+
+/* What takes the place of something else fades in: a page, a part of the pull request page, an issue once it's read.
+   The animation runs again whenever the element is added, or its `display: none` goes. `enter-aside` also comes a
+   little way in from the side it sits on, and `enter-below` up from below, unless motion is turned down. */
+.enter {
+  animation: enter var(--default-transition-duration) var(--ease-out);
+}
+.enter-aside,
+.enter-below {
+  animation: enter var(--enter-duration) var(--ease-out);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .enter-aside {
+    --enter-from: translateX(12px);
+    animation-name: enter-moved;
+    &:dir(rtl) {
+      --enter-from: translateX(-12px);
+    }
+  }
+  .enter-below {
+    --enter-from: translateY(4px);
+    animation-name: enter-moved;
+  }
+}
+@keyframes enter {
+  from {
+    opacity: 0;
+  }
+}
+/* Another theme or language crossfades in: see src/components/motion.ts. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--enter-duration);
+  animation-timing-function: var(--ease-out);
+}
+@keyframes enter-moved {
+  from {
+    opacity: 0;
+    transform: var(--enter-from);
   }
 }
 
@@ -364,4 +479,172 @@ body {
     color: var(--ui-error);
     background: color-mix(in oklab, var(--ui-error) 12%, transparent);
   }
+}
+
+/* The pull request page's diff. Syntax colors come from Shiki's CSS-variables theme. */
+:root {
+  --diff-add: #e8f5eb;
+  --diff-add-word: #bde2c6;
+  --diff-del: #fcecec;
+  --diff-del-word: #f4c4c4;
+  --diff-add-seen: #f4faf5;
+  --diff-del-seen: #fdf6f6;
+
+  --shiki-foreground: #171717;
+  --shiki-background: transparent;
+  --shiki-token-keyword: #3a4ea6;
+  --shiki-token-string: #12704f;
+  --shiki-token-string-expression: #12704f;
+  --shiki-token-constant: #a1560c;
+  --shiki-token-function: #6e3fa3;
+  --shiki-token-comment: #8b8b8b;
+  --shiki-token-parameter: #3f3f46;
+  --shiki-token-punctuation: #6b6b6b;
+  --shiki-token-link: #3a4ea6;
+}
+
+.dark {
+  --diff-add: rgb(46 160 67 / 0.16);
+  --diff-add-word: rgb(46 160 67 / 0.4);
+  --diff-del: rgb(229 72 77 / 0.14);
+  --diff-del-word: rgb(229 72 77 / 0.36);
+  --diff-add-seen: rgb(46 160 67 / 0.06);
+  --diff-del-seen: rgb(229 72 77 / 0.05);
+
+  --shiki-foreground: #e5e5e5;
+  --shiki-token-keyword: #9fb1ff;
+  --shiki-token-string: #8fd6b0;
+  --shiki-token-string-expression: #8fd6b0;
+  --shiki-token-constant: #f0b170;
+  --shiki-token-function: #cdb4f5;
+  --shiki-token-comment: #7c7c7c;
+  --shiki-token-parameter: #d4d4d4;
+  --shiki-token-punctuation: #a3a3a3;
+  --shiki-token-link: #9fb1ff;
+}
+
+/* A diff's sizes. FileDiff.vue gives the counts: `--digits` in the longest line number, `--longest` characters in a
+   side's longest line, and `--lines` a file is likely to show before it's drawn. */
+:root {
+  --diff-line: 20px;
+  --diff-sign: 1.25rem;
+  --diff-end: 1rem;
+}
+.diff-code,
+.diff-bars {
+  --num-w: calc(var(--digits) * 1ch + 1.25rem);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.diff-code {
+  line-height: var(--diff-line);
+  color: var(--shiki-foreground);
+  tab-size: 4;
+}
+.diff-split {
+  grid-template-columns: var(--num-w) minmax(0, 1fr) var(--num-w) minmax(0, 1fr);
+}
+.diff-unified {
+  grid-template-columns: var(--num-w) var(--num-w) minmax(0, 1fr);
+}
+.diff-one-sided {
+  grid-template-columns: var(--num-w) minmax(0, 1fr);
+}
+/* A file's height before it's drawn, so the scroll doesn't jump much once it is. */
+.diff-unread {
+  height: min(4000px, calc(var(--lines) * var(--diff-line)));
+}
+/* A split view's scroll bar spans its side's longest line. */
+.diff-span {
+  width: calc(var(--longest) * 1ch + var(--diff-sign) + var(--diff-end));
+}
+.diff-num {
+  padding-inline: 0.5rem;
+  text-align: right;
+  color: var(--ui-text-muted);
+  background: var(--ui-bg);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.diff-cell {
+  min-width: 0;
+  padding-inline-end: var(--diff-end);
+}
+.diff-scroll .diff-cell {
+  overflow: hidden;
+  white-space: pre;
+}
+.diff-scroll .diff-text {
+  display: inline-block;
+  transform: translateX(calc(var(--sx, 0px) * -1));
+}
+.diff-wrap .diff-cell {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-sign {
+  display: inline-block;
+  width: var(--diff-sign);
+  padding-inline-start: 0.375rem;
+  color: var(--ui-text-muted);
+  user-select: none;
+}
+.diff-add {
+  background: var(--diff-add);
+}
+.diff-del {
+  background: var(--diff-del);
+}
+.diff-add.diff-seen {
+  background: var(--diff-add-seen);
+}
+.diff-del.diff-seen {
+  background: var(--diff-del-seen);
+}
+.diff-cell.diff-seen .diff-text {
+  opacity: 0.62;
+}
+.diff-add .diff-word {
+  background: var(--diff-add-word);
+  border-radius: 2px;
+}
+.diff-del .diff-word {
+  background: var(--diff-del-word);
+  border-radius: 2px;
+}
+.diff-seen .diff-word {
+  background: transparent;
+}
+.diff-num.diff-add,
+.diff-num.diff-del {
+  color: var(--ui-text-toned);
+}
+.diff-fresh {
+  box-shadow: inset 3px 0 0 var(--ui-primary);
+}
+.diff-empty {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    color-mix(in oklab, var(--ui-border) 60%, transparent) 6px 7px
+  );
+}
+/* The line a thread jumped to lights up at once, stays a moment, and fades back. */
+@keyframes diff-hot {
+  0%,
+  66% {
+    background-color: color-mix(in oklab, var(--ui-primary) 14%, transparent);
+  }
+}
+.diff-hot {
+  animation: diff-hot 2.4s var(--ease-out);
+}
+.diff-thread {
+  background: var(--ui-bg-muted);
+  border-block: 1px solid var(--ui-border);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.diff-bars > div {
+  scrollbar-width: thin;
 }

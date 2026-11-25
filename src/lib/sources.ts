@@ -24,14 +24,16 @@ export const sourceKey = (source: Source) => `${source.kind}:${source.name.toLow
 
 export const sameSource = (a: Source, b: Source) => sourceKey(a) === sourceKey(b)
 
-function belongsTo(repo: Repo, source: Source): boolean {
+/** Whether a repository, by its `owner/name`, belongs to a source: it is the source, or its owner is. */
+export function belongsTo(fullName: string, source: Source): boolean {
   const name = source.name.toLowerCase()
-  return source.kind === 'repo' ? repo.fullName.toLowerCase() === name : repo.owner.toLowerCase() === name
+  const repo = fullName.toLowerCase()
+  return source.kind === 'repo' ? repo === name : repo.split('/')[0] === name
 }
 
 /** Whether a source brings a repository into its workspace: it belongs to the source, and was picked if any were. */
 export function brings(source: Source, repo: Repo): boolean {
-  return belongsTo(repo, source) && (!source.only || source.only.includes(repo.id))
+  return belongsTo(repo.fullName, source) && (!source.only || source.only.includes(repo.id))
 }
 
 /** The search qualifier that finds a source's issues and pull requests, such as `org:acme`. */

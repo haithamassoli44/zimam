@@ -3,16 +3,17 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { useToast } from '@nuxt/ui/composables'
-import { computed, useId } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import BrandMark from '@/components/BrandMark.vue'
 import LanguageSwitch from '@/components/LanguageSwitch.vue'
 import NavRow from '@/components/NavRow.vue'
 import SyncStatus from '@/components/SyncStatus.vue'
+import { progress } from '@/stores/data'
 import { activeRepos } from '@/stores/repos'
 import { activeWorkspace, settings } from '@/stores/settings'
-import { openSettings, openSetup, ui } from '@/stores/ui'
+import { openKeys, openSettings, openSetup, ui } from '@/stores/ui'
 import {
   activeView,
   askToRename,
@@ -31,6 +32,16 @@ const { t } = useI18n()
 const toast = useToast()
 // The phone's menu draws a second sidebar, so the heading's id can't be fixed.
 const viewsHeading = useId()
+
+// The sync's progress along the footer's edge fills up, and fades once full. Faded, it empties for the next sync.
+const edge = ref(progress.value ?? 0)
+watch(progress, (now, before) => {
+  if (now !== null) edge.value = now
+  else if (before !== null) edge.value = 100
+})
+function faded(event: TransitionEvent) {
+  if (event.propertyName === 'opacity' && progress.value === null) edge.value = 0
+}
 
 const workspaceItems = computed<DropdownMenuItem[][]>(() => [
   settings.workspaces.map((ws) => ({
@@ -140,7 +151,15 @@ function viewMenu(view: View): DropdownMenuItem[][] {
       </ul>
     </nav>
 
-    <footer class="space-y-2 border-t border-default px-3 pt-3 pb-3">
+    <footer class="relative space-y-2 border-t border-default p-3">
+      <!-- How far the sync has got fills the footer's top edge, so the footer keeps its height as syncs come and go. -->
+      <span
+        class="absolute inset-x-0 -top-px h-0.5 origin-left bg-primary transition-[transform,opacity] duration-300 rtl:origin-right"
+        :class="progress === null && 'opacity-0'"
+        :style="{ transform: `scaleX(${edge / 100})` }"
+        aria-hidden="true"
+        @transitionend="faded"
+      />
       <div class="px-2">
         <SyncStatus />
       </div>
@@ -152,6 +171,15 @@ function viewMenu(view: View): DropdownMenuItem[][] {
           :label="t('nav.settings')"
           :ui="{ base: 'px-2 text-toned', leadingIcon: 'text-muted' }"
           @click="openSettings"
+        />
+        <UButton
+          icon="i-octicon-command-palette-16"
+          color="neutral"
+          variant="ghost"
+          :aria-label="t('keys.title')"
+          :ui="{ leadingIcon: 'text-muted' }"
+          class="max-lg:hidden"
+          @click="openKeys"
         />
         <LanguageSwitch class="ms-auto" />
       </div>

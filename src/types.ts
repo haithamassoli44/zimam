@@ -25,7 +25,11 @@ export type ItemKind = (typeof ITEM_KINDS)[number]
 export type ItemState = (typeof ITEM_STATES)[number]
 /** An issue is open, or closed as done, as not planned or as a duplicate. */
 export type IssueState = 'open' | 'completed' | 'notPlanned' | 'duplicate'
+/** A pull request is open, a draft, merged, or closed without merging. */
+export type PullState = 'open' | 'draft' | 'merged' | 'closed'
 export type Review = (typeof REVIEWS)[number]
+/** Where a pull request stands on review: a verdict, someone still asked to review, or what its branch's rules ask. */
+export type ReviewStanding = 'approved' | 'changes' | 'awaiting' | Review
 export type Checks = (typeof CHECKS)[number]
 export type Merge = (typeof MERGES)[number]
 export type Involvement = (typeof INVOLVEMENTS)[number]
@@ -60,9 +64,29 @@ export interface Workspace {
   pinned: string[]
 }
 
+// How posts and diffs read: bots' posts, in the issue panel too, then the pull request page's own.
+export const BOT_POSTS = ['show', 'collapse', 'hide'] as const
+export const LONG_LINES = ['wrap', 'scroll'] as const
+export const DIFF_VIEWS = ['split', 'unified'] as const
+export const FILE_MODES = ['all', 'one'] as const
+export type BotPosts = (typeof BOT_POSTS)[number]
+export type LongLines = (typeof LONG_LINES)[number]
+export type DiffView = (typeof DIFF_VIEWS)[number]
+export type FileMode = (typeof FILE_MODES)[number]
+
 export interface Settings {
   /** Which of the changes in settings.ts these settings have had. */
   version: number
+  /** How posts by bots show: as any other, folded to a line, or not at all. */
+  bots: BotPosts
+  longLines: LongLines
+  diffView: DiffView
+  /** Every changed file in one scroll, or one at a time. A pull request can override it. */
+  files: FileMode
+  /** Hide changes in whitespace alone. */
+  ignoreSpace: boolean
+  /** Paths to treat as generated, besides GitHub's own list and each repository's .gitattributes. */
+  generated: string[]
   locale: Locale
   theme: Theme
   density: Density

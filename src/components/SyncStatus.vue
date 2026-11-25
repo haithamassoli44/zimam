@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import UButton from '@nuxt/ui/components/Button.vue'
-import UProgress from '@nuxt/ui/components/Progress.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { clockTime, formatList, formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { progress, status, syncNow } from '@/stores/data'
+import { status, syncNow } from '@/stores/data'
 import { openSetup } from '@/stores/ui'
 
 const { t } = useI18n()
@@ -62,7 +61,6 @@ const look = computed(() => {
         @click="syncNow(true)"
       />
     </div>
-    <UProgress v-if="progress !== null" :model-value="progress" size="2xs" />
     <p v-if="status.failedSources.length" class="text-xs text-warning">
       {{ t('sync.failedSources', { names: formatList(status.failedSources) }) }}
     </p>

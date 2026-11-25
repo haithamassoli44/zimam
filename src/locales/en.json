@@ -50,7 +50,8 @@
     "newWorkspace": "New workspace",
     "settings": "Settings",
     "menu": "Menu",
-    "repos": "Repositories"
+    "repos": "Repositories",
+    "skip": "Skip to content"
   },
   "presets": {
     "open": "Everything open",
@@ -262,9 +263,48 @@
     "show": "Show",
     "more": "No more comments | Show 1 more comment | Show {n} more comments",
     "moreFailed": "Couldn't load more comments",
-    "readOnly": "Read-only here.",
+    "readOnly": "Read-only here",
     "reply": "Reply on GitHub",
     "video": "Watch the video on GitHub"
+  },
+  "person": {
+    "followers": "no followers | 1 follower | {n} followers",
+    "joined": "On GitHub since {when}",
+    "team": "Team in {owner}",
+    "bot": "Bot",
+    "failed": "Couldn't load the profile"
+  },
+  "keys": {
+    "title": "Keyboard shortcuts",
+    "layout": "Shortcuts go by where the keys are, so they work the same with an Arabic layout.",
+    "groups": {
+      "everywhere": "Anywhere",
+      "list": "In the list",
+      "issue": "In an open issue",
+      "pull": "On a pull request",
+      "diff": "In its diff"
+    },
+    "does": {
+      "help": "Show these shortcuts",
+      "search": "Search, or filter a pull request's files",
+      "views": "Open a saved view, in the sidebar's order",
+      "refresh": "Check GitHub for changes",
+      "settings": "Open the settings",
+      "rows": "Next or previous row",
+      "rowsArrows": "Next or previous row, from a row",
+      "open": "Open the row",
+      "openOnGitHub": "Open the row on GitHub",
+      "issues": "Next or previous issue",
+      "close": "Close the issue",
+      "parts": "Files, conversation, commits, checks; again to fold",
+      "back": "Back to the list",
+      "pulls": "Next or previous pull request",
+      "commits": "Previous or next commit",
+      "allChanges": "Show all changes",
+      "changes": "Next or previous change",
+      "files": "Next or previous file",
+      "viewed": "Mark the file viewed, or the file or folder focused in the files tree"
+    }
   },
   "sync": {
     "synced": "Updated {time}",
@@ -290,6 +330,7 @@
   },
   "settings": {
     "title": "Settings",
+    "display": "Display",
     "language": "Language",
     "theme": "Theme",
     "themes": {
@@ -330,6 +371,30 @@
     "installVia": {
       "ios": "To install, open the Share menu and choose Add to Home Screen",
       "mac": "To install, choose File, then Add to Dock"
+    },
+    "pull": {
+      "title": "Pull requests",
+      "bots": {
+        "title": "Bot comments",
+        "show": "Show",
+        "collapse": "Fold",
+        "hide": "Hide"
+      },
+      "longLines": {
+        "title": "Long lines",
+        "wrap": "Wrap",
+        "scroll": "Scroll"
+      },
+      "diffView": {
+        "title": "Diff view"
+      },
+      "files": {
+        "title": "Changed files"
+      },
+      "generated": {
+        "title": "Also treat as generated",
+        "help": "One pattern per line, like .gitattributes. GitHub's own list and each repository's linguist-generated marks always count."
+      }
     }
   },
   "repos": {
@@ -369,5 +434,160 @@
       "failing": "Most failing checks",
       "conflicts": "Most conflicts"
     }
+  },
+  "pull": {
+    "new": "New",
+    "commented": "commented",
+    "opened": "opened this",
+    "noDescription": "No description.",
+    "outdated": "Outdated",
+    "resolved": "Resolved",
+    "resolvedBy": "resolved by {login}",
+    "threadComments": "No comments | 1 comment | {n} comments",
+    "moreOnGitHub": "{n} more on GitHub",
+    "changedSince": "Changed since your visit",
+    "generatedTag": "Generated",
+    "onGitHub": "Open on GitHub",
+    "viewed": "Viewed",
+    "fileViewed": "{name} viewed",
+    "folderViewed": "Every file in {name} viewed",
+    "unticked": "Changed since you last viewed it",
+    "looseThreads": "No threads off the current code | 1 thread on code that has since changed | {n} threads on code that has since changed",
+    "binary": "Binary file, not shown",
+    "tooBig": "Too big to show here.",
+    "empty": "Only the name or mode changed.",
+    "expandUp": "Show {n} line above | Show {n} lines above",
+    "expandDown": "Show {n} line below | Show {n} lines below",
+    "hiddenLines": "No unchanged lines | 1 unchanged line | {n} unchanged lines",
+    "fold": "Fold this file",
+    "foldPost": "Fold this comment",
+    "unfold": "Unfold this file",
+    "rewritten": "Too many changes to pair line by line in time, so the file shows as removed, then added.",
+    "status": {
+      "added": "Added",
+      "removed": "Deleted",
+      "renamed": "Renamed",
+      "copied": "Copied",
+      "modified": "Modified",
+      "changed": "Changed"
+    },
+    "files": "Files",
+    "filesCount": "no files | 1 file | {n} files",
+    "scope": {
+      "label": "Commits shown",
+      "all": "All changes",
+      "commits": "no commits | 1 commit | {n} commits",
+      "pick": "Pick commits",
+      "previous": "Previous commit",
+      "next": "Next commit",
+      "position": "Commit {n} of {of}",
+      "range": "Commits {from}–{to} of {of}",
+      "showAll": "Show all changes",
+      "more": "Show the whole message",
+      "less": "Show less",
+      "committed": "committed {when}",
+      "capped": "GitHub lists only the first 300 files these commits change.",
+      "empty": "These commits change no files.",
+      "shift": "Shift-click another commit to pick the run between them.",
+      "onGitHub": "Commit {sha} on GitHub"
+    },
+    "viewedOf": "{n} of {of} viewed",
+    "filterFiles": "Filter files",
+    "reading": "Reading the files: {n} of {of}",
+    "generatedHidden": "No generated files | 1 generated file hidden | {n} generated files hidden",
+    "hideGenerated": "Hide generated files | Hide the generated file | Hide {n} generated files",
+    "fileMode": "How files show",
+    "modes": {
+      "all": "All files",
+      "one": "One at a time"
+    },
+    "diffView": "Diff view",
+    "views": {
+      "split": "Split",
+      "unified": "Unified"
+    },
+    "whitespace": "Ignore whitespace",
+    "whitespaceHelp": "Hide changes in spacing alone",
+    "changesFailed": "Couldn't read the changed files.",
+    "end": "That's every file.",
+    "previousFile": "Previous file",
+    "nextFile": "Next file",
+    "viewedNext": "Viewed, next",
+    "nextFileNamed": "Next: {name}",
+    "since": {
+      "title": "Since your last visit {when}",
+      "commits": "no commits | 1 commit | {n} commits",
+      "files": "no files changed | 1 file changed | {n} files changed",
+      "comments": "no comments | 1 new comment | {n} new comments",
+      "nothing": "Nothing new",
+      "legend": "What you saw before is faded; new lines have a blue bar.",
+      "first": "First new change",
+      "firstVisit": "Your first visit. Next time, what you've already seen will be faded.",
+      "line": "New since your last visit",
+      "newCommits": "Show the new commits"
+    },
+    "verdicts": {
+      "approved": "approved these changes",
+      "changes": "requested changes",
+      "commented": "reviewed",
+      "dismissed": "had a review dismissed",
+      "pending": "started a review"
+    },
+    "events": {
+      "pushed": "pushed no commits | pushed 1 commit | pushed {n} commits",
+      "forcePushed": "{who} force-pushed from {from} to {to}",
+      "ready": "{who} marked this ready for review",
+      "draft": "{who} turned this back into a draft",
+      "closed": "{who} closed this",
+      "reopened": "{who} reopened this",
+      "autoMerge": "{who} turned on auto-merge",
+      "requested": "{who} asked {whom} for a review",
+      "unrequested": "{who} no longer asks {whom} for a review",
+      "dismissed": "{who} dismissed {whose}'s review",
+      "renamed": "{who} renamed this from “{from}” to “{to}”",
+      "rebased": "{who} changed the base branch from {from} to {to}",
+      "merged": "{who} merged this into {into} as {commit}"
+    },
+    "moreCommits": "and {n} more",
+    "reviewOnGitHub": "Review on GitHub",
+    "awaiting": "Awaiting",
+    "noReviewers": "Nobody asked to review yet",
+    "mergedBy": "{who} merged this into {into} {when}",
+    "closedUnmerged": "Closed without merging",
+    "conflicts": "Conflicts with {base}",
+    "behind": "Behind {base}: needs its changes first",
+    "noConflicts": "No conflicts with {base}",
+    "checkingConflicts": "GitHub is still checking for conflicts",
+    "states": {
+      "open": "Open",
+      "draft": "Draft",
+      "merged": "Merged",
+      "closed": "Closed"
+    },
+    "wants": "{who} wants to merge {n} commits into {base} from {head}",
+    "withoutGenerated": "Without generated files | Without the generated file. With it: +{added} −{removed} | Without {n} generated files. With them: +{added} −{removed}",
+    "linesChanged": "Lines added and removed",
+    "tabs": {
+      "conversation": "Conversation",
+      "commits": "Commits",
+      "checks": "Checks",
+      "files": "Files"
+    },
+    "tabsLabel": "Parts of the pull request",
+    "previous": "Previous pull request",
+    "next": "Next pull request",
+    "failed": "Couldn't load this pull request.",
+    "loading": "Loading the pull request",
+    "merged": "{who} merged {n} commits into {base} from {head}",
+    "wanted": "{who} wanted to merge {n} commits into {base} from {head}",
+    "panel": {
+      "hide": "Hide the side column",
+      "resize": "Resize the side column"
+    },
+    "behindShort": "Behind {base}",
+    "awaitingCount": "Nobody awaited | Awaiting 1 reviewer | Awaiting {n} reviewers",
+    "showDetails": "Show the details",
+    "readFailed": "GitHub couldn't give this file's text.",
+    "changesLabel": "Changed files"
   }
 }
