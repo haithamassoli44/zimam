@@ -35,6 +35,8 @@ import type { Item } from '@/types'
 const { t } = useI18n()
 const scroller = useTemplateRef<HTMLElement>('scroller')
 const rows = computed(() => result.value.items)
+// What the list knows a row by: its item, which keeps its row when the rows above it go.
+const keyAt = (index: number): string | number => rows.value[index]?.id ?? index
 
 const isOpen = (item: Item) => sameRef(openIssue.value, issueRef(item))
 
@@ -57,7 +59,7 @@ const virtualizer = useVirtualizer(
     count: rows.value.length,
     getScrollElement: () => scroller.value,
     estimateSize: () => ROW_HEIGHT[settings.density],
-    getItemKey: (index: number) => rows.value[index]?.id ?? index,
+    getItemKey: keyAt,
     overscan: 12,
     initialOffset: back?.offset ?? 0,
     initialMeasurementsCache: back?.rows ?? [],
@@ -94,11 +96,12 @@ const gathering = computed(() => empty.value || (status.value.reading && !rows.v
 
 // --- The focus, from row to row: j and k, or ↓ and ↑ from a row ---
 
-// The rows drawn, by index, and the one to focus once it's drawn: the list draws a row only once it's in sight.
-const drawn = new Map<number, { focus(): void }>()
+// The rows drawn, by key, and the one to focus once it's drawn: the list draws a row only once it's in sight. A row that
+// goes lets go of its own key, so it can't take another row's place, as an index it shared with the row after would.
+const drawn = new Map<string | number, { focus(): void }>()
 let wanted: number | null = null
 function takeFocus() {
-  const row = wanted === null ? undefined : drawn.get(wanted)
+  const row = wanted === null ? undefined : drawn.get(keyAt(wanted))
   if (!row) return
   wanted = null
   row.focus()
@@ -112,6 +115,12 @@ watch(
   },
   { flush: 'post' },
 )
+
+// The key is taken as the row is drawn: by the time a row that goes lets go, the index it had is another row's.
+const drawing = (key: string | number) => (found: unknown) => {
+  if (found) drawn.set(key, found as { focus(): void })
+  else drawn.delete(key)
+}
 
 /** Gives a row's title the focus, scrolling it into sight first. */
 function focusRow(index: number) {
@@ -198,7 +207,7 @@ onMounted(takeBack)
         :style="{ transform: `translateY(${row.start}px)` }"
       >
         <ItemRow
-          :ref="(found) => (found ? drawn.set(row.index, found as never) : drawn.delete(row.index))"
+          :ref="drawing(row.key as string | number)"
           v-bind="rowProps(rows[row.index]!)"
           @move="(by) => focusRow(row.index + by)"
         />
