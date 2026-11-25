@@ -29,8 +29,9 @@ const cancellable = !!activeWorkspace.value
 const isDev = import.meta.env.DEV
 // Zimam's own code, for anyone who wants to check what happens to their token.
 const CODE = 'https://github.com/ieasybooks/zimam'
+// Contents is for a pull request's diff: its comparison and its files' texts. Statuses is for its checks.
 const FINE_GRAINED =
-  'https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&issues=read&pull_requests=read&metadata=read&commit_statuses=read'
+  'https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&contents=read&issues=read&pull_requests=read&metadata=read&statuses=read'
 const CLASSIC = 'https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam'
 
 const token = ref(activeWorkspace.value?.token ?? '')
