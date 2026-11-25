@@ -198,8 +198,9 @@ interface Facts {
    */
   context?: Context
   all?: Values
-  /** What a search looks through, once searched: see matchesText. */
+  /** What a search looks through, once searched, and the repository name it holds: see matchesText. */
   text?: string
+  textRepo?: string
 }
 
 const known = new WeakMap<Item, Facts>()
@@ -386,9 +387,11 @@ export function parseSearch(q: string): Search {
 // An item's title, number, repository and labels: what a search's words look for.
 function matchesText(item: Item, facts: Facts, terms: string[], ctx: Context): boolean {
   if (!terms.length) return true
-  if (facts.text === undefined) {
-    const repo = ctx.repos.get(item.repoId)?.fullName ?? ''
+  // A repository renamed keeps its items as they were, so the text is made again once its name isn't the one it holds.
+  const repo = ctx.repos.get(item.repoId)?.fullName ?? ''
+  if (facts.text === undefined || facts.textRepo !== repo) {
     facts.text = normalize([item.title, `#${item.number}`, repo, ...item.labels.map((label) => label.name)].join(' '))
+    facts.textRepo = repo
   }
   for (const term of terms) if (!facts.text.includes(term)) return false
   return true

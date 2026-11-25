@@ -225,6 +225,20 @@ describe('applyFilters', () => {
     )
     expect(found.items).toHaveLength(1)
   })
+
+  it('searches a renamed repository by its new name, as `repo:` does', () => {
+    const found = [item('a', { title: 'Fix login' })]
+    const search = (q: string, context: Context) => applyFilters(found, { ...defaultFilters(), q }, context).items
+    expect(search('acme/web', ctx)).toHaveLength(1)
+    // The repositories are read again: the same one, by a new name. Its items stay as they were.
+    const renamed: Context = {
+      ...ctx,
+      repos: new Map([...ctx.repos, ['web', { ...repo('web'), fullName: 'acme/site' }]]),
+    }
+    expect(search('acme/site', renamed)).toHaveLength(1)
+    expect(search('repo:acme/site', renamed)).toHaveLength(1)
+    expect(search('acme/web', renamed)).toHaveLength(0)
+  })
 })
 
 describe('typed filters', () => {
