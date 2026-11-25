@@ -4,7 +4,7 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UFieldGroup from '@nuxt/ui/components/FieldGroup.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, onBeforeUnmount, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { kbds, useKeys, useMain } from '@/components/keys'
@@ -12,6 +12,7 @@ import { shown } from '@/components/pressed'
 import FileDiff from '@/components/pull/FileDiff.vue'
 import {
   activeFile,
+  asked,
   currentFile,
   inView,
   onBring,
@@ -82,8 +83,39 @@ function onScroll() {
   })
 }
 
+// --- In one scroll, a long pull request's files mount a few at a time: the first at once, the rest a batch at a time
+// as the page has a moment. Showing all the changes, or a commit, then answers at once rather than after every file.
+const FIRST = 12
+const BATCH = 16
+const mounted = ref(FIRST)
+const mountedFiles = computed(() => shownFiles.value.slice(0, mounted.value))
+let growing: ReturnType<typeof setTimeout> | undefined
+watch(
+  [mounted, shownFiles],
+  () => {
+    clearTimeout(growing)
+    if (mounted.value < shownFiles.value.length) growing = setTimeout(() => (mounted.value += BATCH))
+  },
+  { immediate: true },
+)
+watch(
+  () => scope.value?.key,
+  () => (mounted.value = FIRST),
+)
+onBeforeUnmount(() => clearTimeout(growing))
+
+/** Mounts the files up to this one and a batch after, so it can come to the top, for what's asked of it. */
+async function mountTo(path: string) {
+  const at = shownFiles.value.findIndex((file) => file.path === path)
+  if (at < mounted.value) return
+  mounted.value = at + 1 + BATCH
+  await nextTick()
+}
+watch(asked, (thread) => thread && void mountTo(thread.path))
+
 // A file asked for comes to the top of the scroll, or shows alone.
-onBring((path) => {
+onBring(async (path) => {
+  if (!one.value) await mountTo(path)
   const target = one.value ? scroller.value?.firstElementChild : sectionOf(path)
   if (target) reveal(target, 'start')
 })
@@ -273,8 +305,10 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
       </p>
 
       <template v-else-if="!one">
-        <FileDiff v-for="file in shownFiles" :key="diffKey(file.path)" :file="file" />
-        <p class="px-6 py-10 text-center text-[13px] text-muted">{{ t('pull.end') }}</p>
+        <FileDiff v-for="file in mountedFiles" :key="diffKey(file.path)" :file="file" />
+        <p v-if="mountedFiles.length === shownFiles.length" class="px-6 py-10 text-center text-[13px] text-muted">
+          {{ t('pull.end') }}
+        </p>
       </template>
 
       <template v-else-if="current">

@@ -2,18 +2,18 @@
 // One changed file, diffed by Zimam from its two whole texts, with its review threads under their lines.
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { useArming } from '@/components/armed'
 import LineCounts from '@/components/LineCounts.vue'
+import DiffRows, { STEP, type Cell, type Row } from '@/components/pull/DiffRows.vue'
 import { FILE_LOOKS, tickLook } from '@/components/pull/looks'
 import { asked, reveal, scroller } from '@/components/pull/navigation'
 import ThreadCard from '@/components/pull/ThreadCard.vue'
 import SkeletonLines from '@/components/SkeletonLines.vue'
 import { splitRows, visibleBlocks, type FileDiff, type Line } from '@/lib/diff'
 import { languageOf, tokenize, type Token } from '@/lib/highlight'
-import { paint } from '@/lib/paint'
 import type { ReviewThread } from '@/lib/pull'
 import { blobUrl } from '@/lib/refs'
 import { formatNumber } from '@/locale'
@@ -35,6 +35,9 @@ const props = defineProps<{ file: PullFile; single?: boolean }>()
 const { t } = useI18n()
 const root = useTemplateRef<HTMLElement>('root')
 const grid = useTemplateRef<HTMLElement>('grid')
+// A long pull request has hundreds of files: each header's tooltips wait for it to be pointed at or focused.
+const head = useTemplateRef<HTMLElement>('head')
+const { tip, arming } = useArming(head)
 
 const diff = computed(() => diffOf(props.file))
 const ready = computed<FileDiff | null>(() => (typeof diff.value === 'object' ? diff.value : null))
@@ -45,6 +48,8 @@ const mode = computed(() => (settings.diffView === 'split' && !oneSided.value &&
 const wrap = computed(() => settings.longLines === 'wrap')
 
 const viewed = computed(() => viewedState(props.file))
+// Computed, so a tick on another file, which reads every file again, redraws only the files it changes.
+const tickable = computed(() => canTick(props.file))
 const folded = ref(viewed.value === 'viewed' && !props.single)
 watch(viewed, (state) => {
   if (!props.single) folded.value = state === 'viewed'
@@ -86,9 +91,6 @@ watch(
   { immediate: true },
 )
 
-const tokensOf = (line: Line) =>
-  line.kind === 'del' ? oldTokens.value?.[line.old! - 1] : newTokens.value?.[(line.new ?? 0) - 1]
-
 // --- Threads ---
 const threads = computed(() => threadsByPath.value.get(props.file.path) ?? [])
 const anchored = computed(() =>
@@ -122,22 +124,13 @@ watch(ready, () => opened.clear())
 const blocks = computed(() =>
   ready.value ? visibleBlocks(ready.value, CONTEXT, { anchors: threadsAt.value.keys(), open: opened }) : [],
 )
-const STEP = 20
 function expand(block: { from: number; to: number }, how: 'up' | 'down' | 'all') {
   const from = how === 'down' ? Math.max(block.from, block.to - STEP) : block.from
   const to = how === 'up' ? Math.min(block.to, block.from + STEP) : block.to
   for (let index = from; index < to; index++) opened.add(index)
 }
 
-// --- Rows ---
-// A line row is its cells across the grid: a split view's two numbers and two texts, or a unified view's numbers and
-// its text. Each text cell carries the threads on its side, for the margin's markers.
-type Cell =
-  | { kind: 'num'; key: string; text: string | number; css: (string | false)[]; change: boolean; fresh: boolean }
-  | { kind: 'text'; key: string; line: Line | null; side?: 'old' | 'new'; css: string; threads: ReviewThread[] }
-type Row =
-  | { kind: 'line'; key: string; at: number; cells: Cell[]; threads: ReviewThread[] }
-  | { kind: 'gap'; key: string; from: number; to: number; first: boolean; last: boolean }
+// --- Rows: DiffRows draws them ---
 
 const changeStarts = computed(() => new Set(ready.value?.changes ?? []))
 
@@ -263,7 +256,6 @@ function tone(line: Line | null): string {
   return line.seen ? `${base} diff-seen` : base
 }
 const freshBar = (line: Line | null) => !!line && line.kind !== 'same' && line.seen === false
-const sign = (line: Line | null) => (!line ? '' : line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' ')
 
 // --- Long lines that scroll: each side of a split view scrolls on its own, through a bar under the file ---
 const longest = computed(() => {
@@ -342,12 +334,13 @@ const fresh = computed(() => freshFile(props.file))
 const onGitHub = computed(() => (pull.value ? blobUrl(pull.value.ref.repo, props.file.at, props.file.path) : '#'))
 // What a file likely shows before it's drawn: its changes and some lines around them.
 const unread = computed(() => ({ '--lines': Math.max(3, props.file.additions + props.file.deletions + 6) }))
-const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), line.words) : [])
 </script>
 
 <template>
   <section ref="root" class="border-b border-default" :data-path="file.path">
     <header
+      ref="head"
+      v-bind="arming"
       class="sticky top-0 z-10 flex min-h-11 items-center gap-2 border-b border-default bg-default/95 px-3 backdrop-blur sm:px-4"
     >
       <UButton
@@ -360,9 +353,9 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
         :ui="{ leadingIcon: 'rtl:-scale-x-100' }"
         @click="folded = !folded"
       />
-      <UTooltip :text="t(`pull.status.${file.status}`)">
+      <component :is="tip" :text="t(`pull.status.${file.status}`)">
         <UIcon :name="FILE_LOOKS[file.status].icon" class="size-4 shrink-0" :class="FILE_LOOKS[file.status].color" />
-      </UTooltip>
+      </component>
       <span class="flex min-w-0 flex-1 items-baseline gap-2 font-mono text-[13px]" dir="ltr">
         <span class="min-w-0 truncate"
           ><span class="text-muted">{{ dir }}</span
@@ -384,7 +377,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
         :deletions="ready?.deletions ?? file.deletions"
         class="shrink-0 text-[12px] max-sm:hidden"
       />
-      <UTooltip :text="t('pull.onGitHub')">
+      <component :is="tip" :text="t('pull.onGitHub')">
         <UButton
           :to="onGitHub"
           target="_blank"
@@ -395,7 +388,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
           :aria-label="t('pull.onGitHub')"
           class="max-sm:hidden"
         />
-      </UTooltip>
+      </component>
       <button
         type="button"
         class="tap inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] ring-1 transition-colors ring-inset disabled:opacity-50"
@@ -405,7 +398,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
             : 'text-toned ring-default enabled:hover:bg-elevated enabled:hover:text-highlighted'
         "
         :aria-pressed="viewed === 'viewed'"
-        :disabled="!canTick(file)"
+        :disabled="!tickable"
         @click="toggleViewed([file])"
       >
         <UIcon :name="tickLook(viewed === 'viewed').icon" class="size-4" :class="tickLook(viewed === 'viewed').color" />
@@ -464,76 +457,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
           :style="digits"
           dir="ltr"
         >
-          <template v-for="row in rows" :key="row.key">
-            <div
-              v-if="row.kind === 'gap'"
-              class="col-span-full flex h-8 items-center gap-1 bg-muted text-[12px] text-muted"
-              :class="!wrap && mode === 'unified' && 'sticky start-0 w-[100cqw]'"
-            >
-              <UButton
-                v-if="!row.first && row.to - row.from > STEP"
-                icon="i-octicon-fold-down-16"
-                color="neutral"
-                variant="ghost"
-                size="xs"
-                :aria-label="t('pull.expandDown', { n: formatNumber(STEP) }, STEP)"
-                @click="expand(row, 'up')"
-              />
-              <UButton
-                v-if="!row.last && row.to - row.from > STEP"
-                icon="i-octicon-fold-up-16"
-                color="neutral"
-                variant="ghost"
-                size="xs"
-                :aria-label="t('pull.expandUp', { n: formatNumber(STEP) }, STEP)"
-                @click="expand(row, 'down')"
-              />
-              <button
-                type="button"
-                class="inline-flex items-center gap-1.5 px-2 transition-colors hover:text-highlighted"
-                @click="expand(row, 'all')"
-              >
-                <UIcon name="i-octicon-unfold-16" class="size-4" />
-                {{ t('pull.hiddenLines', { n: formatNumber(row.to - row.from) }, row.to - row.from) }}
-              </button>
-            </div>
-
-            <template v-else>
-              <template v-for="cell in row.cells" :key="cell.key">
-                <div
-                  v-if="cell.kind === 'num'"
-                  class="diff-num"
-                  :class="cell.css"
-                  :data-row="row.at"
-                  :data-change="cell.change || undefined"
-                  :data-fresh="cell.fresh || undefined"
-                >
-                  {{ cell.text }}
-                </div>
-                <div v-else class="diff-cell relative" :class="cell.css" :data-side="cell.side" :data-row="row.at">
-                  <span class="diff-text" :style="cell.side && { '--sx': `var(--sx-${cell.side}, 0px)` }"
-                    ><span class="diff-sign">{{ sign(cell.line) }}</span
-                    ><span
-                      v-for="(piece, index) in pieces(cell.line)"
-                      :key="index"
-                      :class="[piece.changed && 'diff-word', piece.italic && 'italic', piece.bold && 'font-medium']"
-                      :style="piece.color ? { color: piece.color } : undefined"
-                      >{{ piece.text }}</span
-                    ></span
-                  >
-                </div>
-              </template>
-              <div
-                v-for="thread in row.threads"
-                :key="thread.id"
-                class="diff-thread px-3 py-3"
-                :class="mode === 'unified' && ['col-span-full', !wrap && 'sticky start-0 w-[100cqw]']"
-                :style="mode === 'split' && { gridColumn: thread.side === 'old' ? '1 / 3' : '3 / 5' }"
-              >
-                <ThreadCard :thread="thread" place="line" :class="mode === 'unified' && 'max-w-3xl'" />
-              </div>
-            </template>
-          </template>
+          <DiffRows :rows="rows" :mode="mode" :wrap="wrap" :old="oldTokens" :new="newTokens" @expand="expand" />
         </div>
 
         <div

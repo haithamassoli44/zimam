@@ -11,6 +11,7 @@ import {
   readTexts,
   readVersions,
   sides,
+  type PullHeads,
   type Changes,
   type Content,
   type FileChange,
@@ -147,7 +148,8 @@ async function open(ref: IssueRef, gh: GitHub) {
   session.value = s
   let pull: Pull
   try {
-    pull = await readPull(gh, ref)
+    // What the pull request changed is read as soon as its first answer says where it starts and ends.
+    pull = await readPull(gh, ref, (heads) => void changesOf(s, heads, null))
   } catch (error) {
     s.problem = error instanceof Error ? error.message : 'failed'
     s.pull = 'failed'
@@ -185,7 +187,7 @@ export function reloadPull() {
 }
 
 /** What a run of commits changed, or the whole pull request (null): null when it can't be read. */
-function changesOf(s: Session, pull: Pull, run: Scope | null): Promise<Changes | null> {
+function changesOf(s: Session, pull: PullHeads, run: Scope | null): Promise<Changes | null> {
   const key = keyOf(run)
   let read = s.reads.get(key)
   if (!read) {

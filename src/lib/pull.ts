@@ -1,6 +1,7 @@
 // A pull request, read whole for its own page: its conversation, reviews and threads, commits and changed files.
 import type { Checks, Label, Merge, Person, PullState, Review, ReviewStanding } from '@/types'
 
+import type { PullHeads } from './changes'
 import type { GitHub } from './github'
 import type { Who } from './people'
 import { AUTHOR_FIELDS, DESCRIPTION_FIELDS, POST_FIELDS, toAuthor, toPost, type Author, type Post } from './posts'
@@ -361,12 +362,17 @@ function toEntries(nodes: Raw[], threads: ReviewThread[]): Entry[] {
   return entries
 }
 
-/** Reads a pull request with its conversation, reviews, threads and commits. About 2 points, more for long ones. */
-export async function readPull(gh: GitHub, ref: IssueRef): Promise<Pull> {
+/**
+ * Reads a pull request with its conversation, reviews, threads and commits. About 2 points, more for long ones.
+ * `onHeads` hears where it starts and ends from the first answer, before a long one's other pages, so what it changed
+ * can be read meanwhile.
+ */
+export async function readPull(gh: GitHub, ref: IssueRef, onHeads?: (heads: PullHeads) => void): Promise<Pull> {
   const [owner, name] = ref.repo.split('/')
   const { data, errors } = await gh.request<Raw>(PULL, { owner, name, number: ref.number })
   const raw = data.repository?.pullRequest
   if (!raw) throw new Error(errors[0]?.message ?? 'No pull request in the answer')
+  onHeads?.({ ref, baseOid: raw.baseRefOid, headOid: raw.headRefOid, changedFiles: raw.changedFiles })
 
   const [timeline, threadNodes, files] = await Promise.all(
     (['timelineItems', 'reviewThreads', 'files'] as const).map((list) => restOf(gh, raw.id, list, raw[list])),

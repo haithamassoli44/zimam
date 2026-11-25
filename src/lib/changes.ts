@@ -66,12 +66,19 @@ export async function readRange(gh: GitHub, repo: string, base: string, head: st
 const PAGE = 100
 const PAGES = 30
 
+/** What reading a pull request's changes needs of it: its first answer has it all. */
+export type PullHeads = Pick<Pull, 'ref' | 'baseOid' | 'headOid' | 'changedFiles'>
+
 /**
  * The merge base and the changed files, with the repository's .gitattributes at the head, its own word on which files
- * are generated: one REST request for up to 300 files, then one per 100 more.
+ * are generated: one REST request for up to 300 files, then one per 100 more, beside one for the attributes.
  */
-export async function readChanges(gh: GitHub, pull: Pull): Promise<{ changes: Changes; attributes: string | null }> {
+export async function readChanges(
+  gh: GitHub,
+  pull: PullHeads,
+): Promise<{ changes: Changes; attributes: string | null }> {
   const { repo, number } = pull.ref
+  const attributes = readTexts(gh, repo, [blobAt(pull.headOid, '.gitattributes')])
   const compared = await readRange(gh, repo, pull.baseOid, pull.headOid)
   // A pull request lists all its files, when a comparison has only the first.
   let changes: Changes = { ...compared, capped: false }
@@ -84,7 +91,7 @@ export async function readChanges(gh: GitHub, pull: Pull): Promise<{ changes: Ch
     }
     changes = { mergeBase: compared.mergeBase, files, capped: files.length >= PAGE * PAGES }
   }
-  const [{ content }] = await readTexts(gh, repo, [blobAt(pull.headOid, '.gitattributes')])
+  const [{ content }] = await attributes
   return { changes, attributes: 'text' in content ? content.text : null }
 }
 
