@@ -166,40 +166,147 @@ export interface Context {
 }
 
 const DAY = 86_400_000
-const RANGE_DAYS: Record<Exclude<Range, 'stale'>, number> = { day: 1, week: 7, month: 30, quarter: 90 }
+const QUARTER = 90 * DAY
 
-function inRange(item: Item, range: Range, now: number): boolean {
-  const age = now - Date.parse(item.updatedAt)
-  return range === 'stale' ? age > RANGE_DAYS.quarter * DAY : age <= RANGE_DAYS[range] * DAY
+// The ranges an item updated this long ago falls in. They nest, so each age gives one of these few lists.
+const AGES: [number, readonly Range[]][] = [
+  [DAY, ['day', 'week', 'month', 'quarter']],
+  [7 * DAY, ['week', 'month', 'quarter']],
+  [30 * DAY, ['month', 'quarter']],
+  [QUARTER, ['quarter']],
+]
+const STALE: readonly Range[] = ['stale']
+const rangesOf = (age: number) => AGES.find(([most]) => age <= most)?.[1] ?? STALE
+
+/**
+ * What the filters read of an item itself, worked out once: a changed item is a new object. Lists the filters
+ * compare are shared and never changed.
+ */
+interface Facts {
+  values: Pick<
+    Record<Facet, readonly string[]>,
+    'kind' | 'state' | 'label' | 'author' | 'assignee' | 'review' | 'checks' | 'merge'
+  >
+  updated: number
+  created: number
+  /** The author's and assignees' logins without case, for what involves the reader. */
+  author: string | null
+  assignees: readonly string[]
+  /**
+   * Its values in every facet as last read, and the context they were read in: another look through the items in the
+   * same context, as after a filter is picked, takes them from here.
+   */
+  context?: Context
+  all?: Values
+  /** What a search looks through, once searched: see matchesText. */
+  text?: string
 }
 
-function facetValues(item: Item, ctx: Context): Record<Facet, string[]> {
-  const repo = ctx.repos.get(item.repoId)
-  return {
-    kind: [item.kind],
-    state: [item.state],
-    status: [statusOf(repo)],
-    owner: [repo?.owner ?? ''],
-    repo: [repo?.fullName ?? ''],
-    label: item.labels.length ? item.labels.map((label) => label.name) : [NONE],
-    // GitHub shows deleted accounts as "ghost".
-    author: [item.author?.login ?? 'ghost'],
-    assignee: item.assignees.length ? item.assignees.map((person) => person.login) : [NONE],
-    me: involvement(item, ctx.me),
-    review: item.review ? [item.review] : [],
-    checks: item.checks ? [item.checks] : [],
-    merge: item.merge ? [item.merge] : [],
-    updated: RANGES.filter((range) => inRange(item, range, ctx.now)),
+const known = new WeakMap<Item, Facts>()
+const NOTHING: readonly string[] = []
+
+// The same values make the same lists, shared by every item that has them: a big workspace has tens of thousands.
+const lists = new Map<string, readonly string[]>()
+
+/** The list of one value. */
+function one(value: string): readonly string[] {
+  let list = lists.get(value)
+  if (!list) lists.set(value, (list = [value]))
+  return list
+}
+
+/** A list of values. Values never hold a line break, so a list of several never takes one value's key. */
+function listOf(values: string[]): readonly string[] {
+  if (values.length < 2) return values.length ? one(values[0]) : NOTHING
+  const key = values.join('\n')
+  let list = lists.get(key)
+  if (!list) lists.set(key, (list = values))
+  return list
+}
+
+function factsOf(item: Item): Facts {
+  let facts = known.get(item)
+  if (facts) return facts
+  facts = {
+    values: {
+      kind: one(item.kind),
+      state: one(item.state),
+      label: item.labels.length ? listOf(item.labels.map((label) => label.name)) : one(NONE),
+      // GitHub shows deleted accounts as "ghost".
+      author: one(item.author?.login ?? 'ghost'),
+      assignee: item.assignees.length ? listOf(item.assignees.map((person) => person.login)) : one(NONE),
+      review: item.review ? one(item.review) : NOTHING,
+      checks: item.checks ? one(item.checks) : NOTHING,
+      merge: item.merge ? one(item.merge) : NOTHING,
+    },
+    updated: Date.parse(item.updatedAt),
+    created: Date.parse(item.createdAt),
+    author: item.author?.login.toLowerCase() ?? null,
+    assignees: item.assignees.length ? listOf(item.assignees.map((person) => person.login.toLowerCase())) : NOTHING,
   }
+  known.set(item, facts)
+  return facts
 }
 
-function involvement(item: Item, me: Me): Involvement[] {
-  if (!me.login) return []
-  const login = me.login.toLowerCase()
+/** When an item was last updated and opened, in milliseconds. */
+export function timesOf(item: Item): { updated: number; created: number } {
+  return factsOf(item)
+}
+
+// What the filters read of a repository, once for each.
+const repoValues = new WeakMap<Repo, Pick<Record<Facet, readonly string[]>, 'status' | 'owner' | 'repo'>>()
+const NO_REPO = { status: [statusOf(undefined)], owner: [''], repo: [''] }
+
+function repoOf(repo: Repo | undefined) {
+  if (!repo) return NO_REPO
+  let values = repoValues.get(repo)
+  if (!values) {
+    values = { status: [statusOf(repo)], owner: [repo.owner], repo: [repo.fullName] }
+    repoValues.set(repo, values)
+  }
+  return values
+}
+
+type Values = Record<Facet, readonly string[]>
+
+/** A look through the items: what's the same for all of them, read once. */
+interface Pass {
+  ctx: Context
+  /** The reader's login without case, or null before it's known. */
+  login: string | null
+}
+
+const passOf = (ctx: Context): Pass => ({ ctx, login: ctx.me.login?.toLowerCase() ?? null })
+
+function facetValues(item: Item, facts: Facts, pass: Pass): Values {
+  if (facts.context === pass.ctx && facts.all) return facts.all
+  const { values } = facts
+  const repo = repoOf(pass.ctx.repos.get(item.repoId))
+  facts.context = pass.ctx
+  facts.all = {
+    kind: values.kind,
+    state: values.state,
+    status: repo.status,
+    owner: repo.owner,
+    repo: repo.repo,
+    label: values.label,
+    author: values.author,
+    assignee: values.assignee,
+    me: involvement(item, facts, pass),
+    review: values.review,
+    checks: values.checks,
+    merge: values.merge,
+    updated: rangesOf(pass.ctx.now - facts.updated),
+  }
+  return facts.all
+}
+
+function involvement(item: Item, facts: Facts, { login, ctx }: Pass): readonly Involvement[] {
+  if (!login) return []
   const values: Involvement[] = []
-  if (me.requested.has(item.id) && item.state === 'open') values.push('review')
-  if (item.assignees.some((person) => person.login.toLowerCase() === login)) values.push('assigned')
-  if (item.author?.login.toLowerCase() === login) values.push('authored')
+  if (ctx.me.requested.has(item.id) && item.state === 'open') values.push('review')
+  if (facts.assignees.includes(login)) values.push('assigned')
+  if (facts.author === login) values.push('authored')
   return values
 }
 
@@ -276,22 +383,20 @@ export function parseSearch(q: string): Search {
   return search
 }
 
-const searchText = new WeakMap<Item, string>()
-
-function matchesText(item: Item, terms: string[], ctx: Context): boolean {
+// An item's title, number, repository and labels: what a search's words look for.
+function matchesText(item: Item, facts: Facts, terms: string[], ctx: Context): boolean {
   if (!terms.length) return true
-  let text = searchText.get(item)
-  if (text === undefined) {
-    const repo = ctx.repos.get(item.repoId)
-    text = normalize([item.title, `#${item.number}`, repo?.fullName ?? '', ...item.labels.map((l) => l.name)].join(' '))
-    searchText.set(item, text)
+  if (facts.text === undefined) {
+    const repo = ctx.repos.get(item.repoId)?.fullName ?? ''
+    facts.text = normalize([item.title, `#${item.number}`, repo, ...item.labels.map((label) => label.name)].join(' '))
   }
-  return terms.every((term) => text.includes(term))
+  for (const term of terms) if (!facts.text.includes(term)) return false
+  return true
 }
 
 // Values are compared without case. A repository matches by its full name or its name alone, and `@me` is whoever
 // the token belongs to, so `involves:@me` is anything that involves them.
-function holds(values: Record<Facet, string[]>, facet: Facet, wanted: string, ctx: Context): boolean {
+function holds(values: Values, facet: Facet, wanted: string, ctx: Context): boolean {
   if (facet === 'me' && wanted === '@me') return values.me.length > 0
   const target = (
     wanted === '@me' && (facet === 'author' || facet === 'assignee') ? ctx.me.login : wanted
@@ -303,63 +408,100 @@ function holds(values: Record<Facet, string[]>, facet: Facet, wanted: string, ct
   })
 }
 
-function matchesSearch(item: Item, values: Record<Facet, string[]>, search: Search, ctx: Context): boolean {
-  if (!matchesText(item, search.terms, ctx)) return false
-  return search.qualifiers.every(
+const matchesQualifiers = (values: Values, search: Search, ctx: Context) =>
+  search.qualifiers.every(
     ({ pairs, negated }) => pairs.some(([facet, value]) => holds(values, facet, value, ctx)) !== negated,
   )
+
+/** Filters ready to test items with: the search, and the values picked in each facet that has some. */
+interface Plan {
+  search: Search
+  picked: [Facet, Set<string>][]
 }
 
-/** The facets an item fails, stopping at two: an item failing more than one is out of every count. */
-function failures(values: Record<Facet, string[]>, filters: Filters): Facet[] {
-  const failed: Facet[] = []
+function planOf(filters: Filters): Plan {
+  const picked: [Facet, Set<string>][] = []
   for (const facet of FACETS) {
     const selected = filters[facet] as string[]
-    if (selected.length && !values[facet].some((value) => selected.includes(value))) failed.push(facet)
-    if (failed.length > 1) break
+    if (selected.length) picked.push([facet, new Set(selected)])
+  }
+  return { search: parseSearch(filters.q), picked }
+}
+
+/** The one facet an item fails, null for none, or false for more than one: such an item is out of every count. */
+function failure(values: Values, plan: Plan): Facet | null | false {
+  let failed: Facet | null = null
+  for (const [facet, wanted] of plan.picked) {
+    if (values[facet].some((value) => wanted.has(value))) continue
+    if (failed) return false
+    failed = facet
   }
   return failed
 }
+
+/** Whether an item has one of the values picked in every facet that has some. */
+const passes = (values: Values, plan: Plan) =>
+  plan.picked.every(([facet, wanted]) => values[facet].some((value) => wanted.has(value)))
+
+const matches = (item: Item, facts: Facts, values: Values, plan: Plan, ctx: Context) =>
+  passes(values, plan) &&
+  matchesText(item, facts, plan.search.terms, ctx) &&
+  matchesQualifiers(values, plan.search, ctx)
 
 interface Result {
   items: Item[]
   counts: Record<Facet, Map<string, number>>
 }
 
+function tally(counts: Map<string, number>, values: readonly string[]) {
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+}
+
 // A value's count is how many items would match if it were picked, so items failing only its facet count toward it.
 export function applyFilters(all: Iterable<Item>, filters: Filters, ctx: Context): Result {
-  const search = parseSearch(filters.q)
+  const plan = planOf(filters)
+  const pass = passOf(ctx)
   const counts = Object.fromEntries(FACETS.map((facet) => [facet, new Map()])) as Result['counts']
   const items: Item[] = []
   for (const item of all) {
-    const values = facetValues(item, ctx)
-    if (!matchesSearch(item, values, search, ctx)) continue
-    const failed = failures(values, filters)
-    if (failed.length > 1) continue
-    for (const facet of FACETS) {
-      if (failed.length && failed[0] !== facet) continue
-      for (const value of new Set(values[facet])) counts[facet].set(value, (counts[facet].get(value) ?? 0) + 1)
+    // The words first: most items fail them, and then their other values aren't needed.
+    const facts = factsOf(item)
+    if (!matchesText(item, facts, plan.search.terms, ctx)) continue
+    const values = facetValues(item, facts, pass)
+    if (!matchesQualifiers(values, plan.search, ctx)) continue
+    const failed = failure(values, plan)
+    if (failed) tally(counts[failed], values[failed])
+    else if (failed === null) {
+      for (const facet of FACETS) tally(counts[facet], values[facet])
+      items.push(item)
     }
-    if (!failed.length) items.push(item)
   }
-  items.sort(SORTERS[filters.sort])
-  return { items, counts }
+  return { items: sortItems(items, filters.sort), counts }
 }
 
 /** Tells whether one item matches the filters, the way the list decides it. */
 export function matcher(filters: Filters, ctx: Context): (item: Item) => boolean {
-  const search = parseSearch(filters.q)
+  const plan = planOf(filters)
+  const pass = passOf(ctx)
   return (item) => {
-    const values = facetValues(item, ctx)
-    return matchesSearch(item, values, search, ctx) && !failures(values, filters).length
+    const facts = factsOf(item)
+    return matches(item, facts, facetValues(item, facts, pass), plan, ctx)
   }
 }
 
-export function countMatches(all: Iterable<Item>, filters: Filters, ctx: Context): number {
-  const matches = matcher(filters, ctx)
-  let count = 0
-  for (const item of all) if (matches(item)) count++
-  return count
+/** How many items match each of the filters, in one look through them. */
+export function countEach(all: Iterable<Item>, list: Filters[], ctx: Context): number[] {
+  const plans = list.map(planOf)
+  const pass = passOf(ctx)
+  const counts = plans.map(() => 0)
+  for (const item of all) {
+    const facts = factsOf(item)
+    const values = facetValues(item, facts, pass)
+    plans.forEach((plan, index) => {
+      if (matches(item, facts, values, plan, ctx)) counts[index]++
+    })
+  }
+  return counts
 }
 
 /**
@@ -376,13 +518,26 @@ function readiness(item: Item): number {
   return item.review === 'approved' ? 0 : 1
 }
 
-const latest = (a: Item, b: Item) => b.updatedAt.localeCompare(a.updatedAt)
+// Items sort by their times as numbers, read once for each.
+interface Sorted {
+  item: Item
+  facts: Facts
+}
 
-const SORTERS: Record<Sort, (a: Item, b: Item) => number> = {
+const latest = (a: Sorted, b: Sorted) => b.facts.updated - a.facts.updated
+
+const SORTERS: Record<Sort, (a: Sorted, b: Sorted) => number> = {
   updated: latest,
-  ready: (a, b) => readiness(a) - readiness(b) || latest(a, b),
-  created: (a, b) => b.createdAt.localeCompare(a.createdAt),
-  oldest: (a, b) => a.createdAt.localeCompare(b.createdAt),
-  comments: (a, b) => b.comments - a.comments || b.updatedAt.localeCompare(a.updatedAt),
-  quiet: (a, b) => a.updatedAt.localeCompare(b.updatedAt),
+  ready: (a, b) => readiness(a.item) - readiness(b.item) || latest(a, b),
+  created: (a, b) => b.facts.created - a.facts.created,
+  oldest: (a, b) => a.facts.created - b.facts.created,
+  comments: (a, b) => b.item.comments - a.item.comments || latest(a, b),
+  quiet: (a, b) => a.facts.updated - b.facts.updated,
+}
+
+function sortItems(items: Item[], sort: Sort): Item[] {
+  return items
+    .map((item) => ({ item, facts: factsOf(item) }))
+    .toSorted(SORTERS[sort])
+    .map((each) => each.item)
 }

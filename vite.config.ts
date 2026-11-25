@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import ui from '@nuxt/ui/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, type Plugin, type Rolldown } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 import { DEV_TOKEN_PATH } from './src/dev.ts'
@@ -16,22 +16,20 @@ import { uiIcons } from './src/ui-icons.ts'
 const remoteHost = process.env.ZIMAM_DEV_HOST
 const remoteUser = process.env.ZIMAM_DEV_USER
 
+// Each syntax grammar loads only when a diff needs it. There are some 250, so they get a folder of their own, which the
+// service worker leaves out. Grammars others embed, like JavaScript in HTML's, are chunks of their own too.
+const chunkFileNames = (chunk: Rolldown.PreRenderedChunk) =>
+  chunk.moduleIds.some((id) => id.includes('/@shikijs/langs/'))
+    ? 'assets/grammars/[name]-[hash].js'
+    : 'assets/[name]-[hash].js'
+
 export default defineConfig(({ command }) => ({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: { host: '127.0.0.1', port: 5190, strictPort: true, allowedHosts: remoteHost ? [remoteHost] : [] },
   preview: { host: '127.0.0.1', port: 5191, strictPort: true },
-  build: {
-    rollupOptions: {
-      output: {
-        // Each syntax grammar loads only when a diff needs it. There are some 250, so they get a folder of their own,
-        // which the service worker leaves out.
-        chunkFileNames: (chunk) =>
-          chunk.facadeModuleId?.includes('/@shikijs/langs/')
-            ? 'assets/grammars/[name]-[hash].js'
-            : 'assets/[name]-[hash].js',
-      },
-    },
-  },
+  build: { rollupOptions: { output: { chunkFileNames } } },
+  // The diff's syntax highlighting runs in a worker, which loads the grammars it needs as chunks of its own.
+  worker: { format: 'es', rollupOptions: { output: { chunkFileNames } } },
   plugins: [
     vue(),
     ui({

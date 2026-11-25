@@ -6,7 +6,7 @@ import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
-import { computed, ref, useTemplateRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
@@ -23,6 +23,21 @@ import { arrangePinned, repoFilters, repoResult } from '@/stores/repos'
 const { t } = useI18n()
 const search = useTemplateRef<{ inputRef: HTMLInputElement | null }>('search')
 const scroller = useTemplateRef<HTMLElement>('scroller')
+const root = useTemplateRef<HTMLElement>('root')
+
+// Rows draw only the layout the page's width shows: a column each from the width the rows' `@4xl` classes switch at,
+// stacked below it. Known once the page is in place, before it's first painted, and kept as the page resizes.
+const WIDE_REM = 56
+const wide = ref<boolean | null>(null)
+const measure = (width: number) =>
+  (wide.value = width >= WIDE_REM * parseFloat(getComputedStyle(document.documentElement).fontSize))
+const resizes = new ResizeObserver(([entry]) => entry && measure(entry.contentRect.width))
+onMounted(() => {
+  if (!root.value) return
+  measure(root.value.getBoundingClientRect().width)
+  resizes.observe(root.value)
+})
+onBeforeUnmount(() => resizes.disconnect())
 
 useKeys({ search: () => search.value?.inputRef?.focus() })
 useMain(scroller)
@@ -88,7 +103,7 @@ const { gathering, failed } = gathered(() => repos.value.size)
 </script>
 
 <template>
-  <div class="@container flex flex-col" :style="REPO_COLUMN_WIDTHS">
+  <div ref="root" class="@container flex flex-col" :style="REPO_COLUMN_WIDTHS">
     <div class="shrink-0 border-b border-default">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-3 px-4 pt-4 sm:px-6 lg:h-16 lg:flex-nowrap lg:pt-0">
         <h1
@@ -198,12 +213,13 @@ const { gathering, failed } = gathered(() => repos.value.size)
             <span v-else-if="column.named !== false" class="text-balance">{{ t(`repos.columns.${column.key}`) }}</span>
           </template>
         </div>
-        <template v-if="pinned.length">
+        <template v-if="wide !== null && pinned.length">
           <h2 :class="GROUP">{{ t('repos.pinned') }}</h2>
           <RepoRow
             v-for="row in pinned"
             :key="row.repo.id"
             :row="row"
+            :wide="wide"
             :data-reorder="row.repo.id"
             :class="reorder.dragged.value === row.repo.id && 'z-1 bg-elevated shadow-md'"
             :style="reorder.dragged.value === row.repo.id && { transform: `translateY(${reorder.shift.value}px)` }"
@@ -212,7 +228,9 @@ const { gathering, failed } = gathered(() => repos.value.size)
           />
           <h2 v-if="repoResult.rest.length" :class="GROUP">{{ t('repos.rest') }}</h2>
         </template>
-        <RepoRow v-for="row in repoResult.rest" :key="row.repo.id" :row="row" />
+        <template v-if="wide !== null">
+          <RepoRow v-for="row in repoResult.rest" :key="row.repo.id" :row="row" :wide="wide" />
+        </template>
       </div>
       <p class="sr-only" aria-live="polite">{{ moved }}</p>
     </div>

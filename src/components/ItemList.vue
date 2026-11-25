@@ -17,7 +17,7 @@ import ItemRow, { ROW_HEIGHT } from '@/components/ItemRow.vue'
 import { nothingFocused, useKeys, useMain } from '@/components/keys'
 import SyncFailed from '@/components/SyncFailed.vue'
 import { sameRef } from '@/lib/refs'
-import { displayRepo, gathered, highlighted, issueRef, itemRef, items, repos } from '@/stores/data'
+import { displayRepo, gathered, highlighted, issueRef, itemRef, items, repos, status } from '@/stores/data'
 import { activeWorkspace, settings } from '@/stores/settings'
 import {
   activeView,
@@ -88,7 +88,9 @@ watch(
   () => virtualizer.value.measure(),
 )
 
-const { gathering, failed } = gathered(() => items.value.size)
+const { gathering: empty, failed } = gathered(() => items.value.size)
+// While the closed items this browser kept are still being read, a list of closed ones isn't empty yet.
+const gathering = computed(() => empty.value || (status.value.reading && !rows.value.length))
 
 // --- The focus, from row to row: j and k, or ↓ and ↑ from a row ---
 

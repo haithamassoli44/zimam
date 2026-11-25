@@ -1,6 +1,6 @@
 import { computed, reactive, ref, watch } from 'vue'
 
-import { applyFilters, countMatches, defaultFilters, fromQuery, toQuery, type Filters } from '@/lib/filters'
+import { applyFilters, countEach, defaultFilters, fromQuery, toQuery, type Filters } from '@/lib/filters'
 import {
   formatRef,
   namesRun,
@@ -157,7 +157,9 @@ export function closeIssue() {
 addEventListener('popstate', () => {
   closing = false
   page.value = pageAt(location.pathname)
-  if (page.value === 'items') Object.assign(filters, fromQuery(location.search))
+  // The same filters, as when an issue closes, would still be new lists: the list would look through every item again.
+  const next = fromQuery(location.search)
+  if (page.value === 'items' && toQuery(next) !== query.value) Object.assign(filters, next)
   openIssue.value = page.value === 'items' ? issueAt(location.search) : null
   const pull = parsePullPath(location.pathname)
   openPull.value = pull?.ref ?? null
@@ -197,9 +199,12 @@ export const result = computed(() => applyFilters(items.value.values(), filters,
 
 export const viewCounts = computed(() => {
   const views = activeWorkspace.value?.views ?? []
-  return new Map(
-    views.map((view) => [view.id, countMatches(items.value.values(), fromQuery(view.query), context.value)]),
+  const counts = countEach(
+    items.value.values(),
+    views.map((view) => fromQuery(view.query)),
+    context.value,
   )
+  return new Map(views.map((view, index) => [view.id, counts[index]]))
 })
 
 export const activeView = computed(

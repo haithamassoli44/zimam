@@ -8,6 +8,7 @@ import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { Plain, useArmed } from '@/components/armed'
 import { profileUrl, readProfile, type Profile, type Who } from '@/lib/people'
 import { compactNumber, monthYear } from '@/locale'
 import { gitHub } from '@/stores/data'
@@ -20,6 +21,8 @@ const props = withDefaults(defineProps<{ who: Who | null; picture?: '3xs' | '2xs
 // The link takes the attributes given, not the card around it.
 defineOptions({ inheritAttrs: false })
 const { t } = useI18n()
+// In a list's row, the card waits for the row to be pointed at or focused: see armed.ts.
+const armed = useArmed()
 
 const url = computed(() => (props.who ? profileUrl(props.who) : null))
 const named = computed(() => props.who?.login ?? props.who?.name ?? t('issue.ghost'))
@@ -72,7 +75,8 @@ const facts = computed(() => {
 </script>
 
 <template>
-  <UPopover
+  <component
+    :is="armed ? UPopover : Plain"
     v-if="who && url"
     mode="hover"
     :open-delay="450"
@@ -133,7 +137,7 @@ const facts = computed(() => {
         </template>
       </div>
     </template>
-  </UPopover>
+  </component>
   <span v-else v-bind="$attrs" :class="look">
     <slot>
       <UAvatar v-if="picture && who?.avatarUrl" :src="who.avatarUrl" alt="" :size="picture" />

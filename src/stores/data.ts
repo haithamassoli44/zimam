@@ -95,17 +95,37 @@ export function gitHub(): GitHub {
   return client.value
 }
 
+// Each change a sync makes has the list, its counts and the views' counts look through every item again, and a sync
+// makes one with every page it reads. Changes close together show together: at most once a second, and while the
+// closed history fills in, which few lists show, every few seconds. What this browser kept shows at once.
+const SHOW_EVERY = 1000
+const SHOW_HISTORY_EVERY = 4000
+
 function session(): SyncStore {
+  let shownAt = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let news: string[] = []
+  function show() {
+    clearTimeout(timer)
+    timer = undefined
+    if (repos.value !== store.repos) return
+    shownAt = Date.now()
+    triggerRef(repos)
+    triggerRef(items)
+    triggerRef(me)
+    if (news.length) markFresh(news)
+    news = []
+  }
   const store: SyncStore = {
     repos: new Map(),
     items: new Map(),
     me: noOne(),
-    changed(fresh) {
-      if (repos.value !== store.repos) return
-      triggerRef(repos)
-      triggerRef(items)
-      triggerRef(me)
-      if (fresh.length) markFresh(fresh)
+    changed(fresh, whole) {
+      news.push(...fresh)
+      const every = status.value.phase === 'history' ? SHOW_HISTORY_EVERY : SHOW_EVERY
+      const wait = shownAt + every - Date.now()
+      if (whole || wait <= 0) show()
+      else timer ??= setTimeout(show, wait)
     },
   }
   repos.value = store.repos
@@ -123,7 +143,9 @@ async function open(ws: Workspace | null) {
   const store = session()
   client.value = ws && createGitHub(ws.token)
   if (!ws || !client.value) return
-  const next = await Syncer.open(ws, client.value, store, status.value)
+  // The sync asks through a client of its own, with its own requests at a time, so what the reader opens doesn't wait
+  // behind a page of the closed history.
+  const next = await Syncer.open(ws, createGitHub(ws.token), store, status.value)
   if (ticket !== opening) return
   syncer = next
   loaded.value = true
