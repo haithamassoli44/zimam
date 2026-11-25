@@ -23,8 +23,9 @@ interface CountOf {
   /** The list that shows what it counts. */
   filters: Partial<Filters>
   /**
-   * GitHub's own total, which counts while the repository's open items load. Every count tallies the items read so far
-   * that match the filters once they have: the total is only as fresh as the last read of the repositories.
+   * GitHub's own total, which counts while the repository's open items load, and when GitHub didn't show those of their
+   * kind. Every count tallies the items read so far that match the filters once they have: the total is only as fresh
+   * as the last read of the repositories.
    */
   total?: (repo: Repo) => number
 }
@@ -78,7 +79,12 @@ export const isFiltered = ({ q, status }: Pick<RepoFilters, 'q' | 'status'>) =>
   q.trim() !== '' || status.join() !== defaultRepoFilters().status.join()
 
 /** Counted as the list counts, in `ctx`. `left` is what each repository still has to load, as the sync shows it. */
-export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<string, Left[]> = {}): RepoRow[] {
+export function repoRows(
+  items: Iterable<Item>,
+  ctx: Context,
+  left: Record<string, Left[]> = {},
+  hidden: Record<string, Item['kind'][]> = {},
+): RepoRow[] {
   const { now } = ctx
   const tallies = new Map<string, { row: RepoRow; oldestClosed: Record<Item['kind'], number> }>()
   for (const repo of ctx.repos.values()) {
@@ -116,12 +122,16 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
   // from before the first week shown, all that was opened since is in.
   const start = now - WEEKS * WEEK
   for (const { row, oldestClosed } of tallies.values()) {
-    const kinds = left[row.repo.id]
-    if (!kinds) continue
-    const { openIssues, openPrs } = row.repo
+    const kinds = left[row.repo.id] ?? []
     const open = kinds.includes('open')
-    if (open)
-      for (const key of COUNT_KEYS) row.counts[key] = (COUNTS[key] as CountOf).total?.(row.repo) ?? row.counts[key]
+    // GitHub's totals count while the open items load, and for those of a kind GitHub didn't show.
+    const unseen = hidden[row.repo.id] ?? []
+    for (const key of COUNT_KEYS) {
+      const { total, filters } = COUNTS[key] as CountOf
+      if (total && (open || unseen.some((kind) => filters.kind?.includes(kind)))) row.counts[key] = total(row.repo)
+    }
+    if (!kinds.length) continue
+    const { openIssues, openPrs } = row.repo
     row.countsLoading = open && openPrs > 0
     row.weeksLoading =
       (open && openIssues + openPrs > 0) ||

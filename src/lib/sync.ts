@@ -86,6 +86,8 @@ export interface SyncStatus {
   historyDone: boolean
   /** Each repository with something left to load, by id. Open items read again, as a reconcile does, don't count. */
   left: Record<string, Left[]>
+  /** The kinds of open items GitHub didn't show of each repository, by its id, when they were last read. */
+  hidden: Record<string, Item['kind'][]>
   pausedUntil: number | null
   rate: RateLimit | null
   /** Rate limits pause instead: see `pausedUntil`. */
@@ -103,6 +105,7 @@ export function idleStatus(): SyncStatus {
     history: { done: 0, total: 0 },
     historyDone: false,
     left: {},
+    hidden: {},
     pausedUntil: null,
     rate: null,
     error: null,
@@ -403,6 +406,7 @@ export class Syncer {
     // A repository that comes back, such as one picked again, loads its items again.
     this.cache.openDone = this.cache.openDone.filter((id) => repos.has(id))
     for (const id of Object.keys(this.cache.history)) if (!repos.has(id)) delete this.cache.history[id]
+    for (const id of Object.keys(this.cache.openHidden ?? {})) if (!repos.has(id)) delete this.cache.openHidden?.[id]
     this.cache.reposAt = Date.now()
     this.showProgress()
     this.changed([])
@@ -433,6 +437,9 @@ export class Syncer {
         (item) => item.repoId === repo.id && item.state === 'open' && !hidden.has(item.kind) && !seen.has(item.id),
       )
       if (missing.length) await this.refetch(missing.map((item) => item.id))
+      const openHidden = (this.cache.openHidden ??= {})
+      if (hidden.size) openHidden[repo.id] = [...hidden]
+      else delete openHidden[repo.id]
       this.cache.openDone.push(repo.id)
       this.opened.add(repo.id)
       this.showProgress()
@@ -734,6 +741,7 @@ export class Syncer {
       if (kinds.length) left[repo.id] = kinds
     }
     this.status.left = left
+    this.status.hidden = { ...this.cache.openHidden }
     return pending
   }
 

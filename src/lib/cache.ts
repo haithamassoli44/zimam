@@ -28,6 +28,11 @@ export interface Cache {
   /** Repositories whose open items are loaded. */
   openDone: string[]
   /**
+   * The kinds of open items GitHub didn't show of a repository, by its id, at their last read: they're as many as GitHub
+   * says, not as many as loaded. Missing from a cache saved before it was kept.
+   */
+  openHidden?: Record<string, Item['kind'][]>
+  /**
    * The searches of a second that held more changes than a search lists, by query, once the changes were found
    * repository by repository, with how many the search found then, or read again from the repositories (null): later
    * searches over that second leave them, unless the search finds more. Missing from a cache saved before it was kept.
@@ -55,6 +60,7 @@ export function emptyCache(ws: string, sources: string): Cache {
     syncedAt: null,
     revision: null,
     openDone: [],
+    openHidden: {},
     crowded: {},
     history: {},
     login: null,

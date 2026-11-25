@@ -56,8 +56,13 @@ const pr = (id: string, repoId: string, overrides: Partial<Item> = {}) =>
   item(id, repoId, { kind: 'pr', review: 'required', checks: 'success', merge: 'clean', ...overrides })
 
 // The repositories as a workspace holds them, counted at NOW unless said otherwise.
-const rowsOf = (repos: Repo[], items: Item[], now = NOW, left: Record<string, Left[]> = {}) =>
-  repoRows(items, { repos: new Map(repos.map((each) => [each.id, each])), now, me: noOne() }, left)
+const rowsOf = (
+  repos: Repo[],
+  items: Item[],
+  now = NOW,
+  left: Record<string, Left[]> = {},
+  hidden: Record<string, Item['kind'][]> = {},
+) => repoRows(items, { repos: new Map(repos.map((each) => [each.id, each])), now, me: noOne() }, left, hidden)
 
 describe('repoRows', () => {
   const [web] = rowsOf(
@@ -91,6 +96,10 @@ describe('repoRows', () => {
     expect(loading.counts).toEqual({ issues: 7, prs: 3, awaiting: 1, failing: 0, conflicts: 0 })
     const [loaded] = rowsOf(repos, found, NOW)
     expect(loaded.counts).toEqual({ issues: 0, prs: 1, awaiting: 1, failing: 0, conflicts: 0 })
+    // GitHub didn't show the open issues: there are as many as it says, not none.
+    const [hidden] = rowsOf(repos, found, NOW, {}, { old: ['issue'] })
+    expect(hidden.counts).toEqual({ issues: 7, prs: 1, awaiting: 1, failing: 0, conflicts: 0 })
+    expect(hidden.countsLoading).toBe(false)
   })
 
   it('counts an issue opened since GitHub last gave its totals', () => {

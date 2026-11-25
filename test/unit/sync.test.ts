@@ -12,6 +12,7 @@ import {
   type RawItem,
   type RawRepo,
 } from '@/lib/queries'
+import { repoRows } from '@/lib/repos'
 import { sourcesKey } from '@/lib/sources'
 import { idleStatus, Syncer, type SyncStore } from '@/lib/sync'
 import { noOne, type Item, type Repo, type Workspace } from '@/types'
@@ -871,6 +872,31 @@ describe('Syncer', () => {
     expect(state.calls).toContain('items')
     expect(state.calls).not.toContain('nodes')
     expect(store.items.has('I1')).toBe(true)
+  })
+
+  it("counts a repository's open items of a kind GitHub won't show as GitHub does, until it shows them", async () => {
+    const { store, state, status, syncer } = await setup()
+    state.hidden = ['issues']
+    await syncer.sync()
+    const issuesCount = () =>
+      repoRows(
+        store.items.values(),
+        { repos: store.repos, now: Date.now(), me: noOne() },
+        status.left,
+        status.hidden,
+      )[0].counts.issues
+    expect(store.items.has('I1')).toBe(false)
+    expect(status.hidden).toEqual({ R1: ['issue'] })
+    expect(issuesCount()).toBe(1)
+
+    // A refresh a while later, as the open items are read again.
+    state.hidden = []
+    const later = Date.now() + HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => later)
+    await syncer.sync(true)
+    expect(store.items.has('I1')).toBe(true)
+    expect(status.hidden).toEqual({})
+    expect(issuesCount()).toBe(1)
   })
 
   it("asks again in a while for a closed history GitHub won't show for now, rather than counting it complete", async () => {
