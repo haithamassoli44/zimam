@@ -393,7 +393,8 @@
       },
       "generated": {
         "title": "وعُدَّ مولَّدًا أيضًا",
-        "help": "نمط في كل سطر، كما في ‎.gitattributes. قائمة GitHub وعلامات linguist-generated في كل مستودع تُعتمد دائمًا."
+        "help": "نمط في كل سطر، كما في ‎.gitattributes. قائمة GitHub وعلامات linguist-generated في كل مستودع تُعتمد دائمًا.",
+        "bad": "هذه الأسطر ليست أنماطًا، فتُتجاهَل: {patterns}"
       }
     }
   },

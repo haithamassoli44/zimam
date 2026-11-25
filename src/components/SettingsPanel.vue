@@ -12,6 +12,7 @@ import { useI18n } from 'vue-i18n'
 
 import { setLook } from '@/components/motion'
 import SettingChoice from '@/components/SettingChoice.vue'
+import { badPatterns } from '@/lib/generated'
 import { languageName, sides } from '@/locale'
 import { install, installed, installPrompt, manualInstall } from '@/pwa'
 import { deleteWorkspace, reloadWorkspace } from '@/stores/data'
@@ -75,6 +76,9 @@ const generatedText = computed({
       .map((line) => line.trim())
       .filter(Boolean)),
 })
+
+// Patterns no test can be made of count for nothing: the field says which.
+const badGenerated = computed(() => badPatterns(settings.generated))
 
 async function reload() {
   ui.settingsOpen = false
@@ -146,7 +150,13 @@ async function upload(event: Event) {
             :picked="group.picked"
             @pick="group.pick"
           />
-          <UFormField :label="t('settings.pull.generated.title')" :help="t('settings.pull.generated.help')">
+          <UFormField
+            :label="t('settings.pull.generated.title')"
+            :help="t('settings.pull.generated.help')"
+            :error="
+              badGenerated.length ? t('settings.pull.generated.bad', { patterns: badGenerated.join(' ') }) : false
+            "
+          >
             <UTextarea
               v-model.lazy="generatedText"
               :rows="3"

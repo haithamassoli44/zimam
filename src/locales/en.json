@@ -393,7 +393,8 @@
       },
       "generated": {
         "title": "Also treat as generated",
-        "help": "One pattern per line, like .gitattributes. GitHub's own list and each repository's linguist-generated marks always count."
+        "help": "One pattern per line, like .gitattributes. GitHub's own list and each repository's linguist-generated marks always count.",
+        "bad": "These lines aren't patterns and are skipped: {patterns}"
       }
     }
   },
