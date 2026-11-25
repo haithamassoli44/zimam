@@ -27,6 +27,12 @@ export interface Cache {
   revision?: string | null
   /** Repositories whose open items are loaded. */
   openDone: string[]
+  /**
+   * The searches of a second that held more changes than a search lists, by query, once the changes were found
+   * repository by repository, with how many the search found then, or read again from the repositories (null): later
+   * searches over that second leave them, unless the search finds more. Missing from a cache saved before it was kept.
+   */
+  crowded?: Record<string, { second: number; count: number | null }>
   /** Each repository's closed history: a cursor to resume from, or `true` once complete. */
   history: Record<string, { issues?: string | true; prs?: string | true }>
   /** Whose token reads the workspace, and the open pull requests that ask them for a review. */
@@ -49,6 +55,7 @@ export function emptyCache(ws: string, sources: string): Cache {
     syncedAt: null,
     revision: null,
     openDone: [],
+    crowded: {},
     history: {},
     login: null,
     requested: [],

@@ -446,8 +446,9 @@ export class Syncer {
     this.status.phase = 'changes'
     if (!manual && (await this.unchanged(started))) return
     const since = Math.floor(((this.cache.watermark ?? started) - OVERLAP) / 1000)
-    const found: Found = { items: [], changed: false }
-    let tooMany = false
+    const crowded = (this.cache.crowded ??= {})
+    for (const [q, { second }] of Object.entries(crowded)) if (second < since) delete crowded[q]
+    const found: Found = { items: [], changed: false, tooMany: [], crowded: {} }
     for (const group of chunk(this.ws.sources, 8)) {
       const searched = await this.findChanges(group, since, Math.floor(started / 1000), found)
       // What was found counts, but the next run looks over the same time again.
@@ -455,20 +456,17 @@ export class Syncer {
         if (!this.stopped) this.put(found.items.filter((item) => this.store.repos.has(item.repoId)))
         return
       }
-      tooMany ||= searched === 'tooMany'
     }
-    // Only a second with more than search lists, such as a change made to a thousand issues at once, gets here. Its
-    // open items at least can be read again.
-    if (tooMany) {
-      this.cache.openDone = []
-      this.cache.reconciledAt = started
-      await this.loadOpen()
-    }
+    if (found.tooMany.length) await this.readAgain(found.tooMany)
+    Object.assign(crowded, found.crowded)
     // A change in a repository the workspace doesn't hold may be in a new one, or in one it leaves out.
     const unknown = found.items.filter((item) => !this.store.repos.has(item.repoId) && !this.outside.has(item.repoId))
     if (unknown.length) await this.loadRepos()
     for (const item of unknown) if (!this.store.repos.has(item.repoId)) this.outside.add(item.repoId)
-    this.busy = this.put(found.items.filter((item) => this.store.repos.has(item.repoId))) || found.changed || tooMany
+    this.busy =
+      this.put(found.items.filter((item) => this.store.repos.has(item.repoId))) ||
+      found.changed ||
+      !!found.tooMany.length
     if (unknown.length) await this.loadOpen()
     this.searchedAt = started
     this.cache.watermark = started
@@ -477,9 +475,11 @@ export class Syncer {
   /**
    * Adds to `found` what changed in a group of sources between two times, in seconds, both included: from `from` to
    * now, or to `to` once the time is cut up. Search lists no more than 1,000 results, and after a long absence more than
-   * that can change. GitHub says how many there are, so a time holding more is cut into parts that each hold fewer, as
-   * many times as it takes, down to a second. Each part counts and is saved as soon as it's searched, so a long search
-   * shows what it finds as it goes and keeps it should it stop. Says whether it found all of them, or stopped short.
+   * that can change. GitHub says how many there are, so a search finding more is made of narrower ones, as many times
+   * as it takes: shorter times, down to a second, then fewer sources, then one kind, open or closed, then one
+   * repository, as when a thousand issues change at once. What one of those still finds too many of goes into
+   * `found.tooMany`. Each search counts and is saved as soon as it's done, so a long search shows what it finds as it
+   * goes and keeps it should it stop. Says whether it went through the time, or stopped short.
    */
   private async findChanges(
     group: Source[],
@@ -487,11 +487,12 @@ export class Syncer {
     to: number,
     found: Found,
     whole = true,
-  ): Promise<'all' | 'tooMany' | 'stopped'> {
+    part: Part | null = null,
+  ): Promise<'all' | 'stopped'> {
     // The first search runs to now, so it also finds what changed since this run started, which the next one looks at
     // again anyway. The parts of a time cut up end where it ends.
     const span = whole ? `>=${isoSecond(from)}` : `${isoSecond(from)}..${isoSecond(to)}`
-    const q = `${group.map(qualifier).join(' ')} updated:${span}`
+    const q = [...group.map(qualifier), ...(part ? [partTerms(part)] : []), `updated:${span}`].join(' ')
     const items: Item[] = []
     let after: string | null = null
     do {
@@ -499,27 +500,56 @@ export class Syncer {
       const data: Searched = await this.gh.query(SEARCH, { q, after })
       const count = data.search.issueCount
       if (count > SEARCH_MOST) {
-        if (to <= from) return 'tooMany'
-        // Into parts of about 800 each, should the changes be spread evenly, with room for some more meanwhile.
-        const parts = Math.min(to - from + 1, Math.ceil(count / (0.8 * SEARCH_MOST)))
-        const size = Math.ceil((to - from + 1) / parts)
-        let searched: 'all' | 'tooMany' = 'all'
-        for (let start = from; start <= to; start += size) {
-          const part = await this.findChanges(group, start, Math.min(start + size - 1, to), found, false)
-          if (part === 'stopped') return part
-          if (part === 'tooMany') searched = part
-        }
-        return searched
+        // A second of one part of a source comes up again while it's in the time each search looks back over, where
+        // searching it all again would cost the most. Read again from its repositories, it has nothing new for the
+        // search: what changes after leaves the second. Searched repository by repository, it has only what the search
+        // indexed late, which makes it hold more.
+        const last = part && from === to
+        const done = last ? this.cache.crowded?.[q] : undefined
+        if (done && (done.count === null || count <= done.count)) return 'all'
+        const searches = narrower({ sources: group, from, to, part }, count, (source) => this.reposIn(source))
+        if (!searches.length && part) found.tooMany.push({ source: group[0], ...part })
+        for (const each of searches)
+          if ((await this.findChanges(each.sources, each.from, each.to, found, false, each.part)) === 'stopped')
+            return 'stopped'
+        if (last) found.crowded[q] = { second: from, count: searches.length ? count : null }
+        return 'all'
       }
       for (const node of data.search.nodes) if (node && 'id' in node) items.push(toItem(node as RawItem))
       after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null
     } while (after)
     found.items.push(...items)
-    if (!whole) {
+    if (!whole && items.length) {
       found.changed = this.put(items.filter((item) => this.store.repos.has(item.repoId))) || found.changed
       await this.save(true)
     }
     return 'all'
+  }
+
+  /** The repositories a source of several brings, as sources of their own, to search one by one. */
+  private reposIn(source: Source): Source[] {
+    if (source.kind === 'repo') return []
+    const repos = [...this.store.repos.values()].filter((repo) => brings(source, repo))
+    return repos.length > 1 ? repos.map((repo) => ({ kind: 'repo', name: repo.fullName })) : []
+  }
+
+  /**
+   * Reads again, from the repositories, the parts of sources that changed more in one second than a search lists: open
+   * items now, and for closed ones, the closed history too, from its latest change, as it loads, so nothing changed
+   * then is left out. Reading the open items again reads those closed then as they are now, history or not.
+   */
+  private async readAgain(parts: Found['tooMany']) {
+    for (const { source, kind, open } of parts)
+      for (const repo of this.store.repos.values()) {
+        if (!brings(source, repo)) continue
+        this.cache.openDone = this.cache.openDone.filter((id) => id !== repo.id)
+        if (open) continue
+        const entry = this.cache.history[repo.id]
+        if (entry) delete entry[KINDS[kind].history]
+        this.historyWaits.delete(`${repo.id} ${kind}`)
+      }
+    this.showProgress()
+    await this.loadOpen()
   }
 
   /**
@@ -882,8 +912,54 @@ const inSight = () => globalThis.document?.visibilityState !== 'hidden'
 const sameStatus = (a: Item, b: Item) => STATUS_FIELDS.every((field) => a[field] === b[field])
 
 type Searched = { search: Page<RawItem | Record<string, never>> & { issueCount: number } }
-/** What a search for changes found, and whether what it already counted changed anything. */
-type Found = { items: Item[]; changed: boolean }
+
+/** Part of what changed in a source: one kind, open or closed. */
+interface Part {
+  kind: ListKind
+  open: boolean
+}
+const PARTS: Part[] = LIST_KINDS.flatMap((kind) => [true, false].map((open) => ({ kind, open })))
+const partTerms = ({ kind, open }: Part) => `is:${KINDS[kind].item} is:${open ? 'open' : 'closed'}`
+
+/**
+ * What a search for changes found, whether what it already counted changed anything, the parts of a source that
+ * changed more in one second than a search lists, and the searches of such a second that are done with, by query.
+ */
+type Found = {
+  items: Item[]
+  changed: boolean
+  tooMany: (Part & { source: Source })[]
+  crowded: NonNullable<Cache['crowded']>
+}
+
+/** A search for changes: in some sources, from one second to another, both included, and maybe in one part of them. */
+interface ChangesSearch {
+  sources: Source[]
+  from: number
+  to: number
+  part: Part | null
+}
+
+/**
+ * The narrower searches that find what a search finds `count` of, more than it lists. Its time first, in parts of about
+ * 800 each, should the changes be spread evenly, with room for some more meanwhile, down to a second. Then a second
+ * source by source, then by kind, open and closed, then repository by repository, as `reposIn` gives a source's. None
+ * once there's no narrower search.
+ */
+function narrower(search: ChangesSearch, count: number, reposIn: (source: Source) => Source[]): ChangesSearch[] {
+  const { sources, from, to, part } = search
+  if (to > from) {
+    const size = Math.ceil((to - from + 1) / Math.min(to - from + 1, Math.ceil(count / (0.8 * SEARCH_MOST))))
+    return Array.from({ length: Math.ceil((to - from + 1) / size) }, (_, index) => ({
+      ...search,
+      from: from + index * size,
+      to: Math.min(from + (index + 1) * size - 1, to),
+    }))
+  }
+  if (sources.length > 1) return sources.map((source) => ({ ...search, sources: [source] }))
+  if (!part) return PARTS.map((each) => ({ ...search, part: each }))
+  return reposIn(sources[0]).map((repo) => ({ ...search, sources: [repo] }))
+}
 
 /** A time in seconds, as a search's `updated:` takes it. */
 const isoSecond = (seconds: number) => new Date(seconds * 1000).toISOString().replace(/\.\d+Z$/, 'Z')
