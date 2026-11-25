@@ -5,10 +5,10 @@ import { triggerRef } from 'vue'
 import type { Changes } from '@/lib/changes'
 import type { GitHub } from '@/lib/github'
 import type { Pull } from '@/lib/pull'
-import { client, items } from '@/stores/data'
+import { client, items, repos, status } from '@/stores/data'
 import { filesState, pull, refreshPull, runs, shownFiles } from '@/stores/pull'
 import { openPull, pullScope } from '@/stores/view'
-import type { Item } from '@/types'
+import type { Item, Repo } from '@/types'
 
 // GitHub as the pull request page reads it: the pull request, what it changed, and its files' texts.
 const github = vi.hoisted(() => ({
@@ -20,6 +20,9 @@ const github = vi.hoisted(() => ({
   // The checks of each head, held the same way.
   runHolds: new Map<string, Promise<void>>(),
   pullReads: 0,
+  // How many reads of the pull request fail, from the next one, and a read of it held until let go.
+  pullFails: 0,
+  pullHold: null as Promise<void> | null,
   changeReads: [] as string[],
   // The reads of what changed that fail, by head, or by the run of commits they're of.
   failing: new Set<string>(),
@@ -27,8 +30,14 @@ const github = vi.hoisted(() => ({
 vi.mock('@/lib/pull', async (original) => ({
   ...(await original<typeof import('@/lib/pull')>()),
   readPull: async (_gh: unknown, _ref: unknown, onHeads?: (heads: Pull) => void) => {
+    if (github.pullFails > 0) {
+      github.pullFails--
+      github.pullReads++
+      throw new Error('network')
+    }
     const next = github.pulls[Math.min(github.pullReads++, github.pulls.length - 1)]
     onHeads?.(next)
+    await github.pullHold
     return next
   },
 }))
@@ -151,6 +160,11 @@ async function opened(...pulls: Pull[]) {
 }
 
 beforeEach(() => {
+  // The repository the list's copy is in, by which it's found before the page says its id.
+  repos.value = new Map([['R1', { id: 'R1', fullName: REF.repo } as Repo]])
+  status.value.syncedAt = null
+  github.pullFails = 0
+  github.pullHold = null
   openPull.value = null
   pullScope.value = null
   github.failing = new Set()
@@ -182,6 +196,12 @@ const seenOf = () =>
   JSON.parse(localStorage.getItem('zimam:seen:') ?? '{}')['acme/web#1'] as
     | { head: string; ticked: Record<string, string[]> }
     | undefined
+
+// What a sync brings: the list's copy of the pull request.
+function listed(updatedAt: string, extra: Partial<Item> = {}) {
+  items.value.set('P1', listItem(updatedAt, extra))
+  triggerRef(items)
+}
 
 function setSight(state: 'visible' | 'hidden') {
   Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
@@ -334,24 +354,159 @@ describe('reading the open pull request again', () => {
   })
 
   it('waits for a tab out of sight to be back before reading again, and counts no visit meanwhile', async () => {
-    await opened(pullAt('h1'), pullAt('h2', { updatedAt: '2026-11-25T10:05:00Z' }))
-    items.value.set('P1', listItem('2026-11-25T10:00:00Z'))
-    triggerRef(items)
+    await opened(
+      pullAt('h1'),
+      pullAt('h2', { updatedAt: '2026-11-25T10:05:00Z' }),
+      pullAt('h3', { updatedAt: '2026-11-25T10:10:00Z' }),
+    )
+    listed('2026-11-25T10:00:00Z')
     await flushPromises()
     setSight('hidden')
     try {
-      items.value.set('P1', listItem('2026-11-25T10:05:00Z'))
-      triggerRef(items)
+      listed('2026-11-25T10:05:00Z')
       await flushPromises()
       expect(github.pullReads).toBe(1)
       // Read again while out of sight, as a refresh can be, it isn't a visit.
       await refreshPull()
       expect(pull.value?.headOid).toBe('h2')
       expect(seenOf()?.head).toBe('h1')
+      listed('2026-11-25T10:10:00Z')
+      await flushPromises()
+      expect(github.pullReads).toBe(2)
     } finally {
       setSight('visible')
     }
     await flushPromises()
     expect(github.pullReads).toBe(3)
+    expect(seenOf()?.head).toBe('h3')
+  })
+
+  it('reads it again when the first copy the list has is newer than the page', async () => {
+    await opened(pullAt('h1'), pullAt('h1', { updatedAt: '2026-11-25T10:05:00Z' }))
+    // The workspace's first sync brings the pull request after the page has it.
+    listed('2026-11-25T10:05:00Z')
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    expect(pull.value?.updatedAt).toBe('2026-11-25T10:05:00Z')
+  })
+
+  it('reads it again when the list has a newer copy by the time the page comes', async () => {
+    const page = held()
+    github.pullHold = page.promise
+    await opened(pullAt('h1'), pullAt('h1', { updatedAt: '2026-11-25T10:05:00Z' }))
+    expect(pull.value).toBeNull()
+    listed('2026-11-25T10:05:00Z')
+    await flushPromises()
+    github.pullHold = null
+    page.open()
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+  })
+
+  it("doesn't read it again on opening when only the list's copy is behind it", async () => {
+    // The page comes with its checks done and its conflicts unknown for now; the list's copy, from a sync a few minutes
+    // ago, still has the checks running, and keeps the last conflicts it knew.
+    listed('2026-11-25T10:00:00Z', { checks: 'pending', merge: 'clean' })
+    await opened(pullAt('h1', { checks: 'success', merge: null }))
+    expect(github.pullReads).toBe(1)
+    // The list catches up with the page: nothing to read.
+    listed('2026-11-25T10:00:00Z', { checks: 'success', merge: 'clean' })
+    await flushPromises()
+    expect(github.pullReads).toBe(1)
+    // The list has news the page doesn't: the checks run again.
+    listed('2026-11-25T10:00:00Z', { checks: 'pending', merge: 'clean' })
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+  })
+
+  it('reads it again when the checks finish in the list while the page is being read', async () => {
+    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
+    const page = held()
+    github.pullHold = page.promise
+    // GitHub answered "pending" when the read started; the read is slow (many pages).
+    await opened(pullAt('h1', { checks: 'pending' }), pullAt('h1', { checks: 'success' }))
+    // A sync lands meanwhile: the checks finished.
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    status.value.syncedAt = Date.now()
+    await flushPromises()
+    github.pullHold = null
+    page.open()
+    await flushPromises()
+    // Page says pending, the list says success: it should read again.
+    status.value.syncedAt = Date.now() + 60_000
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    expect(pull.value?.checks).toBe('success')
+  })
+
+  it('reads it again when the checks finish in the list while a refresh is being read', async () => {
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    await opened(
+      pullAt('h1', { checks: 'success' }),
+      pullAt('h1', { checks: 'pending' }),
+      pullAt('h1', { checks: 'success' }),
+    )
+    expect(github.pullReads).toBe(1)
+    const page = held()
+    github.pullHold = page.promise
+    // The checks run again: the list says so, and the page is read again (GitHub answers pending).
+    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    // They finish before that read comes back, and a sync says so.
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    status.value.syncedAt = Date.now() + 1000
+    await flushPromises()
+    github.pullHold = null
+    page.open()
+    await flushPromises()
+    status.value.syncedAt = Date.now() + 61_000
+    await flushPromises()
+    expect(github.pullReads).toBe(3)
+    expect(pull.value?.checks).toBe('success')
+  })
+
+  it("reads it again when the list's first copy, coming after the page, has the checks finished", async () => {
+    // A fresh workspace: the page is read before the first sync brings the pull request.
+    await opened(pullAt('h1', { checks: 'pending' }), pullAt('h1', { checks: 'success' }))
+    expect(github.pullReads).toBe(1)
+    // The first sync, minutes later, brings it with its checks done (a finished run doesn't change updatedAt).
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    status.value.syncedAt = Date.now() + 120_000
+    await flushPromises()
+    status.value.syncedAt = Date.now() + 180_000
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    expect(pull.value?.checks).toBe('success')
+  })
+
+  it('tries again after the next sync when reading it again failed, but only then', async () => {
+    await opened(pullAt('h1'), pullAt('h1', { updatedAt: '2026-11-25T10:05:00Z' }))
+    listed('2026-11-25T10:00:00Z')
+    await flushPromises()
+    github.pullFails = 1
+    listed('2026-11-25T10:05:00Z')
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    expect(pull.value?.updatedAt).toBe('2026-11-25T10:00:00Z')
+    // The next sync brings the same copy.
+    status.value.syncedAt = Date.now()
+    await flushPromises()
+    expect(github.pullReads).toBe(3)
+    expect(pull.value?.updatedAt).toBe('2026-11-25T10:05:00Z')
+    status.value.syncedAt = Date.now() + 60_000
+    await flushPromises()
+    expect(github.pullReads).toBe(3)
+  })
+
+  it("doesn't read it again after each sync when GitHub's pull request lags behind its list", async () => {
+    await opened(pullAt('h1'))
+    listed('2026-11-25T10:05:00Z')
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
+    expect(pull.value?.updatedAt).toBe('2026-11-25T10:00:00Z')
+    status.value.syncedAt = Date.now() + 120_000
+    await flushPromises()
+    expect(github.pullReads).toBe(2)
   })
 })
