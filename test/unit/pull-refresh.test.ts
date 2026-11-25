@@ -158,7 +158,9 @@ function held() {
 }
 
 const seenOf = () =>
-  JSON.parse(localStorage.getItem('zimam:seen:') ?? '{}')['acme/web#1'] as { head: string } | undefined
+  JSON.parse(localStorage.getItem('zimam:seen:') ?? '{}')['acme/web#1'] as
+    | { head: string; ticked: Record<string, string[]> }
+    | undefined
 
 function setSight(state: 'visible' | 'hidden') {
   Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
@@ -266,6 +268,17 @@ describe('reading the open pull request again', () => {
     first.open()
     await flushPromises()
     expect(runs.value?.runs[0].name).toBe('h2')
+  })
+
+  it("keeps another tab's ticks when it records a visit before hearing of them", async () => {
+    await opened(pullAt('h1'), pullAt('h2'))
+    // Another tab ticks a file; this one isn't told yet.
+    const all = JSON.parse(localStorage.getItem('zimam:seen:') ?? '{}')
+    all['acme/web#1'].ticked = { 'one.ts': ['elsewhere'] }
+    localStorage.setItem('zimam:seen:', JSON.stringify(all))
+    await refreshPull()
+    await flushPromises()
+    expect(seenOf()).toMatchObject({ head: 'h2', ticked: { 'one.ts': ['elsewhere'] } })
   })
 
   it('waits for a tab out of sight to be back before reading again, and counts no visit meanwhile', async () => {

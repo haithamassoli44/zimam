@@ -59,6 +59,57 @@ describe('a record shared by tabs', () => {
     expect(stored().pr1.ticked).toEqual(['second.ts'])
   })
 
+  it('keeps what each tab changed in the same entry, when one writes before hearing of the other', async () => {
+    interface Seen {
+      at: number
+      ticked: Record<string, string[]>
+    }
+    const first = sharedRecord<Seen>(() => KEY)
+    const second = sharedRecord<Seen>(() => KEY)
+    first.pr1 = { at: 1, ticked: { 'gone.ts': ['g'] } }
+    await nextTick()
+    told()
+    // One tab ticks a file and unticks another; the other ticks a third before the browser tells it.
+    first.pr1.ticked['a.ts'] = ['x']
+    delete first.pr1.ticked['gone.ts']
+    await nextTick()
+    second.pr1.ticked['b.ts'] = ['y']
+    await nextTick()
+    told()
+    const both = { at: 1, ticked: { 'a.ts': ['x'], 'b.ts': ['y'] } }
+    expect(stored().pr1).toEqual(both)
+    expect(first.pr1).toEqual(both)
+    expect(second.pr1).toEqual(both)
+
+    // A visit the second tab records, before hearing of a tick, keeps the tick.
+    first.pr1.ticked['c.ts'] = ['z']
+    await nextTick()
+    second.pr1 = { ...second.pr1, at: 2 }
+    await nextTick()
+    told()
+    expect(stored().pr1).toEqual({ at: 2, ticked: { 'a.ts': ['x'], 'b.ts': ['y'], 'c.ts': ['z'] } })
+  })
+
+  it("puts what a tab hasn't written yet on top of what another tab wrote meanwhile", async () => {
+    interface Seen {
+      at: number
+      ticked: Record<string, string[]>
+    }
+    const first = sharedRecord<Seen>(() => KEY)
+    const second = sharedRecord<Seen>(() => KEY)
+    first.pr1 = { at: 1, ticked: {} }
+    await nextTick()
+    told()
+    first.pr1.ticked['a.ts'] = ['x']
+    await nextTick()
+    // The browser tells the second tab between its change and its write.
+    second.pr1.ticked['b.ts'] = ['y']
+    told()
+    expect(second.pr1.ticked).toEqual({ 'a.ts': ['x'], 'b.ts': ['y'] })
+    await nextTick()
+    expect(stored().pr1.ticked).toEqual({ 'a.ts': ['x'], 'b.ts': ['y'] })
+  })
+
   it('reads the entries of the key it moves to, and writes there', async () => {
     localStorage.setItem('zimam:seen:other', JSON.stringify({ pr9: { at: 9, ticked: [] } }))
     const key = ref(KEY)

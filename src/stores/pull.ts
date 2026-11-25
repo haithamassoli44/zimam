@@ -47,7 +47,8 @@ interface Seen {
 // the browser gives the whole app.
 const ROOM = 1_000_000
 
-// Each pull request is its own entry, so a tab reading one doesn't undo what another tab saw of another.
+// Each pull request is an entry the tabs share field by field, so a tab doesn't undo what another saw, even of the same
+// pull request.
 const seenAll = sharedRecord<Seen>(
   () => seenKey(activeWorkspace.value?.id ?? ''),
   (entries) => {
