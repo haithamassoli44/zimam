@@ -18,7 +18,7 @@ import {
 } from '@/lib/changes'
 import { readCheckRuns, type CheckRuns } from '@/lib/checks'
 import { diffFiles, type FileDiff } from '@/lib/diff'
-import { generatedRules } from '@/lib/generated'
+import { generatedRules, generatedText } from '@/lib/generated'
 import type { GitHub } from '@/lib/github'
 import { isPost, readPull, type Commit, type Pull, type ReviewThread } from '@/lib/pull'
 import { refKey, sameRef, type IssueRef } from '@/lib/refs'
@@ -95,7 +95,8 @@ interface Session {
   /**
    * The files' new sides, by `commit:path`, with what their marks go by, and the marks of those whose text says they're
    * generated. A mark goes with the text, by its blob, so a push that changes the file takes it off, one that leaves the
-   * file as it was keeps it, and a commit with another text doesn't share it.
+   * file as it was keeps it, and a commit with another text doesn't share it. The text alone gives it: .gitattributes
+   * and Settings can change, and are read as they are now.
    */
   newSides: Map<string, NewSide>
   marked: Set<string>
@@ -420,7 +421,7 @@ async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null
 function markGenerated(s: Session, at: string) {
   const side = s.newSides.get(at)
   const content = s.texts.get(at)
-  if (side && content && 'text' in content && isGenerated.value(side.path, content.text)) s.marked.add(side.mark)
+  if (side && content && 'text' in content && generatedText(side.path, content.text)) s.marked.add(side.mark)
 }
 
 /**

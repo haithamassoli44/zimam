@@ -7,6 +7,7 @@ import type { GitHub } from '@/lib/github'
 import type { Pull } from '@/lib/pull'
 import { client, items, repos, status } from '@/stores/data'
 import { filesState, pull, refreshPull, runs, shownFiles } from '@/stores/pull'
+import { settings } from '@/stores/settings'
 import { openPull, pullScope } from '@/stores/view'
 import type { Item, Repo } from '@/types'
 
@@ -30,6 +31,8 @@ const github = vi.hoisted(() => ({
   ranges: new Map<string, Changes['files']>(),
   texts: new Map<string, string>(),
   textHolds: new Map<string, Promise<void>>(),
+  // The repository's .gitattributes at each head.
+  attributes: new Map<string, string>(),
 }))
 vi.mock('@/lib/pull', async (original) => ({
   ...(await original<typeof import('@/lib/pull')>()),
@@ -52,7 +55,7 @@ vi.mock('@/lib/changes', async (original) => ({
     await github.hold
     await github.holds.get(heads.headOid)
     if (github.failing.has(heads.headOid)) throw new Error('network')
-    return { changes: github.changes.get(heads.headOid)!, attributes: null }
+    return { changes: github.changes.get(heads.headOid)!, attributes: github.attributes.get(heads.headOid) ?? null }
   },
   readRange: async (_gh: unknown, _repo: string, base: string, head: string) => {
     github.changeReads.push(`${base}..${head}`)
@@ -175,6 +178,8 @@ beforeEach(() => {
   github.ranges = new Map()
   github.texts = new Map()
   github.textHolds = new Map()
+  github.attributes = new Map()
+  settings.generated = []
   github.pullFails = 0
   github.pullHold = null
   openPull.value = null
@@ -381,6 +386,52 @@ describe('reading the open pull request again', () => {
     slow.open()
     await flushPromises()
     expect(shownFiles.value).toEqual([])
+  })
+
+  it('shows a file again once the .gitattributes rule that marked it generated is gone, though it stays the same', async () => {
+    const rules = { ...file('.gitattributes'), status: 'modified' as const }
+    github.attributes.set('h1', 'one.ts linguist-generated\n')
+    github.changes.set('h1', { mergeBase: 'base', files: [rules, file('one.ts')], capped: false })
+    github.changes.set('h2', {
+      mergeBase: 'base',
+      files: [{ ...rules, blob: 'rules2' }, file('one.ts')],
+      capped: false,
+    })
+    github.texts.set('h1:one.ts', 'export const one = 1\n')
+    github.texts.set('h2:one.ts', 'export const one = 1\n')
+    await opened(pullAt('h1'), pullAt('h2'))
+    expect(shownFiles.value.map((shown) => shown.path)).toEqual(['.gitattributes'])
+    await refreshPull()
+    await flushPromises()
+    expect(shownFiles.value.map((shown) => shown.path)).toEqual(['.gitattributes', 'one.ts'])
+  })
+
+  it('shows a file again once the Settings pattern that marked it generated is gone', async () => {
+    settings.generated = ['one.ts']
+    github.texts.set('h1:one.ts', 'export const one = 1\n')
+    await opened(pullAt('h1'))
+    expect(shownFiles.value).toEqual([])
+    settings.generated = []
+    await flushPromises()
+    expect(shownFiles.value.map((shown) => shown.path)).toEqual(['one.ts'])
+  })
+
+  it('hides a file its text marks generated once the rule saying it is not is gone', async () => {
+    const rules = { ...file('.gitattributes'), status: 'modified' as const }
+    github.attributes.set('h1', 'one.ts -linguist-generated\n')
+    github.changes.set('h1', { mergeBase: 'base', files: [rules, file('one.ts')], capped: false })
+    github.changes.set('h2', {
+      mergeBase: 'base',
+      files: [{ ...rules, blob: 'rules2' }, file('one.ts')],
+      capped: false,
+    })
+    github.texts.set('h1:one.ts', '// @generated\n')
+    github.texts.set('h2:one.ts', '// @generated\n')
+    await opened(pullAt('h1'), pullAt('h2'))
+    expect(shownFiles.value.map((shown) => shown.path)).toEqual(['.gitattributes', 'one.ts'])
+    await refreshPull()
+    await flushPromises()
+    expect(shownFiles.value.map((shown) => shown.path)).toEqual(['.gitattributes'])
   })
 
   it("doesn't take a commit's generated mark for all the changes, nor miss it when its text was read already", async () => {

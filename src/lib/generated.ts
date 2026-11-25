@@ -153,8 +153,11 @@ export function generatedRules(attributes: string | null, patterns: string[]) {
   return isGenerated
 }
 
-/** Whether a file's text carries a generator's mark, or reads as minified: few lines, and long ones. */
-function generatedText(path: string, text: string): boolean {
+/**
+ * Whether a file's text carries a generator's mark, or reads as minified: few lines, and long ones. Unlike the rules,
+ * what a text says stays with it.
+ */
+export function generatedText(path: string, text: string): boolean {
   if (GITHUB_MARKS.some((mark) => mark.test(text.slice(0, 600)))) return true
   if (!/\.(js|css|mjs)$/.test(path)) return false
   const lines = text.split('\n', 30)
