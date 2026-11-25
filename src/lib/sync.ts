@@ -1,6 +1,16 @@
 import type { Item, Me, Repo, Source, Workspace } from '@/types'
 
-import { bucketOf, emptyCache, readCache, setMarker, syncedMarker, writeCache, type Cache } from './cache'
+import {
+  bucketOf,
+  emptyCache,
+  newRevision,
+  readCache,
+  savedMarker,
+  setMarker,
+  syncedMarker,
+  writeCache,
+  type Cache,
+} from './cache'
 import { GitHubError, type ErrorKind, type GitHub, type RateLimit } from './github'
 import {
   hasClosed,
@@ -121,6 +131,15 @@ export class Syncer {
   private current: Promise<void> | null = null
   private saveTimer: ReturnType<typeof setTimeout> | undefined
   private channel: BroadcastChannel | null = null
+  // The revision a tab last told the others it saved, as this tab last looked: until another is told, nothing is new.
+  private toldRevision: string | null = null
+  // The read of what another tab saved, while it's on its way: a run starting meanwhile waits for it, and goes on from
+  // what it takes. And how many saves this tab made: a read from before one is older than what this tab holds.
+  private adopting: Promise<boolean> | null = null
+  private saves = 0
+  private onSight = () => {
+    if (inSight() && !this.current) void this.adoptStored()
+  }
   private newsSince = Infinity
   private unsaved = false
   private settled = false
@@ -155,6 +174,7 @@ export class Syncer {
     // The open items first, which most lists show: start() reads the closed ones.
     const stored = await readCache(ws.id, false)
     const syncer = new Syncer(ws, gh, store, status, stored ?? emptyCache(ws.id, sourcesKey(ws.sources)))
+    syncer.toldRevision = stored?.revision ?? null
     // Without a cache to read, buckets an older one left behind go with the first save.
     if (!stored) syncer.changedBuckets = null
     syncer.closedLeft = !!stored
@@ -194,12 +214,15 @@ export class Syncer {
       await this.closedRead
       if (this.stopped) return
     }
+    // What another tab saves shows here at once, or, while this tab is out of sight, once it's back: reading the whole
+    // cache again for each slice of another tab's history would cost a tab no one looks at for nothing.
     if ('BroadcastChannel' in globalThis) {
       this.channel = new BroadcastChannel('zimam')
       this.channel.addEventListener('message', (event: MessageEvent<{ ws: string }>) => {
-        if (event.data.ws === this.ws.id && !this.current) void this.adoptStored()
+        if (event.data.ws === this.ws.id && !this.current && inSight()) void this.adoptStored()
       })
     }
+    globalThis.document?.addEventListener('visibilitychange', this.onSight)
     return this.sync()
   }
 
@@ -216,6 +239,7 @@ export class Syncer {
     this.stopped = true
     clearTimeout(this.saveTimer)
     this.channel?.close()
+    globalThis.document?.removeEventListener('visibilitychange', this.onSight)
   }
 
   sync(manual = false): Promise<void> {
@@ -295,10 +319,22 @@ export class Syncer {
     }
   }
 
-  private async adoptStored(): Promise<boolean> {
-    if (syncedMarker(this.ws.id) <= (this.cache.syncedAt ?? 0)) return false
+  private adoptStored(): Promise<boolean> {
+    this.adopting ??= this.takeStored().finally(() => (this.adopting = null))
+    return this.adopting
+  }
+
+  // What another tab saved since this one's copy, the history it loaded after its sync too. Only a save another tab told
+  // of is read: a cache that isn't this tab's own copy is the other tab's, saved after it, unless this tab changed or
+  // saved something while it was read.
+  private async takeStored(): Promise<boolean> {
+    const told = savedMarker(this.ws.id)
+    if (!told || told === this.toldRevision) return false
+    this.toldRevision = told
+    const saves = this.saves
     const stored = await readCache(this.ws.id)
-    if (!stored || (stored.syncedAt ?? 0) <= (this.cache.syncedAt ?? 0)) return false
+    if (this.stopped || this.unsaved || saves !== this.saves) return false
+    if (!stored?.revision || stored.revision === this.cache.revision) return false
     this.cache = stored
     this.changedBuckets = new Set()
     this.show(stored)
@@ -818,14 +854,19 @@ export class Syncer {
     this.cache.items = [...this.store.items.values()]
     this.cache.login = this.store.me.login
     this.cache.requested = [...this.store.me.requested]
+    const revision = this.cache.revision
+    this.cache.revision = newRevision()
     if (!(await writeCache(this.cache, changed))) {
       // What wasn't saved waits for the next save.
+      this.cache.revision = revision
       this.unsaved ||= announce
       this.changedBuckets = changed && this.changedBuckets && new Set([...changed, ...this.changedBuckets])
       return
     }
+    this.saves++
     if (!announce) return
-    setMarker(this.ws.id, this.cache.syncedAt)
+    this.toldRevision = this.cache.revision
+    setMarker(this.ws.id, this.cache.syncedAt, this.cache.revision)
     this.channel?.postMessage({ ws: this.ws.id })
   }
 }
@@ -833,6 +874,8 @@ export class Syncer {
 // While GitHub works out whether an open pull request conflicts, it answers "unknown": the last answer stands until then.
 const keepMerge = (next: Item, old: Item | undefined): Item =>
   next.state === 'open' && next.merge === null && old?.merge ? { ...next, merge: old.merge } : next
+
+const inSight = () => globalThis.document?.visibilityState !== 'hidden'
 
 const sameStatus = (a: Item, b: Item) => STATUS_FIELDS.every((field) => a[field] === b[field])
 

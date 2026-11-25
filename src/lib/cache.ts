@@ -19,6 +19,12 @@ export interface Cache {
   checkedAt: Record<string, number>
   reconciledAt: number | null
   syncedAt: number | null
+  /**
+   * Which save this is, made anew by each save of any tab: a tab whose copy isn't the one saved last takes it. A sync's
+   * slices of the history save after its time, so that can't tell, and two tabs can save within one millisecond, so a
+   * time of saving can't either. Missing from a cache saved before it was kept.
+   */
+  revision?: string | null
   /** Repositories whose open items are loaded. */
   openDone: string[]
   /** Each repository's closed history: a cursor to resume from, or `true` once complete. */
@@ -41,6 +47,7 @@ export function emptyCache(ws: string, sources: string): Cache {
     checkedAt: {},
     reconciledAt: null,
     syncedAt: null,
+    revision: null,
     openDone: [],
     history: {},
     login: null,
@@ -50,21 +57,34 @@ export function emptyCache(ws: string, sources: string): Cache {
 }
 
 const markerKey = (ws: string) => `zimam:synced:${ws}`
+const savedKey = (ws: string) => `zimam:saved:${ws}`
 /** What the reader saw of each pull request in a workspace: visits and viewed files. Reloading keeps it. */
 export const seenKey = (ws: string) => `zimam:seen:${ws}`
 
-export function syncedMarker(ws: string): number {
+/** When a tab of the workspace last finished a sync, and the revision it saved with what it found then. */
+export const syncedMarker = (ws: string) => Number(readMarker(markerKey(ws))) || 0
+export const savedMarker = (ws: string) => readMarker(savedKey(ws))
+
+export function setMarker(ws: string, synced: number | null, revision: string | null = null) {
+  writeMarker(markerKey(ws), synced ? String(synced) : null)
+  writeMarker(savedKey(ws), revision)
+}
+
+/** A revision no other save has: see Cache.revision. */
+export const newRevision = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+
+function readMarker(key: string): string | null {
   try {
-    return Number(localStorage.getItem(markerKey(ws))) || 0
+    return localStorage.getItem(key)
   } catch {
-    return 0
+    return null
   }
 }
 
-export function setMarker(ws: string, at: number | null) {
+function writeMarker(key: string, value: string | null) {
   try {
-    if (at) localStorage.setItem(markerKey(ws), String(at))
-    else localStorage.removeItem(markerKey(ws))
+    if (value) localStorage.setItem(key, value)
+    else localStorage.removeItem(key)
   } catch {
     // Without storage, tabs just sync on their own.
   }
