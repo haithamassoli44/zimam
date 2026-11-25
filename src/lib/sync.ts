@@ -32,6 +32,8 @@ const SLACK = TICK / 4
 const HISTORY_SLICE = 0.75 * TICK
 // GitHub's search lags behind a change by a little, so each check looks this far before the last one.
 const OVERLAP = 10 * MINUTE
+// The most results a search lists, however many it finds.
+const SEARCH_MOST = 1000
 const REPOS_EVERY = 15 * MINUTE
 // How often an open pull request's checks, review and conflicts are read again: running checks soon, failing ones in a
 // while, the rest now and then. A conflict GitHub is still working out is asked again a few times at the shortest.
@@ -400,29 +402,81 @@ export class Syncer {
     if (!this.hasBudget(RESERVE)) return
     this.status.phase = 'changes'
     if (!manual && (await this.unchanged(started))) return
-    const since = new Date((this.cache.watermark ?? started) - OVERLAP).toISOString().replace(/\.\d+Z$/, 'Z')
-    const found: Item[] = []
+    const since = Math.floor(((this.cache.watermark ?? started) - OVERLAP) / 1000)
+    const found: Found = { items: [], changed: false }
     let tooMany = false
-    type Found = { search: Page<RawItem | Record<string, never>> & { issueCount: number } }
-    for await (const data of this.search<Found>(SEARCH, `updated:>=${since}`)) {
-      // Search stops at 1,000 results. After a long absence, refetching the open items is cheaper and complete.
-      tooMany = data.search.issueCount > 1000
-      if (tooMany) break
-      for (const node of data.search.nodes) if (node && 'id' in node) found.push(toItem(node as RawItem))
+    for (const group of chunk(this.ws.sources, 8)) {
+      const searched = await this.findChanges(group, since, Math.floor(started / 1000), found)
+      // What was found counts, but the next run looks over the same time again.
+      if (searched === 'stopped') {
+        if (!this.stopped) this.put(found.items.filter((item) => this.store.repos.has(item.repoId)))
+        return
+      }
+      tooMany ||= searched === 'tooMany'
     }
+    // Only a second with more than search lists, such as a change made to a thousand issues at once, gets here. Its
+    // open items at least can be read again.
     if (tooMany) {
       this.cache.openDone = []
       this.cache.reconciledAt = started
       await this.loadOpen()
     }
     // A change in a repository the workspace doesn't hold may be in a new one, or in one it leaves out.
-    const unknown = found.filter((item) => !this.store.repos.has(item.repoId) && !this.outside.has(item.repoId))
+    const unknown = found.items.filter((item) => !this.store.repos.has(item.repoId) && !this.outside.has(item.repoId))
     if (unknown.length) await this.loadRepos()
     for (const item of unknown) if (!this.store.repos.has(item.repoId)) this.outside.add(item.repoId)
-    this.busy = this.put(found.filter((item) => this.store.repos.has(item.repoId))) || tooMany
+    this.busy = this.put(found.items.filter((item) => this.store.repos.has(item.repoId))) || found.changed || tooMany
     if (unknown.length) await this.loadOpen()
     this.searchedAt = started
     this.cache.watermark = started
+  }
+
+  /**
+   * Adds to `found` what changed in a group of sources between two times, in seconds, both included: from `from` to
+   * now, or to `to` once the time is cut up. Search lists no more than 1,000 results, and after a long absence more than
+   * that can change. GitHub says how many there are, so a time holding more is cut into parts that each hold fewer, as
+   * many times as it takes, down to a second. Each part counts and is saved as soon as it's searched, so a long search
+   * shows what it finds as it goes and keeps it should it stop. Says whether it found all of them, or stopped short.
+   */
+  private async findChanges(
+    group: Source[],
+    from: number,
+    to: number,
+    found: Found,
+    whole = true,
+  ): Promise<'all' | 'tooMany' | 'stopped'> {
+    // The first search runs to now, so it also finds what changed since this run started, which the next one looks at
+    // again anyway. The parts of a time cut up end where it ends.
+    const span = whole ? `>=${isoSecond(from)}` : `${isoSecond(from)}..${isoSecond(to)}`
+    const q = `${group.map(qualifier).join(' ')} updated:${span}`
+    const items: Item[] = []
+    let after: string | null = null
+    do {
+      if (this.stopped || !this.hasBudget(RESERVE)) return 'stopped'
+      const data: Searched = await this.gh.query(SEARCH, { q, after })
+      const count = data.search.issueCount
+      if (count > SEARCH_MOST) {
+        if (to <= from) return 'tooMany'
+        // Into parts of about 800 each, should the changes be spread evenly, with room for some more meanwhile.
+        const parts = Math.min(to - from + 1, Math.ceil(count / (0.8 * SEARCH_MOST)))
+        const size = Math.ceil((to - from + 1) / parts)
+        let searched: 'all' | 'tooMany' = 'all'
+        for (let start = from; start <= to; start += size) {
+          const part = await this.findChanges(group, start, Math.min(start + size - 1, to), found, false)
+          if (part === 'stopped') return part
+          if (part === 'tooMany') searched = part
+        }
+        return searched
+      }
+      for (const node of data.search.nodes) if (node && 'id' in node) items.push(toItem(node as RawItem))
+      after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null
+    } while (after)
+    found.items.push(...items)
+    if (!whole) {
+      found.changed = this.put(items.filter((item) => this.store.repos.has(item.repoId))) || found.changed
+      await this.save(true)
+    }
+    return 'all'
   }
 
   /**
@@ -529,8 +583,8 @@ export class Syncer {
     if (!this.hasBudget(RESERVE)) return
     let login: string | null = null
     const requested: string[] = []
-    type Found = { viewer: { login: string }; search: Page<{ id?: string } | null> }
-    for await (const data of this.search<Found>(REVIEW_REQUESTED, 'is:pr is:open review-requested:@me')) {
+    type Requested = { viewer: { login: string }; search: Page<{ id?: string } | null> }
+    for await (const data of this.search<Requested>(REVIEW_REQUESTED, 'is:pr is:open review-requested:@me')) {
       login = data.viewer.login
       for (const node of data.search.nodes) if (node?.id) requested.push(node.id)
     }
@@ -719,13 +773,14 @@ export class Syncer {
     this.saveTimer = setTimeout(() => void this.save(), 2000)
   }
 
-  // Other tabs only hear about saves with new data, so a quiet minute doesn't make each of them reread the cache.
-  private async save() {
+  // Other tabs only hear about saves with new data, so a quiet minute doesn't make each of them reread the cache. A quiet
+  // save, as each part of a long search makes, tells them nothing: the save at the end of the run does, once.
+  private async save(quiet = false) {
     clearTimeout(this.saveTimer)
     if (this.stopped) return
-    const announce = this.unsaved
+    const announce = !quiet && this.unsaved
     const changed = this.changedBuckets
-    this.unsaved = false
+    if (!quiet) this.unsaved = false
     this.changedBuckets = new Set()
     this.cache.repos = [...this.store.repos.values()]
     this.cache.items = [...this.store.items.values()]
@@ -748,6 +803,13 @@ const keepMerge = (next: Item, old: Item | undefined): Item =>
   next.state === 'open' && next.merge === null && old?.merge ? { ...next, merge: old.merge } : next
 
 const sameStatus = (a: Item, b: Item) => STATUS_FIELDS.every((field) => a[field] === b[field])
+
+type Searched = { search: Page<RawItem | Record<string, never>> & { issueCount: number } }
+/** What a search for changes found, and whether what it already counted changed anything. */
+type Found = { items: Item[]; changed: boolean }
+
+/** A time in seconds, as a search's `updated:` takes it. */
+const isoSecond = (seconds: number) => new Date(seconds * 1000).toISOString().replace(/\.\d+Z$/, 'Z')
 
 function chunk<T>(list: T[], size: number): T[][] {
   const chunks: T[][] = []
