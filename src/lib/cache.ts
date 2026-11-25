@@ -1,7 +1,9 @@
 import type { Item, Repo } from '@/types'
 
 // Bump when Item, Repo or this shape changes: an older cache is then dropped and fetched again.
-const VERSION = 4
+const VERSION = 5
+// The same shape, with the items kept beside the rest rather than in buckets: moved to buckets once read.
+const UNBUCKETED = 4
 
 /** What a workspace has fetched so far, and how far each step got. */
 export interface Cache {
@@ -68,6 +70,28 @@ export function setMarker(ws: string, at: number | null) {
   }
 }
 
+// The items are kept apart from the rest, in buckets: each repository's open items, and its closed ones by the month
+// they last changed in. A save writes only the buckets that changed: writing all the items of a big workspace took the
+// page half a second each time, and a sync saves every minute. The buckets share the store, under the workspace's key
+// and the bucket's, so a tab still on the version before has nothing to wait for.
+
+interface Bucket {
+  /** The store's key: the workspace, then the bucket. See bucketOf. */
+  ws: string
+  items: Item[]
+}
+
+/**
+ * Where an item is kept: open items by repository, closed ones by repository and month, apart, so the open ones can be
+ * read first. A change can move an item, as closing it does: then it leaves one bucket for another.
+ */
+export const bucketOf = (item: Item) =>
+  item.state === 'open' ? `open/${item.repoId}` : `closed/${item.repoId}/${item.updatedAt.slice(0, 7)}`
+
+const bucketKey = (ws: string, bucket: string) => `${ws}/${bucket}`
+/** A workspace's buckets, or those whose keys start with `part`, like `open/`. */
+const bucketsOf = (ws: string, part = '') => IDBKeyRange.bound(`${ws}/${part}`, `${ws}/${part}\uffff`)
+
 let database: Promise<IDBDatabase | null> | null = null
 
 function open(): Promise<IDBDatabase | null> {
@@ -84,14 +108,15 @@ function open(): Promise<IDBDatabase | null> {
   return database
 }
 
-async function run<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>): Promise<T | null> {
+/** Runs `action` in a transaction. Resolves with what its answer reads once it's done, or null. */
+async function run<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => () => T): Promise<T | null> {
   const db = await open()
   if (!db) return null
   return new Promise((resolve) => {
     try {
       const transaction = db.transaction('cache', mode)
-      const request = action(transaction.objectStore('cache'))
-      transaction.addEventListener('complete', () => resolve(request.result))
+      const answer = action(transaction.objectStore('cache'))
+      transaction.addEventListener('complete', () => resolve(answer()))
       transaction.addEventListener('abort', () => resolve(null))
     } catch (error) {
       console.error('Zimam could not use what this browser saved', error)
@@ -100,17 +125,55 @@ async function run<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) 
   })
 }
 
-export async function readCache(ws: string): Promise<Cache | null> {
-  const cache = await run<Cache | undefined>('readonly', (store) => store.get(ws))
-  return cache?.version === VERSION ? cache : null
+/** A workspace's cache, with its open items alone when `closed` is false: a long history takes a while to read. */
+export async function readCache(ws: string, closed = true): Promise<Cache | null> {
+  const read = await run('readonly', (store) => {
+    const cache = store.get(ws) as IDBRequest<Cache | undefined>
+    const buckets = store.getAll(bucketsOf(ws, closed ? '' : 'open/')) as IDBRequest<Bucket[]>
+    return () => ({ cache: cache.result, buckets: buckets.result })
+  })
+  const cache = read?.cache
+  if (cache?.version === UNBUCKETED) {
+    cache.version = VERSION
+    await writeCache(cache, null)
+    return cache
+  }
+  if (cache?.version !== VERSION) return null
+  cache.items = read!.buckets.flatMap((bucket) => bucket.items)
+  return cache
 }
 
-/** Returns whether the cache was saved. */
-export async function writeCache(cache: Cache): Promise<boolean> {
-  return (await run('readwrite', (store) => store.put(cache))) !== null
+/**
+ * Saves the workspace, with the items of the buckets named, or of every bucket (null), which drops the others too.
+ * Returns whether it was saved.
+ */
+export async function writeCache(cache: Cache, changed: ReadonlySet<string> | null): Promise<boolean> {
+  const filled = new Map<string, Item[]>()
+  for (const bucket of changed ?? []) filled.set(bucket, [])
+  for (const item of cache.items) {
+    const bucket = bucketOf(item)
+    let held = filled.get(bucket)
+    if (!held && !changed) filled.set(bucket, (held = []))
+    held?.push(item)
+  }
+  const saved = await run('readwrite', (store) => {
+    if (!changed) store.delete(bucketsOf(cache.ws))
+    store.put({ ...cache, items: [] })
+    for (const [bucket, held] of filled) {
+      const key = bucketKey(cache.ws, bucket)
+      if (held.length) store.put({ ws: key, items: held } satisfies Bucket)
+      else store.delete(key)
+    }
+    return () => true
+  })
+  return saved === true
 }
 
 export async function deleteCache(ws: string) {
   setMarker(ws, null)
-  await run('readwrite', (store) => store.delete(ws))
+  await run('readwrite', (store) => {
+    store.delete(ws)
+    store.delete(bucketsOf(ws))
+    return () => true
+  })
 }

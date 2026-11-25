@@ -1,6 +1,6 @@
 import type { Item, Me, Repo, Source, Workspace } from '@/types'
 
-import { emptyCache, readCache, setMarker, syncedMarker, writeCache, type Cache } from './cache'
+import { bucketOf, emptyCache, readCache, setMarker, syncedMarker, writeCache, type Cache } from './cache'
 import { GitHubError, type ErrorKind, type GitHub, type RateLimit } from './github'
 import {
   hasClosed,
@@ -59,6 +59,8 @@ export type Left = 'open' | ListKind
 
 export interface SyncStatus {
   phase: 'idle' | 'repos' | 'open' | 'changes' | 'history'
+  /** Whether the closed items this browser kept are still being read, after the open ones it shows already. */
+  reading: boolean
   /** Repositories whose open items are fetched, while `phase` is 'open'. */
   done: number
   total: number
@@ -78,6 +80,7 @@ export interface SyncStatus {
 export function idleStatus(): SyncStatus {
   return {
     phase: 'idle',
+    reading: false,
     done: 0,
     total: 0,
     syncedAt: null,
@@ -91,12 +94,15 @@ export function idleStatus(): SyncStatus {
   }
 }
 
-/** The in-memory data the screen reads. `changed` is called after every change, with the items that are news. */
+/**
+ * The in-memory data the screen reads. `changed` is called after every change, with the items that are news, and
+ * `whole` when the store was filled anew from what this browser kept.
+ */
 export interface SyncStore {
   repos: Map<string, Repo>
   items: Map<string, Item>
   me: Me
-  changed(fresh: string[]): void
+  changed(fresh: string[], whole?: boolean): void
 }
 
 /** What a sync depends on: a change to any of it needs a new Syncer. */
@@ -131,19 +137,21 @@ export class Syncer {
   private unknownMerge = new Map<string, number>()
   // Repositories the search finds changes in that the workspace doesn't hold, such as those left out of a source.
   private outside = new Set<string>()
+  // The buckets of items changed since the last save, which the next one writes, or null for all of them.
+  private changedBuckets: Set<string> | null = new Set()
+  // Whether only the open items have been read from the cache yet, and the read of the rest, which syncs wait for.
+  private closedLeft = false
+  private closedRead: Promise<void> = Promise.resolve()
 
   static async open(ws: Workspace, gh: GitHub, store: SyncStore, status: SyncStatus): Promise<Syncer> {
-    const sources = sourcesKey(ws.sources)
-    const cache = (await readCache(ws.id)) ?? emptyCache(ws.id, sources)
-    if (cache.sources !== sources) {
-      cache.sources = sources
-      cache.reposAt = null
-      // What the sources no longer bring goes now, rather than once the repositories have loaded again.
-      cache.repos = cache.repos.filter((repo) => ws.sources.some((source) => brings(source, repo)))
-      const kept = new Set(cache.repos.map((repo) => repo.id))
-      cache.items = cache.items.filter((item) => kept.has(item.repoId))
-    }
-    return new Syncer(ws, gh, store, status, cache)
+    // The open items first, which most lists show: start() reads the closed ones.
+    const stored = await readCache(ws.id, false)
+    const syncer = new Syncer(ws, gh, store, status, stored ?? emptyCache(ws.id, sourcesKey(ws.sources)))
+    // Without a cache to read, buckets an older one left behind go with the first save.
+    if (!stored) syncer.changedBuckets = null
+    syncer.closedLeft = !!stored
+    syncer.fit()
+    return syncer
   }
 
   private constructor(
@@ -154,8 +162,30 @@ export class Syncer {
     private cache: Cache,
   ) {}
 
-  start(): Promise<void> {
+  /** Fits the cache to the workspace's sources, should they have changed since it was saved. */
+  private fit() {
+    const sources = sourcesKey(this.ws.sources)
+    const { cache } = this
+    if (cache.sources === sources) return
+    cache.sources = sources
+    cache.reposAt = null
+    // What the sources no longer bring goes now, rather than once the repositories have loaded again.
+    cache.repos = cache.repos.filter((repo) => this.ws.sources.some((source) => brings(source, repo)))
+    const kept = new Set(cache.repos.map((repo) => repo.id))
+    cache.items = cache.items.filter((item) => kept.has(item.repoId))
+    this.changedBuckets = null
+  }
+
+  async start(): Promise<void> {
     this.show(this.cache)
+    // The list shows the open items while the closed ones are read: they're all in before anything syncs, and a sync
+    // asked for meanwhile waits, or what it saved would leave them out.
+    if (this.closedLeft) {
+      this.status.reading = true
+      this.closedRead = this.readClosed()
+      await this.closedRead
+      if (this.stopped) return
+    }
     if ('BroadcastChannel' in globalThis) {
       this.channel = new BroadcastChannel('zimam')
       this.channel.addEventListener('message', (event: MessageEvent<{ ws: string }>) => {
@@ -165,6 +195,15 @@ export class Syncer {
     return this.sync()
   }
 
+  private async readClosed() {
+    const all = await readCache(this.ws.id)
+    this.status.reading = false
+    if (this.stopped || !all) return
+    this.cache = all
+    this.fit()
+    this.show(all)
+  }
+
   stop() {
     this.stopped = true
     clearTimeout(this.saveTimer)
@@ -172,13 +211,15 @@ export class Syncer {
   }
 
   sync(manual = false): Promise<void> {
-    this.current ??= this.withLock(manual).finally(() => {
-      this.current = null
-      const more = this.sliced
-      this.sliced = false
-      // The next slice of the history doesn't wait for a tick.
-      if (more && !this.stopped) setTimeout(() => void this.sync(), 0)
-    })
+    this.current ??= this.closedRead
+      .then(() => this.withLock(manual))
+      .finally(() => {
+        this.current = null
+        const more = this.sliced
+        this.sliced = false
+        // The next slice of the history doesn't wait for a tick.
+        if (more && !this.stopped) setTimeout(() => void this.sync(), 0)
+      })
     return this.current
   }
 
@@ -250,6 +291,7 @@ export class Syncer {
     const stored = await readCache(this.ws.id)
     if (!stored || (stored.syncedAt ?? 0) <= (this.cache.syncedAt ?? 0)) return false
     this.cache = stored
+    this.changedBuckets = new Set()
     this.show(stored)
     return true
   }
@@ -270,7 +312,7 @@ export class Syncer {
     // Once a sync has finished, every repository's open items have loaded. Until then, only those in `openDone` have.
     this.opened = new Set(cache.syncedAt === null ? cache.openDone : cache.repos.map((repo) => repo.id))
     this.showProgress()
-    this.store.changed([])
+    this.store.changed([], true)
   }
 
   private fail(error: unknown) {
@@ -310,7 +352,7 @@ export class Syncer {
     for (const repo of this.store.repos.values()) {
       if (!repos.has(repo.id) && failed.some((source) => brings(source, repo))) repos.set(repo.id, repo)
     }
-    for (const item of this.store.items.values()) if (!repos.has(item.repoId)) this.store.items.delete(item.id)
+    for (const item of this.store.items.values()) if (!repos.has(item.repoId)) this.drop(item)
     this.store.repos.clear()
     for (const [id, repo] of repos) this.store.repos.set(id, repo)
     // A repository that comes back, such as one picked again, loads its items again.
@@ -458,7 +500,7 @@ export class Syncer {
         else this.unknownMerge.set(item.id, (this.unknownMerge.get(item.id) ?? 0) + 1)
         const next = keepMerge({ ...item, ...status }, item)
         if (sameStatus(next, item)) continue
-        this.store.items.set(item.id, next)
+        this.keep(next, item)
         patched = true
       }
       if (patched) this.changed([])
@@ -630,7 +672,11 @@ export class Syncer {
       let deleted = false
       data.nodes.forEach((node, index) => {
         if (node && 'id' in node) found.push(toItem(node))
-        else if (gone.has(index)) deleted = this.store.items.delete(group[index]) || deleted
+        else if (gone.has(index)) {
+          const old = this.store.items.get(group[index])
+          if (old) this.drop(old)
+          deleted ||= !!old
+        }
       })
       if (!this.put(found) && deleted) this.changed([])
     }
@@ -647,12 +693,24 @@ export class Syncer {
       // Open pull requests always come with their checks.
       if (item.kind === 'pr' && item.state === 'open') this.cache.checkedAt[item.id] = this.runStartedAt
       if (old && old.updatedAt === item.updatedAt && sameStatus(old, item)) continue
-      this.store.items.set(item.id, item)
+      this.keep(item, old)
       changed = true
       if (old?.updatedAt !== item.updatedAt && Date.parse(item.updatedAt) > this.newsSince) fresh.push(item.id)
     }
     if (changed) this.changed(fresh)
     return changed
+  }
+
+  /** Puts an item in place of the one it changes, if any, for the next save to write. */
+  private keep(item: Item, old?: Item) {
+    this.store.items.set(item.id, item)
+    this.changedBuckets?.add(bucketOf(item))
+    if (old) this.changedBuckets?.add(bucketOf(old))
+  }
+
+  private drop(item: Item) {
+    this.store.items.delete(item.id)
+    this.changedBuckets?.add(bucketOf(item))
   }
 
   private saveSoon() {
@@ -666,12 +724,20 @@ export class Syncer {
     clearTimeout(this.saveTimer)
     if (this.stopped) return
     const announce = this.unsaved
+    const changed = this.changedBuckets
     this.unsaved = false
+    this.changedBuckets = new Set()
     this.cache.repos = [...this.store.repos.values()]
     this.cache.items = [...this.store.items.values()]
     this.cache.login = this.store.me.login
     this.cache.requested = [...this.store.me.requested]
-    if (!(await writeCache(this.cache)) || !announce) return
+    if (!(await writeCache(this.cache, changed))) {
+      // What wasn't saved waits for the next save.
+      this.unsaved ||= announce
+      this.changedBuckets = changed && this.changedBuckets && new Set([...changed, ...this.changedBuckets])
+      return
+    }
+    if (!announce) return
     setMarker(this.ws.id, this.cache.syncedAt)
     this.channel?.postMessage({ ws: this.ws.id })
   }
