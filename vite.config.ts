@@ -58,7 +58,8 @@ export default defineConfig(({ command }) => ({
         },
         modal: { slots: { title: 'font-medium' } },
         slideover: { slots: { title: 'font-medium' } },
-        kbd: { base: 'font-mono font-normal' },
+        // Keys as they're typed: `j`, `Shift`, `Enter`, not capitals.
+        kbd: { base: 'font-mono font-normal normal-case' },
       },
       // Only bundled icons are allowed: the page may not call the Iconify API.
       // The scan reads .ts too: icons named in tables like components/looks.ts appear in no template.

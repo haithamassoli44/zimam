@@ -35,7 +35,7 @@ const views = Object.fromEntries(
 )
 useKeys({ '?': openKeys, ',': openSettings, r: () => syncNow(true), ...views }, 0)
 
-/** Skips the sidebar and the filters, to the list or the diff. */
+/** The first stop of Tab, shown only then: skips the sidebar and the filters, to the list or the diff. */
 function skip() {
   document.querySelector<HTMLElement>('[data-main]')?.focus()
 }
@@ -44,7 +44,7 @@ function skip() {
 <template>
   <button
     type="button"
-    class="sr-only z-50 rounded-md bg-default px-3 py-2 text-sm font-medium text-highlighted ring-2 ring-primary focus:not-sr-only focus:fixed focus:start-3 focus:top-3"
+    class="fixed start-3 top-3 z-50 -translate-y-20 rounded-md bg-default px-3 py-2 text-sm font-medium text-highlighted shadow-md ring-1 ring-default transition-transform focus:translate-y-0 focus-visible:outline-2 focus-visible:outline-primary"
     @click="skip"
   >
     {{ t('nav.skip') }}

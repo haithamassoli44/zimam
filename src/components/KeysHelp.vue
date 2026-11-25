@@ -13,8 +13,8 @@ const { t } = useI18n()
 <template>
   <UModal v-model:open="ui.keysOpen" :title="t('keys.title')" :ui="{ content: 'sm:max-w-2xl' }">
     <template #body>
-      <div class="grid gap-x-10 gap-y-6 sm:grid-cols-2">
-        <section v-for="group in KEY_GROUPS" :key="group.id">
+      <div class="gap-x-10 sm:columns-2">
+        <section v-for="group in KEY_GROUPS" :key="group.id" class="mb-6 break-inside-avoid">
           <h3 class="mb-2 text-sm text-toned">{{ t(`keys.groups.${group.id}`) }}</h3>
           <ul class="space-y-1.5 text-[13px]">
             <li v-for="entry in group.keys" :key="entry.does" class="flex items-center gap-3">

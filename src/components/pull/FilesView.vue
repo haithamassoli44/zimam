@@ -8,7 +8,7 @@ import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from 
 import { useI18n } from 'vue-i18n'
 
 import { useKeys } from '@/components/keys'
-import { pressed } from '@/components/pressed'
+import { shown } from '@/components/pressed'
 import FileDiff from '@/components/pull/FileDiff.vue'
 import { showPart } from '@/components/pull/parts'
 import ScopeCard from '@/components/pull/ScopeCard.vue'
@@ -209,20 +209,34 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         </UTooltip>
       </div>
       <UFieldGroup size="sm" role="group" :aria-label="t('pull.fileMode')">
-        <UButton v-bind="pressed(!one)" size="sm" :label="t('pull.modes.all')" @click="setFileMode('all')" />
-        <UButton v-bind="pressed(one)" size="sm" :label="t('pull.modes.one')" @click="setFileMode('one')" />
+        <UButton
+          v-bind="shown(!one)"
+          size="sm"
+          :aria-pressed="!one"
+          :label="t('pull.modes.all')"
+          @click="setFileMode('all')"
+        />
+        <UButton
+          v-bind="shown(one)"
+          size="sm"
+          :aria-pressed="one"
+          :label="t('pull.modes.one')"
+          @click="setFileMode('one')"
+        />
       </UFieldGroup>
       <UFieldGroup size="sm" role="group" :aria-label="t('pull.diffView')" class="max-sm:hidden">
         <UButton
-          v-bind="pressed(settings.diffView === 'split')"
+          v-bind="shown(settings.diffView === 'split')"
           size="sm"
+          :aria-pressed="settings.diffView === 'split'"
           icon="i-octicon-columns-16"
           :aria-label="t('pull.views.split')"
           @click="settings.diffView = 'split'"
         />
         <UButton
-          v-bind="pressed(settings.diffView === 'unified')"
+          v-bind="shown(settings.diffView === 'unified')"
           size="sm"
+          :aria-pressed="settings.diffView === 'unified'"
           icon="i-octicon-rows-16"
           :aria-label="t('pull.views.unified')"
           @click="settings.diffView = 'unified'"
@@ -230,8 +244,9 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
       </UFieldGroup>
       <UTooltip :text="t('pull.whitespaceHelp')">
         <UButton
-          v-bind="pressed(settings.ignoreSpace)"
+          v-bind="shown(settings.ignoreSpace)"
           size="sm"
+          :aria-pressed="settings.ignoreSpace"
           :label="t('pull.whitespace')"
           class="max-md:hidden"
           @click="settings.ignoreSpace = !settings.ignoreSpace"

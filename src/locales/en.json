@@ -518,7 +518,7 @@
       "commits": "no commits | 1 commit | {n} commits",
       "files": "no files changed | 1 file changed | {n} files changed",
       "comments": "no comments | 1 new comment | {n} new comments",
-      "nothing": "Nothing new.",
+      "nothing": "Nothing new",
       "legend": "What you saw before is faded; new lines have a blue bar.",
       "first": "First new change",
       "pretend": "Pretend visit",
