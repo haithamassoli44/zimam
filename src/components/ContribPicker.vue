@@ -22,6 +22,7 @@ import {
   sameSource,
   type Contribution,
   type ContributionKind,
+  type OpenedKind,
 } from '@/lib/sources'
 import { formatList, formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
@@ -40,26 +41,29 @@ const ICONS: Record<ContributionKind, string> = {
 }
 
 const entries = shallowRef<Contribution[] | null>(null)
-const partial = ref<ContributionKind[]>([])
+const reposCut = ref(false)
+const countsCut = ref<OpenedKind[]>([])
 const failed = ref(false)
 
-// Only the latest load shows: one for an earlier token may answer after it.
-let loads = 0
+// Only the latest load reads on and shows: one for an earlier token stops before its next page.
+let current: AbortController | null = null
 async function load() {
-  const at = ++loads
+  current?.abort()
+  const controller = (current = new AbortController())
   failed.value = false
   entries.value = null
   try {
-    const found = await contributionsOf(props.gh, props.login)
-    if (at !== loads) return
+    const found = await contributionsOf(props.gh, props.login, controller.signal)
+    if (controller.signal.aborted) return
     entries.value = found.contributions
-    partial.value = found.partial
+    reposCut.value = found.reposCut
+    countsCut.value = found.countsCut
   } catch {
-    if (at === loads) failed.value = true
+    if (!controller.signal.aborted) failed.value = true
   }
 }
 void load()
-onUnmounted(() => loads++)
+onUnmounted(() => current?.abort())
 // A new token may see other repositories, or be someone else's.
 watch(() => [props.gh, props.login], load)
 
@@ -139,6 +143,10 @@ function resetFilters() {
   Object.assign(filters, { ...defaultContributionFilters(), sort: filters.sort })
 }
 
+// Past the pages read, a repository may hold more of what was opened than were counted.
+const count = (kind: OpenedKind, n: number) =>
+  t(`contrib.${kind === 'pr' ? 'prs' : 'issues'}${countsCut.value.includes(kind) ? 'AtLeast' : ''}`, n)
+
 const kindsText = (entry: Contribution) => formatList(entry.kinds.map((kind) => t(`contrib.kinds.${kind}`)))
 
 const lastOpened = (entry: Contribution) =>
@@ -165,10 +173,10 @@ const lastOpened = (entry: Contribution) =>
       <dl class="enter grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div
           v-for="stat in [
-            { key: 'repos', icon: 'i-octicon-repo-16', value: totals.repos, capped: partial.length > 0 },
-            { key: 'owners', icon: 'i-octicon-organization-16', value: totals.owners, capped: partial.length > 0 },
-            { key: 'prs', icon: ICONS.pr, value: totals.prs, capped: partial.includes('pr') },
-            { key: 'issues', icon: ICONS.issue, value: totals.issues, capped: partial.includes('issue') },
+            { key: 'repos', icon: 'i-octicon-repo-16', value: totals.repos, capped: reposCut },
+            { key: 'owners', icon: 'i-octicon-organization-16', value: totals.owners, capped: reposCut },
+            { key: 'prs', icon: ICONS.pr, value: totals.prs, capped: countsCut.includes('pr') },
+            { key: 'issues', icon: ICONS.issue, value: totals.issues, capped: countsCut.includes('issue') },
           ]"
           :key="stat.key"
           class="rounded-md bg-elevated/50 px-3 py-2"
@@ -182,7 +190,8 @@ const lastOpened = (entry: Contribution) =>
           </dd>
         </div>
       </dl>
-      <p v-if="partial.length" class="text-xs text-muted">{{ t('contrib.partial') }}</p>
+      <p v-if="reposCut" class="text-xs text-muted">{{ t('contrib.reposCut') }}</p>
+      <p v-if="countsCut.length" class="text-xs text-muted">{{ t('contrib.countsCut') }}</p>
 
       <div class="flex flex-wrap items-center gap-2">
         <UInput
@@ -281,8 +290,8 @@ const lastOpened = (entry: Contribution) =>
                 <UIcon v-for="kind in entry.kinds" :key="kind" :name="ICONS[kind]" class="size-3.5 text-muted" />
                 <span class="sr-only">{{ kindsText(entry) }}</span>
               </span>
-              <span v-if="entry.prs" class="tabular-nums">{{ t('contrib.prs', entry.prs) }}</span>
-              <span v-if="entry.issues" class="tabular-nums">{{ t('contrib.issues', entry.issues) }}</span>
+              <span v-if="entry.prs" class="tabular-nums">{{ count('pr', entry.prs) }}</span>
+              <span v-if="entry.issues" class="tabular-nums">{{ count('issue', entry.issues) }}</span>
               <span v-if="entry.repo.language" class="flex items-center gap-1">
                 <span
                   class="size-2 rounded-full"

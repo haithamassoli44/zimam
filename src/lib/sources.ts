@@ -1,6 +1,6 @@
 import type { Repo, Source } from '@/types'
 
-import { GitHubError, type GitHub } from './github'
+import { GitHubError, type GitHub, type QueryError } from './github'
 import {
   CONTRIBUTED,
   ONE_REPO,
@@ -118,18 +118,40 @@ export interface Contribution {
   lastAt: string | null
 }
 
-/** How many pages of 100 of what someone opened are read, the latest first. Past them, the counts are partial. */
+/** How many pages of 100 of what someone opened are read, the latest first. */
 export const OPENED_PAGES = 10
+
+export type OpenedKind = Extract<ContributionKind, 'pr' | 'issue'>
+
+/** The repositories someone contributed to, and how much of what GitHub knows reached them. */
+export interface Discovery {
+  contributions: Contribution[]
+  /**
+   * Some repositories may be missing: GitHub listed more recent commits or reviews than it gives, or what they opened
+   * went on past the pages read. Recent pull requests and issues past the cap don't count: their history finds them.
+   */
+  reposCut: boolean
+  /** What they opened went on past the pages read, so its counts, in all and in each repository, are at least these. */
+  countsCut: OpenedKind[]
+}
+
+// An error about a repository the token can't read is under `nodes`, and that repository is only left out. Any other
+// error means a list wasn't read at all.
+const listFailed = (errors: QueryError[]) => errors.some((error) => !error.path?.includes('nodes'))
 
 /**
  * The repositories someone contributed to, that the token can read. GitHub lists the recent ones by kind of
- * contribution, 100 of each at most, and what they opened finds the older ones. `partial` names the kinds GitHub
- * listed more of than were read.
+ * contribution, 100 of each at most, and what they opened finds the older ones. A list GitHub doesn't give throws a
+ * `query` error, to try again, rather than passing for an empty one. `signal` stops it between requests.
  */
-export async function contributionsOf(
-  gh: GitHub,
-  login: string,
-): Promise<{ contributions: Contribution[]; partial: ContributionKind[] }> {
+export async function contributionsOf(gh: GitHub, login: string, signal?: AbortSignal): Promise<Discovery> {
+  const ask = async <T>(text: string, variables: Record<string, unknown>) => {
+    signal?.throwIfAborted()
+    const answer = await gh.request<T>(text, variables)
+    signal?.throwIfAborted()
+    if (listFailed(answer.errors)) throw new GitHubError(answer.errors[0].message, 'query')
+    return answer.data
+  }
   const found = new Map<string, Contribution>()
   const add = (raw: RawRepo, kind: ContributionKind) => {
     let entry = found.get(raw.id)
@@ -138,27 +160,27 @@ export async function contributionsOf(
     return entry
   }
   type User<T> = { user: T | null }
-  type Listed = { totalCount: number; nodes: (RawRepo | null)[] }
-  const recent = await gh.query<User<Record<ContributionKind, Listed>>>(CONTRIBUTED, { login })
-  if (!recent.user) throw new GitHubError(login, 'query')
-  const partial = new Set<ContributionKind>()
+  type Listed = { totalCount: number; nodes: (RawRepo | null)[] } | null
+  const recent = (await ask<User<Record<ContributionKind, Listed>>>(CONTRIBUTED, { login })).user
+  if (!recent) throw new GitHubError(login, 'query')
+  let reposCut = false
   for (const kind of CONTRIBUTION_KINDS) {
-    const listed = recent.user[kind]
+    const listed = recent[kind]
+    if (!listed) throw new GitHubError(`${login}: ${kind}`, 'query')
     for (const raw of listed.nodes) if (raw) add(raw, kind)
-    if (listed.totalCount > listed.nodes.length) partial.add(kind)
+    if ((kind === 'commit' || kind === 'review') && listed.totalCount > listed.nodes.length) reposCut = true
   }
+  const countsCut: OpenedKind[] = []
   for (const [kind, list] of [
     ['pr', 'pullRequests'],
     ['issue', 'issues'],
   ] as const) {
     let after: string | null = null
     for (let pages = 0; pages < OPENED_PAGES; pages++) {
-      const data: User<{ list: Page<{ createdAt: string; repository: RawRepo | null } | null> }> = await gh.query(
-        opened(list),
-        { login, after },
-      )
-      const page = data.user?.list
-      if (!page) break
+      type Opened = { createdAt: string; repository: RawRepo | null } | null
+      const page: Page<Opened> | undefined =
+        (await ask<User<{ list: Page<Opened> | null }>>(opened(list), { login, after })).user?.list ?? undefined
+      if (!page) throw new GitHubError(`${login}: ${list}`, 'query')
       for (const node of page.nodes) {
         if (!node?.repository) continue
         const entry = add(node.repository, kind)
@@ -169,9 +191,9 @@ export async function contributionsOf(
       after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null
       if (!after) break
     }
-    if (after !== null) partial.add(kind)
+    if (after !== null) countsCut.push(kind)
   }
   for (const entry of found.values())
     entry.kinds.sort((a, b) => CONTRIBUTION_KINDS.indexOf(a) - CONTRIBUTION_KINDS.indexOf(b))
-  return { contributions: [...found.values()], partial: CONTRIBUTION_KINDS.filter((kind) => partial.has(kind)) }
+  return { contributions: [...found.values()], reposCut: reposCut || countsCut.length > 0, countsCut }
 }

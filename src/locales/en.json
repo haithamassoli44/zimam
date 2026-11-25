@@ -52,7 +52,8 @@
     "loading": "Gathering your contributions from GitHub…",
     "failed": "Couldn't load your contributions",
     "none": "GitHub lists no contributions this token can read",
-    "partial": "GitHub lists more than Zimam reads, so the counts marked + cover your latest 1,000 pull requests and issues, and 100 repositories of each kind of contribution.",
+    "reposCut": "Some repositories may be missing: GitHub lists only your 100 most recent of some kinds of contribution, or you opened more than Zimam reads.",
+    "countsCut": "You opened more than the latest 1,000 pull requests or issues Zimam reads, so the counts marked + or “at least” may be higher.",
     "search": "Search repositories and descriptions",
     "kindsTitle": "Contribution",
     "kinds": {
@@ -73,7 +74,9 @@
       "issues": "Issues"
     },
     "prs": "no pull requests | 1 pull request | {n} pull requests",
+    "prsAtLeast": "no pull requests | at least 1 pull request | at least {n} pull requests",
     "issues": "no issues | 1 issue | {n} issues",
+    "issuesAtLeast": "no issues | at least 1 issue | at least {n} issues",
     "lastOpened": "last opened {time}",
     "private": "Private",
     "via": "In {name}",

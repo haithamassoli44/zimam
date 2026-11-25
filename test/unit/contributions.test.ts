@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import type { GitHub } from '@/lib/github'
+import type { Answer, GitHub, QueryError } from '@/lib/github'
 import { CONTRIBUTED, type RawRepo } from '@/lib/queries'
 import { defaultContributionFilters, pickContributions } from '@/lib/repos'
 import { contributionsOf, OPENED_PAGES, type Contribution } from '@/lib/sources'
@@ -26,64 +26,88 @@ function raw(fullName: string, overrides: Partial<RawRepo> = {}): RawRepo {
   }
 }
 
-const nodes = (list: (RawRepo | null)[]) => ({ totalCount: list.length, nodes: list })
+type Opened = { createdAt: string; repository: RawRepo | null }
+type List = 'pullRequests' | 'issues'
 
-/** A GitHub that lists `recent` contributions by kind, and pages of what was opened, each page given in full. */
-function github(
-  recent: Record<string, (RawRepo | null)[]>,
-  opened: Record<'pullRequests' | 'issues', { createdAt: string; repository: RawRepo | null }[][]>,
-): GitHub & { asked: string[] } {
-  const asked: string[] = []
-  const gh = {
-    asked,
-    async query(text: string, variables: Record<string, unknown> = {}) {
-      if (text === CONTRIBUTED) {
-        asked.push('recent')
-        return {
-          user: Object.fromEntries(
-            ['commit', 'pr', 'issue', 'review'].map((kind) => [kind, nodes(recent[kind] ?? [])]),
-          ),
-        }
-      }
-      const list = text.includes('list: pullRequests') ? 'pullRequests' : 'issues'
-      const index = Number(variables.after ?? 0)
-      asked.push(`${list}:${index}`)
-      const pages = opened[list]
-      const hasNextPage = index + 1 < pages.length
-      return {
-        user: {
-          list: {
-            pageInfo: { hasNextPage, endCursor: hasNextPage ? String(index + 1) : null },
-            nodes: pages[index] ?? [],
-          },
-        },
-      }
-    },
-  }
-  return gh as unknown as GitHub & { asked: string[] }
+interface Story {
+  /** Recent contributions by kind. A kind given as null comes back null, as a list GitHub didn't give. */
+  recent?: Partial<Record<'commit' | 'pr' | 'issue' | 'review', (RawRepo | null)[] | null>>
+  /** How many GitHub says each recent kind has, when more than it gives. */
+  totals?: Partial<Record<'commit' | 'pr' | 'issue' | 'review', number>>
+  /** Pages of what was opened. A page given as null comes back without the person. */
+  opened?: Partial<Record<List, (Opened[] | null)[]>>
+  /** Errors GitHub sends with a page's data, by `list:page`. */
+  errors?: Record<string, QueryError[]>
 }
+
+const done = <T>(data: T, errors: QueryError[] = []): Answer<T> => ({ data, errors })
+
+/** A GitHub that tells `story`, and notes each request as `recent` or `list:page`. */
+function github(story: Story, wait?: (call: string) => Promise<void>): GitHub & { asked: string[] } {
+  const asked: string[] = []
+  const request = async (text: string, variables: Record<string, unknown> = {}) => {
+    if (text === CONTRIBUTED) {
+      asked.push('recent')
+      await wait?.('recent')
+      const user = Object.fromEntries(
+        (['commit', 'pr', 'issue', 'review'] as const).map((kind) => {
+          const list = story.recent?.[kind]
+          if (list === null) return [kind, null]
+          const nodes = list ?? []
+          return [kind, { totalCount: story.totals?.[kind] ?? nodes.length, nodes }]
+        }),
+      )
+      return done({ user }, story.errors?.recent)
+    }
+    const list: List = text.includes('list: pullRequests') ? 'pullRequests' : 'issues'
+    const index = Number(variables.after ?? 0)
+    const call = `${list}:${index}`
+    asked.push(call)
+    await wait?.(call)
+    const pages = story.opened?.[list] ?? [[]]
+    const nodes = pages[index]
+    if (nodes === null) return done({ user: null }, story.errors?.[call])
+    const hasNextPage = index + 1 < pages.length
+    const page = { pageInfo: { hasNextPage, endCursor: hasNextPage ? String(index + 1) : null }, nodes: nodes ?? [] }
+    return done({ user: { list: page } }, story.errors?.[call])
+  }
+  return {
+    asked,
+    request,
+    query: async (...args: Parameters<typeof request>) => (await request(...args)).data,
+  } as never
+}
+
+/** A promise to settle by hand. */
+function deferred() {
+  const settle: { resolve?: () => void } = {}
+  const promise = new Promise<void>((settled) => (settle.resolve = settled))
+  return { promise, resolve: () => settle.resolve?.() }
+}
+
+const at = (createdAt: string, repository: RawRepo | null): Opened => ({ createdAt, repository })
 
 describe('contributionsOf', () => {
   it('merges the recent contributions by kind with what was opened, by repository', async () => {
     const web = raw('acme/web')
     const api = raw('nuxt/api')
     const old = raw('old/tool')
-    const gh = github(
-      { commit: [web, null], pr: [web, api], review: [api] },
-      {
+    const gh = github({
+      recent: { commit: [web, null], pr: [web, api], review: [api] },
+      opened: {
         pullRequests: [
           [
-            { createdAt: '2026-03-01T00:00:00Z', repository: api },
-            { createdAt: '2026-05-01T00:00:00Z', repository: api },
-            { createdAt: '2020-01-01T00:00:00Z', repository: old },
-            { createdAt: '2026-01-01T00:00:00Z', repository: null },
+            at('2026-03-01T00:00:00Z', api),
+            at('2026-05-01T00:00:00Z', api),
+            at('2020-01-01T00:00:00Z', old),
+            at('2026-01-01T00:00:00Z', null),
           ],
         ],
-        issues: [[{ createdAt: '2026-04-01T00:00:00Z', repository: web }]],
+        issues: [[at('2026-04-01T00:00:00Z', web)]],
       },
-    )
-    const { contributions, partial } = await contributionsOf(gh, 'ali')
-    expect(partial).toEqual([])
+    })
+    const { contributions, reposCut, countsCut } = await contributionsOf(gh, 'ali')
+    expect({ reposCut, countsCut }).toEqual({ reposCut: false, countsCut: [] })
     const byName = Object.fromEntries(contributions.map((found) => [found.repo.fullName, found]))
     expect(Object.keys(byName).toSorted()).toEqual(['acme/web', 'nuxt/api', 'old/tool'])
     expect(byName['acme/web']).toMatchObject({
@@ -96,26 +120,85 @@ describe('contributionsOf', () => {
     expect(byName['old/tool']).toMatchObject({ kinds: ['pr'], prs: 1 })
   })
 
-  it('stops after its pages of what was opened, and says the counts are partial', async () => {
+  it('takes an empty history as complete', async () => {
+    const gh = github({ opened: { pullRequests: [[]], issues: [[]] } })
+    expect(await contributionsOf(gh, 'ali')).toEqual({ contributions: [], reposCut: false, countsCut: [] })
+  })
+
+  it('counts exactly when the history reads every pull request, though the recent list was cut', async () => {
+    const repos = Array.from({ length: 101 }, (_, index) => raw(`acme/r${index}`))
+    const gh = github({
+      recent: { pr: repos.slice(0, 100) },
+      totals: { pr: 101 },
+      opened: {
+        pullRequests: [
+          repos.slice(0, 100).map((repo) => at('2026-01-01T00:00:00Z', repo)),
+          [at('2025-01-01T00:00:00Z', repos[100])],
+        ],
+      },
+    })
+    const { contributions, reposCut, countsCut } = await contributionsOf(gh, 'ali')
+    expect({ reposCut, countsCut }).toEqual({ reposCut: false, countsCut: [] })
+    expect(contributions).toHaveLength(101)
+    expect(contributions.reduce((sum, found) => sum + found.prs, 0)).toBe(101)
+  })
+
+  it('says repositories may be missing when recent commits or reviews were cut', async () => {
+    const gh = github({ recent: { review: [raw('acme/web')] }, totals: { review: 120 } })
+    expect(await contributionsOf(gh, 'ali')).toMatchObject({ reposCut: true, countsCut: [] })
+  })
+
+  it('stops after its pages of what was opened, and says those counts are at least what was read', async () => {
     const web = raw('acme/web')
-    const page = [{ createdAt: '2026-01-01T00:00:00Z', repository: web }]
-    const gh = github({}, { pullRequests: Array.from({ length: OPENED_PAGES + 2 }, () => page), issues: [[]] })
-    const { contributions, partial } = await contributionsOf(gh, 'ali')
-    expect(partial).toEqual(['pr'])
+    const page = [at('2026-01-01T00:00:00Z', web)]
+    const gh = github({ opened: { pullRequests: Array.from({ length: OPENED_PAGES + 2 }, () => page) } })
+    const { contributions, reposCut, countsCut } = await contributionsOf(gh, 'ali')
+    expect({ reposCut, countsCut }).toEqual({ reposCut: true, countsCut: ['pr'] })
     expect(contributions[0].prs).toBe(OPENED_PAGES)
     expect(gh.asked.filter((call) => call.startsWith('pullRequests'))).toHaveLength(OPENED_PAGES)
   })
 
-  it('says which kinds GitHub listed more of than it read', async () => {
-    const recent = { commit: [raw('acme/web')] }
-    const gh = github(recent, { pullRequests: [[]], issues: [[]] })
-    const query = gh.query.bind(gh)
-    gh.query = (async (text: string, variables?: Record<string, unknown>) => {
-      const data = (await query(text, variables)) as { user: Record<string, { totalCount: number }> }
-      if (text === CONTRIBUTED) data.user.commit.totalCount = 120
-      return data
-    }) as GitHub['query']
-    expect((await contributionsOf(gh, 'ali')).partial).toEqual(['commit'])
+  it.each([
+    ['the first page of the history', { opened: { pullRequests: [null] } }],
+    [
+      'a page after one that was read',
+      { opened: { pullRequests: [[at('2026-01-01T00:00:00Z', raw('acme/web'))], null] } },
+    ],
+    ['a recent kind', { recent: { commit: null } }],
+    [
+      'a page GitHub sends with an error about the list',
+      { errors: { 'issues:0': [{ type: 'INTERNAL', message: 'Something went wrong', path: ['user', 'list'] }] } },
+    ],
+  ] satisfies [string, Story][])('fails, to try again, when GitHub doesn’t give %s', async (_, story) => {
+    await expect(contributionsOf(github(story), 'ali')).rejects.toMatchObject({ kind: 'query' })
+  })
+
+  it('leaves out a repository it can’t read, with or without an error about it', async () => {
+    const web = raw('acme/web')
+    const gh = github({
+      recent: { commit: [null, web] },
+      opened: { issues: [[at('2026-01-01T00:00:00Z', null), at('2026-02-01T00:00:00Z', web)]] },
+      errors: {
+        'issues:0': [{ type: 'FORBIDDEN', message: 'No access', path: ['user', 'list', 'nodes', 0, 'repository'] }],
+      },
+    })
+    const { contributions } = await contributionsOf(gh, 'ali')
+    expect(contributions.map((found) => [found.repo.fullName, found.issues])).toEqual([['acme/web', 1]])
+  })
+
+  it('asks for no more pages once stopped, and gives nothing', async () => {
+    const page = [at('2026-01-01T00:00:00Z', raw('acme/web'))]
+    const { promise: pending, resolve: release } = deferred()
+    const gh = github({ opened: { pullRequests: [page, page, page] } }, (call) =>
+      call === 'pullRequests:0' ? pending : Promise.resolve(),
+    )
+    const controller = new AbortController()
+    const discovery = contributionsOf(gh, 'ali', controller.signal)
+    await vi.waitFor(() => expect(gh.asked).toContain('pullRequests:0'))
+    controller.abort()
+    release()
+    await expect(discovery).rejects.toThrow()
+    expect(gh.asked).toEqual(['recent', 'pullRequests:0'])
   })
 })
 
@@ -180,5 +263,16 @@ describe('pickContributions', () => {
     expect(Object.fromEntries([...owners].map(([owner, { count }]) => [owner, count]))).toEqual({ acme: 1, nuxt: 1 })
     expect(statuses).toEqual({ active: 1, archived: 0 })
     expect(pick({ owners: ['old'] }).statuses).toEqual({ active: 0, archived: 1 })
+  })
+
+  it('keeps a picked account in the menu with nothing matching, to unpick it with the search kept', () => {
+    const filters = { ...defaultContributionFilters(), q: 'nuxt', owners: ['acme'], kinds: ['pr' as const] }
+    const { shown, owners } = pickContributions(list, filters)
+    expect(shown).toEqual([])
+    expect(owners.get('acme')).toEqual({ count: 0, avatar: '' })
+    expect(owners.get('nuxt')?.count).toBe(1)
+    filters.owners = filters.owners.filter((owner) => owner !== 'acme')
+    expect(names(pickContributions(list, filters).shown)).toEqual(['nuxt/nuxt'])
+    expect(filters.q).toBe('nuxt')
   })
 })

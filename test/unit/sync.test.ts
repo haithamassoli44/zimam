@@ -93,6 +93,11 @@ function fakeGitHub() {
     serverErrors: 0,
     rateLimited: false,
     calls: [] as string[],
+    // Every search for changes as asked, and how many results each page of one holds.
+    searches: [] as { q: string; after: unknown }[],
+    searchPage: Infinity,
+    // Searches whose terms hold this fail, as GitHub failing.
+    failSearch: '',
     pageSize: Infinity,
     onQuery: () => {},
   }
@@ -153,8 +158,14 @@ function fakeGitHub() {
       return done({ organization: { repositories: page([repo, ...more]) } })
     }
     if (call === 'search') {
+      state.searches.push({ q, after: variables.after ?? null })
+      if (state.failSearch && q.includes(state.failSearch)) throw new GitHubError('GitHub answered 502', 'server')
       const found = state.searchResults.filter((node) => q.includes(node.kind === 'PullRequest' ? 'is:pr' : 'is:issue'))
-      return done({ search: { issueCount: found.length, ...page(found) } })
+      const from = Number(variables.after ?? 0)
+      const to = Math.min(found.length, from + state.searchPage)
+      const more = to < found.length
+      const pageInfo = { hasNextPage: more, endCursor: more ? String(to) : null }
+      return done({ search: { issueCount: found.length, pageInfo, nodes: found.slice(from, to) } })
     }
     if (call === 'requested')
       return done({ viewer: { login: 'ali' }, search: page(state.requested.map((id) => ({ id }))) })
@@ -619,6 +630,76 @@ const picking = (...only: string[]): Workspace => ({ ...ws, sources: [{ kind: 'o
 const change = (id: string, repo: string) => ({
   ...raw(id, 'OPEN', new Date().toISOString()),
   repository: { id: repo },
+})
+
+// The search terms after the sources' qualifiers, and the window they look back to.
+const terms = (q: string) => q.split(' ').filter((term) => !term.includes(':') || /^(is|updated):/.test(term))
+const since = (q: string) => /updated:>=(\S+)/.exec(q)?.[1]
+
+describe('Syncer searching for changes', () => {
+  it('searches the issues and the pull requests apart, over the same window, once each', async () => {
+    const { state, syncer } = await setup()
+    await syncer.sync()
+    state.searches = []
+    await syncer.sync()
+    expect(state.searches.map(({ q, after }) => [terms(q)[0], after])).toEqual([
+      ['is:issue', null],
+      ['is:pr', null],
+    ])
+    const [issues, prs] = state.searches
+    expect(since(issues.q)).toBeDefined()
+    expect(since(prs.q)).toBe(since(issues.q))
+  })
+
+  it('pages through each search with its own cursor', async () => {
+    const { store, state, syncer } = await setup()
+    await syncer.sync()
+    const now = new Date().toISOString()
+    state.searchResults = [
+      raw('I1', 'CLOSED', now),
+      raw('I3', 'OPEN', now),
+      raw('P2', 'MERGED', now, true),
+      raw('P4', 'CLOSED', now, true),
+    ]
+    state.searchPage = 1
+    state.searches = []
+    await syncer.sync()
+    expect(state.searches.map(({ q, after }) => [terms(q)[0], after])).toEqual([
+      ['is:issue', null],
+      ['is:issue', '1'],
+      ['is:pr', null],
+      ['is:pr', '1'],
+    ])
+    expect(['I1', 'I3', 'P2', 'P4'].map((id) => store.items.get(id)?.state)).toEqual([
+      'closed',
+      'open',
+      'merged',
+      'closed',
+    ])
+  })
+
+  it('looks back as far again after the pull requests’ search fails, taking nothing from that scan', async () => {
+    const { store, state, status, syncer } = await setup()
+    await syncer.sync()
+    const start = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => start + 2 * 60_000)
+    state.searchResults = [raw('I1', 'CLOSED', new Date(start + 60_000).toISOString())]
+    state.failSearch = 'is:pr'
+    state.searches = []
+    await syncer.sync()
+    expect(status.error).toBe('server')
+    expect(state.searches.map(({ q }) => terms(q)[0])).toEqual(['is:issue', 'is:pr'])
+    // Nothing of a scan that didn't finish is taken.
+    expect(store.items.get('I1')?.state).toBe('open')
+    const failedSince = since(state.searches[0].q)
+
+    vi.spyOn(Date, 'now').mockImplementation(() => start + 4 * 60_000)
+    state.failSearch = ''
+    state.searches = []
+    await syncer.sync()
+    expect(state.searches.map(({ q }) => since(q))).toEqual([failedSince, failedSince])
+    expect(store.items.get('I1')?.state).toBe('closed')
+  })
 })
 
 describe('Syncer with only some repositories picked', () => {

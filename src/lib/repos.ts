@@ -266,6 +266,12 @@ export function pickContributions(entries: Contribution[], filters: Contribution
       owners.set(entry.repo.owner, tally)
     }
   }
+  // A picked account stays in the menu, to unpick, though nothing it has matches now.
+  for (const owner of filters.owners) {
+    if (owners.has(owner)) continue
+    const avatar = entries.find((entry) => entry.repo.owner === owner)?.repo.ownerAvatar ?? ''
+    owners.set(owner, { count: 0, avatar })
+  }
   const shown = searched
     .filter((entry) => ofStatus(entry) && ofKind(entry) && ofOwner(entry))
     .toSorted(CONTRIBUTION_ORDER[filters.sort])
