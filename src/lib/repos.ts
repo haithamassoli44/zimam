@@ -12,6 +12,7 @@ import {
   type RepoStatus,
 } from './filters'
 import { KINDS, LIST_KINDS } from './queries'
+import { CONTRIBUTION_KINDS, type Contribution, type ContributionKind } from './sources'
 import type { Left } from './sync'
 import { normalize } from './text'
 
@@ -197,4 +198,69 @@ export function arrange(pinned: string[], shown: string[]): string[] {
 /** Picks or unpicks a status. Picking one drops the other. */
 export function toggleStatus(filters: Pick<RepoFilters, 'status'>, status: RepoStatus) {
   filters.status = pickChoice(filters.status, status, REPO_STATUSES)
+}
+
+export const CONTRIBUTION_SORTS = ['recent', 'most', 'name'] as const
+export type ContributionSort = (typeof CONTRIBUTION_SORTS)[number]
+
+export interface ContributionFilters {
+  q: string
+  /** None picked means both. */
+  status: RepoStatus[]
+  /** Any of them. None picked means any contribution. */
+  kinds: ContributionKind[]
+  /** None picked means any owner. */
+  owners: string[]
+  sort: ContributionSort
+}
+
+export function defaultContributionFilters(): ContributionFilters {
+  return { q: '', status: defaultRepoFilters().status, kinds: [], owners: [], sort: 'recent' }
+}
+
+const contributionText = new WeakMap<Repo, string>()
+
+// The picker shows a repository's full name and description, so its search reads both.
+function pickerText(repo: Repo): string {
+  let text = contributionText.get(repo)
+  if (text === undefined) {
+    text = normalize(`${repo.fullName} ${repo.description ?? ''}`)
+    contributionText.set(repo, text)
+  }
+  return text
+}
+
+const opened = (entry: Contribution) => entry.prs + entry.issues
+const byFullName = (a: Contribution, b: Contribution) => a.repo.fullName.localeCompare(b.repo.fullName)
+
+// Commits and reviews alone carry no date, so they come after what has one, the latest pushed first.
+const CONTRIBUTION_ORDER: Record<ContributionSort, (a: Contribution, b: Contribution) => number> = {
+  recent: (a, b) =>
+    (b.lastAt ?? '').localeCompare(a.lastAt ?? '') ||
+    (b.repo.pushedAt ?? '').localeCompare(a.repo.pushedAt ?? '') ||
+    byFullName(a, b),
+  most: (a, b) => opened(b) - opened(a) || b.kinds.length - a.kinds.length || byFullName(a, b),
+  name: byFullName,
+}
+
+/**
+ * The contributions the filters keep, in their order, with how many each status, kind and owner would keep. Each facet
+ * counts with the others applied, as the list's do.
+ */
+export function pickContributions(entries: Contribution[], filters: ContributionFilters) {
+  const { kept, counts: statuses } = findRepos(entries, (entry) => entry.repo, filters, pickerText)
+  const ofKind = (entry: Contribution) =>
+    !filters.kinds.length || entry.kinds.some((kind) => filters.kinds.includes(kind))
+  const ofOwner = (entry: Contribution) => !filters.owners.length || filters.owners.includes(entry.repo.owner)
+  const kinds = Object.fromEntries(CONTRIBUTION_KINDS.map((kind) => [kind, 0])) as Record<ContributionKind, number>
+  const owners = new Map<string, { count: number; avatar: string }>()
+  for (const entry of kept) {
+    if (ofOwner(entry)) for (const kind of entry.kinds) kinds[kind]++
+    if (!ofKind(entry)) continue
+    const owner = owners.get(entry.repo.owner) ?? { count: 0, avatar: entry.repo.ownerAvatar }
+    owner.count++
+    owners.set(entry.repo.owner, owner)
+  }
+  const shown = kept.filter((entry) => ofKind(entry) && ofOwner(entry)).toSorted(CONTRIBUTION_ORDER[filters.sort])
+  return { shown, statuses, kinds, owners }
 }

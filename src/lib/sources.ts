@@ -1,7 +1,18 @@
 import type { Repo, Source } from '@/types'
 
 import { GitHubError, type GitHub } from './github'
-import { ONE_REPO, ORG_REPOS, OWNER, toRepo, USER_REPOS, VIEWER, type Page, type RawRepo } from './queries'
+import {
+  CONTRIBUTED,
+  ONE_REPO,
+  opened,
+  ORG_REPOS,
+  OWNER,
+  toRepo,
+  USER_REPOS,
+  VIEWER,
+  type Page,
+  type RawRepo,
+} from './queries'
 
 interface Owner {
   login: string
@@ -92,4 +103,69 @@ export async function reposOf(gh: GitHub, source: Source): Promise<Repo[]> {
     after = owner.repositories.pageInfo.hasNextPage ? owner.repositories.pageInfo.endCursor : null
   } while (after)
   return repos
+}
+
+export const CONTRIBUTION_KINDS = ['commit', 'pr', 'issue', 'review'] as const
+export type ContributionKind = (typeof CONTRIBUTION_KINDS)[number]
+
+/** A repository someone contributed to: how, how many pull requests and issues they opened in it, and when last. */
+export interface Contribution {
+  repo: Repo
+  kinds: ContributionKind[]
+  prs: number
+  issues: number
+  /** When they last opened a pull request or issue in it. Unknown for commits and reviews alone. */
+  lastAt: string | null
+}
+
+/** How many pages of 100 of what someone opened are read, the latest first. Past them, the counts are partial. */
+export const OPENED_PAGES = 10
+
+/**
+ * The repositories someone contributed to, that the token can read. GitHub lists the recent ones by kind of
+ * contribution, and what they opened finds the older ones. `partial` when they opened more than was read.
+ */
+export async function contributionsOf(
+  gh: GitHub,
+  login: string,
+): Promise<{ contributions: Contribution[]; partial: boolean }> {
+  const found = new Map<string, Contribution>()
+  const add = (raw: RawRepo, kind: ContributionKind) => {
+    let entry = found.get(raw.id)
+    if (!entry) found.set(raw.id, (entry = { repo: toRepo(raw), kinds: [], prs: 0, issues: 0, lastAt: null }))
+    if (!entry.kinds.includes(kind)) entry.kinds.push(kind)
+    return entry
+  }
+  type User<T> = { user: T | null }
+  const recent = await gh.query<User<Record<ContributionKind, { nodes: (RawRepo | null)[] }>>>(CONTRIBUTED, { login })
+  if (!recent.user) throw new GitHubError(login, 'query')
+  for (const kind of CONTRIBUTION_KINDS) for (const raw of recent.user[kind].nodes) if (raw) add(raw, kind)
+  let partial = false
+  for (const [kind, list] of [
+    ['pr', 'pullRequests'],
+    ['issue', 'issues'],
+  ] as const) {
+    let after: string | null = null
+    for (let pages = 0; pages < OPENED_PAGES; pages++) {
+      const data: User<{ list: Page<{ createdAt: string; repository: RawRepo | null } | null> }> = await gh.query(
+        opened(list),
+        { login, after },
+      )
+      const page = data.user?.list
+      if (!page) break
+      for (const node of page.nodes) {
+        if (!node?.repository) continue
+        const entry = add(node.repository, kind)
+        if (kind === 'pr') entry.prs++
+        else entry.issues++
+        if (!entry.lastAt || node.createdAt > entry.lastAt) entry.lastAt = node.createdAt
+      }
+      after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null
+      if (!after) break
+    }
+    partial ||= after !== null
+  }
+  for (const entry of found.values())
+    entry.kinds.sort((a, b) => CONTRIBUTION_KINDS.indexOf(a) - CONTRIBUTION_KINDS.indexOf(b))
+  return { contributions: [...found.values()], partial }
 }

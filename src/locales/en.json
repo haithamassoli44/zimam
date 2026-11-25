@@ -45,6 +45,42 @@
     "code": "Zimam on GitHub",
     "openSource": "Open source on GitHub"
   },
+  "contrib": {
+    "title": "My contributions",
+    "help": "Find the repositories you committed to, opened pull requests or issues in, or reviewed, and add the ones you want",
+    "open": "Find my contributions",
+    "loading": "Gathering your contributions from GitHub…",
+    "failed": "Couldn't load your contributions",
+    "none": "GitHub lists no contributions this token can read",
+    "partial": "You opened more than Zimam reads, so the counts cover your latest 1,000 pull requests and 1,000 issues.",
+    "search": "Search repositories and descriptions",
+    "kindsTitle": "Contribution",
+    "kinds": {
+      "commit": "Commits",
+      "pr": "Pull requests",
+      "issue": "Issues",
+      "review": "Reviews"
+    },
+    "sorts": {
+      "recent": "Last opened",
+      "most": "Most opened",
+      "name": "Name"
+    },
+    "stats": {
+      "repos": "Repositories",
+      "owners": "Accounts",
+      "prs": "Pull requests",
+      "issues": "Issues"
+    },
+    "prs": "no pull requests | 1 pull request | {n} pull requests",
+    "issues": "no issues | 1 issue | {n} issues",
+    "lastOpened": "last opened {time}",
+    "private": "Private",
+    "via": "In {name}",
+    "pickedCount": "None added | 1 repository added | {n} repositories added",
+    "hidden": "none hidden | 1 hidden by the filters | {n} hidden by the filters",
+    "pickShown": "Add all shown | Add the one shown | Add all {n} shown"
+  },
   "nav": {
     "views": "Views",
     "newWorkspace": "New workspace",

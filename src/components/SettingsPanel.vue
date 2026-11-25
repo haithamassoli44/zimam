@@ -178,6 +178,15 @@ async function upload(event: Event) {
               :label="t('settings.editSources')"
               @click="openSetup('edit')"
             />
+            <UButton
+              color="neutral"
+              variant="outline"
+              block
+              icon="i-octicon-git-pull-request-16"
+              :label="t('contrib.open')"
+              :ui="{ leadingIcon: 'text-muted' }"
+              @click="openSetup('edit', true)"
+            />
             <div>
               <UButton color="neutral" variant="outline" block :label="t('settings.reload')" @click="reload" />
               <p class="mt-1 text-xs text-muted">{{ t('settings.reloadHelp') }}</p>

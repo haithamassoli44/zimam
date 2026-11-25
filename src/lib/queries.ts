@@ -80,6 +80,35 @@ export const ONE_REPO = `
   query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ...RepoFields } }
   ${REPO}`
 
+// Recent contributions, by kind: GitHub keeps no full history here, so the search of what the person opened adds the
+// rest. Repositories the token can't read come back null.
+const contributed = (kind: string, type: string) =>
+  `${kind}: repositoriesContributedTo(first: 100, includeUserRepositories: true, contributionTypes: [${type}]) {
+    nodes { ...RepoFields }
+  }`
+
+export const CONTRIBUTED = `
+  query($login: String!) {
+    user(login: $login) {
+      ${contributed('commit', 'COMMIT')}
+      ${contributed('pr', 'PULL_REQUEST')}
+      ${contributed('issue', 'ISSUE')}
+      ${contributed('review', 'PULL_REQUEST_REVIEW')}
+    }
+  }
+  ${REPO}`
+
+/** A page of the pull requests or issues someone opened, the latest first, with where. */
+export const opened = (list: 'pullRequests' | 'issues') => `
+  query($login: String!, $after: String) {
+    user(login: $login) {
+      list: ${list}(first: 100, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
+        ${PAGE} nodes { createdAt repository { ...RepoFields } }
+      }
+    }
+  }
+  ${REPO}`
+
 /**
  * Issues and pull requests, by what each part calls them: the items, a repository's counts of the open and of all of
  * them, the states a closed one can be in, the cache's history of them, and how GitHub's list of them is read. An open
