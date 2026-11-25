@@ -25,7 +25,7 @@ import { refKey, type IssueRef } from '@/lib/refs'
 import { BASE, changeKey, onAllChanges, readFile, tickFile, type FileTicks, type Reading } from '@/lib/ticks'
 import type { FileMode } from '@/types'
 
-import { client } from './data'
+import { client, items } from './data'
 import { activeWorkspace, postShown, settings } from './settings'
 import { sharedRecord } from './shared'
 import { openPull, pullScope } from './view'
@@ -95,6 +95,11 @@ interface Session {
   marked: Set<string>
   showGenerated: boolean
   diffs: Map<string, FileDiff>
+  /** Whether it's being read again, and whether to read it again once that's done. */
+  refreshing: boolean
+  refreshAgain: boolean
+  /** How many times its checks were asked for: only the last answer counts. */
+  runsAsked: number
 }
 
 const ALL = 'all'
@@ -119,6 +124,9 @@ function newSession(ref: IssueRef, gh: GitHub): Session {
     marked: shallowReactive(new Set()),
     showGenerated: false,
     diffs: new Map(),
+    refreshing: false,
+    refreshAgain: false,
+    runsAsked: 0,
   })
 }
 
@@ -146,6 +154,22 @@ async function open(ref: IssueRef, gh: GitHub) {
   const before = seenAll[key]
   if (!sessionVisits.has(key)) sessionVisits.set(key, before ? { at: before.at, head: before.head } : null)
   s.lastVisit = sessionVisits.get(key) ?? null
+  recordVisit(s, pull)
+  s.pull = pull
+  readRuns(s, pull)
+  // What the address shows first, then the whole pull request, which the marks since the last visit count in, then
+  // what the commits list needs for its ticks, where the reader ticks commits.
+  if (scope.value) void changesOf(s, pull, scope.value)
+  const onCommits = ticksCommits(s)
+  void readWhole(s, pull).then(() => {
+    if (onCommits) void readCommits(s, pull)
+  })
+}
+
+// The visit this is, which the next one counts from: now, at this head.
+function recordVisit(s: Session, pull: Pull) {
+  const key = refKey(s.ref)
+  const before = seenAll[key]
   seenAll[key] = {
     ...before,
     ticked: before?.ticked ?? {},
@@ -153,23 +177,83 @@ async function open(ref: IssueRef, gh: GitHub) {
     at: Date.now(),
     head: pull.headOid,
   }
-  s.pull = pull
-  if (pull.checks)
-    readCheckRuns(gh, pull).then(
-      (found) => (s.runs = found),
-      () => (s.runs = 'failed'),
-    )
-  // What the address shows first, then the whole pull request, which the marks since the last visit count in, then
-  // what the commits list needs for its ticks, where the reader ticks commits.
-  if (scope.value) void changesOf(s, pull, scope.value)
-  const onCommits = !Object.values(seenAll[key].ticked).flat().every(onAllChanges)
-  void readWhole(s, pull).then(() => {
-    if (onCommits) void readCommits(s, pull)
-  })
 }
+
+// The checks of the head read last: an answer about an earlier one, still on its way, is let go.
+function readRuns(s: Session, pull: Pull) {
+  const asked = ++s.runsAsked
+  if (!pull.checks) {
+    s.runs = null
+    return
+  }
+  readCheckRuns(s.gh, pull).then(
+    (found) => {
+      if (asked === s.runsAsked) s.runs = found
+    },
+    () => {
+      if (asked === s.runsAsked) s.runs = 'failed'
+    },
+  )
+}
+
+// Whether the reader ticked files in a run of commits, which the commits list's ticks need read.
+const ticksCommits = (s: Session) =>
+  !Object.values(seenAll[refKey(s.ref)]?.ticked ?? {})
+    .flat()
+    .every(onAllChanges)
 
 export function reloadPull() {
   if (openPull.value && client.value) void open(openPull.value, client.value)
+}
+
+/**
+ * Reads the open pull request again, as GitHub has it now, without starting over: what's on screen stays until the new
+ * answer is in. When its head or base moved, what it changed is read again before the page takes the new answer, so
+ * the diff never shows one head's files at another's. Asked again while it reads, it reads once more after.
+ */
+export async function refreshPull() {
+  const s = session.value
+  if (!s || s.pull === null) return
+  if (s.pull === 'failed') return reloadPull()
+  if (s.refreshing) {
+    s.refreshAgain = true
+    return
+  }
+  s.refreshing = true
+  try {
+    do {
+      s.refreshAgain = false
+      const before: Pull = s.pull
+      const moved: { read?: Promise<{ changes: Changes; attributes: string | null } | null> } = {}
+      const next = await readPull(s.gh, s.ref, (heads) => {
+        if (heads.headOid !== before.headOid || heads.baseOid !== before.baseOid)
+          moved.read = readChanges(s.gh, heads).catch(() => null)
+      })
+      const found = moved.read && (await moved.read)
+      if (session.value !== s) return
+      if (moved.read) {
+        s.reads.delete(ALL)
+        if (found) {
+          s.reads.set(ALL, Promise.resolve(found.changes))
+          s.changes.set(ALL, found.changes)
+          s.attributes = found.attributes
+        } else s.changes.set(ALL, 'failed')
+      }
+      // A tab out of sight reads it again for when it's back, which isn't a visit.
+      if (inSight()) recordVisit(s, next)
+      s.pull = next
+      readRuns(s, next)
+      // New commits need their changes read for the commits list's ticks too.
+      if (moved.read && ticksCommits(s)) {
+        s.commitsRead = false
+        void readCommits(s, next)
+      }
+    } while (s.refreshAgain && session.value === s)
+  } catch {
+    // What's on screen stays as it was: the next refresh tries again.
+  } finally {
+    s.refreshing = false
+  }
 }
 
 /** What a run of commits changed, or the whole pull request (null): null when it can't be read. */
@@ -178,20 +262,25 @@ function changesOf(s: Session, pull: PullHeads, run: Scope | null): Promise<Chan
   let read = s.reads.get(key)
   if (!read) {
     s.changes.set(key, null)
-    const asked = run
-      ? readRange(s.gh, pull.ref.repo, run.base, run.head)
-      : readChanges(s.gh, pull).then((answer) => {
-          s.attributes = answer.attributes
-          return answer.changes
-        })
-    read = asked.then(
-      (found) => (s.changes.set(key, found), found),
+    const asked: Promise<{ changes: Changes; attributes?: string | null }> = run
+      ? readRange(s.gh, pull.ref.repo, run.base, run.head).then((changes) => ({ changes }))
+      : readChanges(s.gh, pull)
+    // A read whose place a newer one took, as a refresh after a push does, leaves the page alone and gives nothing.
+    const current: Promise<Changes | null> = asked.then(
+      ({ changes, attributes }) => {
+        if (s.reads.get(key) !== current) return null
+        if (attributes !== undefined) s.attributes = attributes
+        s.changes.set(key, changes)
+        return changes
+      },
       () => {
+        if (s.reads.get(key) !== current) return null
         s.reads.delete(key)
         s.changes.set(key, 'failed')
         return null
       },
     )
+    read = current
     s.reads.set(key, read)
   }
   return read
@@ -727,6 +816,38 @@ export function showThreadsFile(thread: ReviewThread) {
   if (scope.value && !threadsByPath.value.get(thread.path)?.includes(thread)) showAllChanges()
   showGenerated.value ||= allFiles.value.some((file) => file.path === thread.path && file.generated)
 }
+
+const inSight = () => globalThis.document?.visibilityState !== 'hidden'
+// Whether the open pull request fell behind while its tab was out of sight: it's read again once the tab is back.
+let behindUnseen = false
+globalThis.document?.addEventListener('visibilitychange', () => {
+  if (!inSight() || !behindUnseen) return
+  behindUnseen = false
+  void refreshPull()
+})
+
+// The list's copy of the open pull request is read again by every sync. When it says the page is behind, as after a new
+// comment, a push, or checks that finished, the pull request is read again, or once its tab is back in sight.
+watch(
+  () => {
+    const shown = pull.value
+    const item = shown && items.value.get(shown.id)
+    return item ? [shown.id, `${item.updatedAt} ${item.checks} ${item.merge}`] : null
+  },
+  (now, before) => {
+    const shown = pull.value
+    const item = shown && items.value.get(shown.id)
+    if (!now || !before || now[0] !== before[0] || now[1] === before[1] || !shown || !item) return
+    const isOpen = item.state === 'open'
+    const behind =
+      item.updatedAt > shown.updatedAt ||
+      (isOpen && item.checks !== shown.checks) ||
+      (isOpen && item.merge !== null && item.merge !== shown.merge)
+    if (!behind) return
+    if (inSight()) void refreshPull()
+    else behindUnseen = true
+  },
+)
 
 // Opens the pull request the address names, once a workspace can read it.
 watch(
