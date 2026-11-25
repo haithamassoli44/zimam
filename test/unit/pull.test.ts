@@ -117,13 +117,16 @@ function changing(total: number, listed = Math.min(total, 3000)) {
 }
 
 describe('reading what a pull request changed', () => {
-  it('says GitHub left files out only when it did', async () => {
+  it('says GitHub may have left files out whenever its list is as long as it gives', async () => {
     expect((await changing(250)).changes.capped).toBe(false)
-    expect((await changing(3000)).changes).toMatchObject({ capped: false })
+    expect((await changing(2999)).changes.capped).toBe(false)
     const many = await changing(3412)
     expect(many.changes.files).toHaveLength(3000)
     expect(many.changes.capped).toBe(true)
-    // A push between GitHub's count and its list took files out: the list is short, but not cut.
+    // A push between GitHub's count and its list added files past what it lists: the count can't tell.
+    expect((await changing(3000)).changes.capped).toBe(true)
+    expect((await changing(2990, 3000)).changes.capped).toBe(true)
+    // A push between them took files out: the list is short, but not cut.
     expect((await changing(400, 350)).changes.capped).toBe(false)
   })
 })

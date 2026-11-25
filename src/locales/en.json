@@ -515,6 +515,7 @@
     "end": "That's every file.",
     "noEnd": "No newline at end of file",
     "capped": "GitHub lists only the first 3,000 files of a pull request, and this one changes {n}.",
+    "cappedMaybe": "GitHub lists only the first 3,000 files of a pull request, and this one may change more.",
     "cappedEnd": "GitHub lists no more of the files.",
     "cut": "This conversation is too long to read here in full: its latest posts and review threads are on GitHub.",
     "previousFile": "Previous file",

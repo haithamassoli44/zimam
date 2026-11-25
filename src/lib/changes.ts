@@ -89,9 +89,9 @@ export async function readChanges(
       files.push(...batch.map(toFile))
       if (batch.length < PAGE) break
     }
-    // Cut only where the list stopped at its most: the count comes from an earlier answer, and a push since can change it.
-    const cut = files.length >= PAGE * PAGES && files.length < pull.changedFiles
-    changes = { mergeBase: compared.mergeBase, files, capped: cut }
+    // A list as long as GitHub gives may have been cut, whatever the count said: it comes from an earlier answer, and a
+    // push since can add files the list leaves out.
+    changes = { mergeBase: compared.mergeBase, files, capped: files.length >= PAGE * PAGES }
   }
   const [{ content }] = await attributes
   return { changes, attributes: 'text' in content ? content.text : null }

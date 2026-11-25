@@ -38,12 +38,21 @@ import {
   setViewed,
   stepCommits,
   toggleViewed,
+  totals,
   viewedState,
 } from '@/stores/pull'
 import { settings } from '@/stores/settings'
 import { openKeys, phone } from '@/stores/ui'
 
 const { t } = useI18n()
+
+// GitHub's count of the files says how many there are, unless it's no more than the list: a push since made more.
+const cappedNote = computed(() => {
+  const count = pull.value?.changedFiles ?? 0
+  return count > totals.value.files + totals.value.left
+    ? t('pull.capped', { n: formatNumber(count) })
+    : t('pull.cappedMaybe')
+})
 const scroller = useTemplateRef<HTMLElement>('scroller')
 // Lent as soon as it's there, before each file's own mount looks for it.
 watch(scroller, (box) => (diffScroller.value = box), { flush: 'sync' })
@@ -299,7 +308,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
       <ScopeCard v-if="scope" />
       <SinceVisit v-else @first="firstNew" />
       <p v-if="!scope && filesCapped && pull" class="border-b border-default px-4 py-2 text-[12px] text-muted sm:px-6">
-        {{ t('pull.capped', { n: formatNumber(pull.changedFiles) }) }}
+        {{ cappedNote }}
       </p>
       <div v-if="filesState === 'failed'" class="px-6 py-16 text-center text-toned">{{ t('pull.changesFailed') }}</div>
       <div v-else-if="filesState === 'loading'" class="space-y-3 px-6 py-8" aria-busy="true">
