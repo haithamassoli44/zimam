@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import IssueText from '@/components/IssueText.vue'
+import PersonLink from '@/components/PersonLink.vue'
 import type { Post } from '@/lib/issue'
 import { fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
@@ -36,9 +37,11 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
       role="img"
     />
     <div v-if="folded" class="flex min-h-8 items-center gap-2 text-[13px] text-muted">
-      <UAvatar v-if="post.author" :src="post.author.avatarUrl" alt="" size="3xs" />
-      <span class="min-w-0 flex-1 truncate">
-        <bdi class="text-toned">{{ post.author?.login ?? t('issue.ghost') }}</bdi>
+      <PersonLink :who="post.author" class="inline-flex shrink-0 items-center gap-2 text-toned">
+        <UAvatar v-if="post.author" :src="post.author.avatarUrl" alt="" size="3xs" />
+        <bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi>
+      </PersonLink>
+      <span class="-ms-1 min-w-0 flex-1 truncate">
         <template v-if="post.hidden"> · {{ t(`issue.hidden.${post.hidden}`) }}</template>
         <template v-else> · {{ action ?? t('pull.commented') }} {{ ago }}</template>
       </span>
@@ -46,8 +49,10 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
     </div>
     <template v-else>
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted">
-        <UAvatar v-if="post.author" :src="post.author.avatarUrl" alt="" :size="small ? '3xs' : '2xs'" />
-        <bdi class="font-medium text-highlighted">{{ post.author?.login ?? t('issue.ghost') }}</bdi>
+        <PersonLink :who="post.author" class="inline-flex items-center gap-2 font-medium text-highlighted">
+          <UAvatar v-if="post.author" :src="post.author.avatarUrl" alt="" :size="small ? '3xs' : '2xs'" />
+          <bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi>
+        </PersonLink>
         <span v-if="post.author?.bot" :class="BADGE">{{ t('issue.bot') }}</span>
         <span v-else-if="post.role && !small" :class="BADGE">{{ t(`issue.roles.${post.role}`) }}</span>
         <span v-if="action">{{ action }}</span>

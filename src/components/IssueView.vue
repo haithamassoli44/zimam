@@ -8,8 +8,10 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, useTemp
 import { useI18n } from 'vue-i18n'
 
 import IssueText from '@/components/IssueText.vue'
+import { useKeys } from '@/components/keys'
 import LabelTag from '@/components/LabelTag.vue'
 import { ISSUE_LOOKS } from '@/components/looks'
+import PersonLink from '@/components/PersonLink.vue'
 import { expiring, IssueMissing, nextPage, type Post, type Thread } from '@/lib/issue'
 import { stateOf } from '@/lib/queries'
 import { issueUrl, refKey, sameRef, type IssueRef } from '@/lib/refs'
@@ -44,6 +46,11 @@ function move(by: -1 | 1) {
   const issue = neighbor(by)
   if (issue) showIssue(issue)
 }
+// While it's open, j and k go from issue to issue, as the arrows above do.
+useKeys({
+  j: () => (openIssue.value ? move(1) : false),
+  k: () => (openIssue.value ? move(-1) : false),
+})
 
 const thread = shallowRef<Thread | null>(null)
 // Going to another issue leaves the last one in sight, dimmed, while the next is read, so a quick read goes straight
@@ -194,7 +201,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
 </script>
 
 <template>
-  <div ref="root" class="flex h-full min-h-0 flex-col bg-default">
+  <div ref="root" class="flex h-full min-h-0 flex-col bg-default" data-keys>
     <header
       class="flex shrink-0 items-center gap-1 border-b border-default"
       :class="docked ? 'h-16 ps-6 pe-3' : 'h-14 px-2'"
@@ -213,7 +220,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
         <span class="truncate" dir="ltr">{{ displayRepo(issue.repo) }}#{{ issue.number }}</span>
       </span>
       <span class="flex-1" />
-      <UTooltip :text="t('issue.previous')">
+      <UTooltip :text="t('issue.previous')" :kbds="['k']">
         <UButton
           icon="i-octicon-chevron-up-16"
           color="neutral"
@@ -223,7 +230,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           @click="move(-1)"
         />
       </UTooltip>
-      <UTooltip :text="t('issue.next')">
+      <UTooltip :text="t('issue.next')" :kbds="['j']">
         <UButton
           icon="i-octicon-chevron-down-16"
           color="neutral"
@@ -331,7 +338,9 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
             </span>
             <i18n-t keypath="issue.opened" tag="span" scope="global">
               <template #login>
-                <bdi class="font-medium text-toned">{{ thread.post.author?.login ?? t('issue.ghost') }}</bdi>
+                <PersonLink :who="thread.post.author" class="font-medium text-toned"
+                  ><bdi>{{ thread.post.author?.login ?? t('issue.ghost') }}</bdi></PersonLink
+                >
               </template>
               <template #time>
                 <UTooltip :text="fullDate(thread.post.createdAt)">
@@ -350,14 +359,15 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           </div>
           <div v-if="thread.assignees.length" class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px]">
             <span class="text-muted">{{ t('issue.assignees') }}</span>
-            <span
+            <PersonLink
               v-for="person in thread.assignees"
               :key="person.login"
+              :who="person"
               class="inline-flex items-center gap-1.5 text-toned"
             >
               <UAvatar :src="person.avatarUrl" alt="" size="3xs" />
               <bdi>{{ person.login }}</bdi>
-            </span>
+            </PersonLink>
           </div>
         </div>
 
@@ -370,15 +380,20 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           <div v-if="folded(post)" class="flex min-h-8 items-center gap-2 text-[13px] text-muted">
             <UIcon name="i-octicon-eye-closed-16" class="size-4 shrink-0" />
             <span class="min-w-0 flex-1">
-              <bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi> ·
+              <PersonLink :who="post.author"
+                ><bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi></PersonLink
+              >
+              ·
               {{ post.hidden ? t(`issue.hidden.${post.hidden}`) : t('issue.bot') }}
             </span>
             <UButton color="neutral" variant="ghost" size="sm" :label="t('issue.show')" @click="unhide(post)" />
           </div>
           <template v-else>
             <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted">
-              <UAvatar v-if="post.author" :src="post.author.avatarUrl" alt="" size="2xs" />
-              <bdi class="font-medium text-highlighted">{{ post.author?.login ?? t('issue.ghost') }}</bdi>
+              <PersonLink :who="post.author" class="inline-flex items-center gap-2 font-medium text-highlighted">
+                <UAvatar v-if="post.author" :src="post.author.avatarUrl" alt="" size="2xs" />
+                <bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi>
+              </PersonLink>
               <span v-if="post.author?.bot" :class="BADGE">{{ t('issue.bot') }}</span>
               <span v-else-if="post.role" :class="BADGE">{{ t(`issue.roles.${post.role}`) }}</span>
               <UTooltip :text="fullDate(post.createdAt)">

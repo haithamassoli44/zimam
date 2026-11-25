@@ -8,10 +8,11 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { CHECK_LOOKS, VERDICT_LOOKS } from '@/components/looks'
+import PersonLink from '@/components/PersonLink.vue'
 import PostBlock from '@/components/pull/PostBlock.vue'
 import ThreadCard from '@/components/pull/ThreadCard.vue'
-import type { Entry, Reviewer } from '@/lib/pull'
-import { isPost } from '@/lib/pull'
+import type { Entry } from '@/lib/pull'
+import { isPost, reviewerWho } from '@/lib/pull'
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { isFresh, markTime, pull, shownEntries } from '@/stores/pull'
@@ -47,35 +48,19 @@ const firstFresh = computed(() => {
   return shownEntries.value.find((entry) => isFresh(entry.at))?.id ?? null
 })
 
-const reviewerName = (reviewer: Reviewer | null) =>
-  !reviewer ? t('issue.ghost') : reviewer.kind === 'team' ? reviewer.name : reviewer.login
 const ago = (time: string) => relativeTime(Date.parse(time), now.value)
 
-function eventText(entry: Happening): string {
-  const who = entry.actor?.login ?? t('issue.ghost')
-  switch (entry.kind) {
-    case 'forcePushed':
-      return t('pull.events.forcePushed', { who, from: entry.before ?? '?', to: entry.after ?? '?' })
-    case 'requested':
-      return t('pull.events.requested', { who, whom: reviewerName(entry.reviewer) })
-    case 'unrequested':
-      return t('pull.events.unrequested', { who, whom: reviewerName(entry.reviewer) })
-    case 'dismissed':
-      return t('pull.events.dismissed', { who, whose: entry.whose ?? t('issue.ghost') })
-    case 'renamed':
-      return t('pull.events.renamed', { who, from: entry.from, to: entry.to })
-    case 'rebased':
-      return t('pull.events.rebased', { who, from: entry.from, to: entry.to })
-    case 'merged':
-      return t('pull.events.merged', { who, into: entry.into, commit: entry.commit ?? '' })
-    case 'ready':
-    case 'draft':
-    case 'closed':
-    case 'reopened':
-    case 'autoMerge':
-      return t(`pull.events.${entry.kind}`, { who })
-  }
+/** The words an event's sentence puts beside the people in it, who are links. */
+function wordsOf(entry: Happening): { from: string; to: string; into: string; commit: string } {
+  const none = { from: '', to: '', into: '', commit: '' }
+  if (entry.kind === 'forcePushed') return { ...none, from: entry.before ?? '?', to: entry.after ?? '?' }
+  if (entry.kind === 'renamed' || entry.kind === 'rebased') return { ...none, from: entry.from, to: entry.to }
+  if (entry.kind === 'merged') return { ...none, into: entry.into, commit: entry.commit ?? '' }
+  return none
 }
+const whomOf = (entry: Happening) =>
+  entry.kind === 'requested' || entry.kind === 'unrequested' ? reviewerWho(entry.reviewer) : null
+const whoseOf = (entry: Happening) => (entry.kind === 'dismissed' && entry.whose ? { login: entry.whose } : null)
 
 const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdicts.${entry.verdict}`)
 </script>
@@ -115,7 +100,9 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
       <div v-else-if="entry.kind === 'commits'" class="border-t border-default px-4 py-3">
         <p class="flex items-center gap-2 text-[13px] text-muted">
           <UIcon name="i-octicon-git-commit-16" class="size-4" />
-          <bdi class="text-toned">{{ entry.commits[0].author.login ?? entry.commits[0].author.name }}</bdi>
+          <PersonLink :who="entry.commits[0].author" class="text-toned"
+            ><bdi>{{ entry.commits[0].author.login ?? entry.commits[0].author.name }}</bdi></PersonLink
+          >
           {{ t('pull.events.pushed', { n: formatNumber(entry.commits.length) }, entry.commits.length) }}
           <UTooltip :text="fullDate(entry.at)"
             ><span>{{ ago(entry.at) }}</span></UTooltip
@@ -150,9 +137,34 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
           class="mt-0.5 size-4 shrink-0"
           :class="entry.kind === 'merged' && 'text-merged'"
         />
-        <UAvatar v-if="'actor' in entry && entry.actor" :src="entry.actor.avatarUrl" alt="" size="3xs" class="mt-0.5" />
         <span class="min-w-0 flex-1">
-          <bdi>{{ eventText(entry) }}</bdi>
+          <i18n-t :keypath="`pull.events.${entry.kind}`" tag="bdi" scope="global">
+            <template #who>
+              <PersonLink :who="entry.actor" class="text-toned">
+                <UAvatar
+                  v-if="entry.actor"
+                  :src="entry.actor.avatarUrl"
+                  alt=""
+                  size="3xs"
+                  class="me-1.5 align-[-3px]"
+                /><bdi>{{ entry.actor?.login ?? t('issue.ghost') }}</bdi>
+              </PersonLink>
+            </template>
+            <template #whom>
+              <PersonLink :who="whomOf(entry)" class="text-toned"
+                ><bdi>{{ whomOf(entry)?.login ?? t('issue.ghost') }}</bdi></PersonLink
+              >
+            </template>
+            <template #whose>
+              <PersonLink :who="whoseOf(entry)" class="text-toned"
+                ><bdi>{{ whoseOf(entry)?.login ?? t('issue.ghost') }}</bdi></PersonLink
+              >
+            </template>
+            <template #from>{{ wordsOf(entry).from }}</template>
+            <template #to>{{ wordsOf(entry).to }}</template>
+            <template #into>{{ wordsOf(entry).into }}</template>
+            <template #commit>{{ wordsOf(entry).commit }}</template>
+          </i18n-t>
           ·
           <UTooltip :text="fullDate(entry.at)"
             ><span>{{ ago(entry.at) }}</span></UTooltip

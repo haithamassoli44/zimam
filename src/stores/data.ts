@@ -1,11 +1,12 @@
 import { computed, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 
 import { deleteCache } from '@/lib/cache'
-import { readChanges, readTexts, type Changes, type Content } from '@/lib/changes'
+import { readChanges, readRange, readTexts, type Changes, type Content } from '@/lib/changes'
 import { readCheckRuns, type CheckRuns } from '@/lib/checks'
 import type { Context } from '@/lib/filters'
 import { createGitHub, type GitHub } from '@/lib/github'
 import { readIssue, readMoreComments, type Thread } from '@/lib/issue'
+import { readProfile, type Profile } from '@/lib/people'
 import { readPull, type Pull } from '@/lib/pull'
 import type { IssueRef } from '@/lib/refs'
 import { idleStatus, syncKey, Syncer, TICK, type SyncStatus, type SyncStore } from '@/lib/sync'
@@ -156,6 +157,22 @@ export function moreComments(thread: Thread): Promise<Thread> {
   return readMoreComments(github, thread)
 }
 
+// Read once a session for each account. A read that fails is tried again the next time.
+const profiles = new Map<string, Promise<Profile | null>>()
+
+/** Someone's GitHub profile, for the card on their name. */
+export function profile(login: string): Promise<Profile | null> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  const key = login.toLowerCase()
+  let found = profiles.get(key)
+  if (!found) {
+    found = readProfile(github, login)
+    profiles.set(key, found)
+    found.catch(() => profiles.delete(key))
+  }
+  return found
+}
+
 /** PROTOTYPE: a pull request with its conversation, read with the open workspace's token. */
 export function pullRequest(pull: IssueRef): Promise<Pull> {
   if (!github) return Promise.reject(new Error('No workspace'))
@@ -166,6 +183,12 @@ export function pullRequest(pull: IssueRef): Promise<Pull> {
 export function pullChanges(repo: string, pull: Parameters<typeof readChanges>[2]): Promise<Changes> {
   if (!github) return Promise.reject(new Error('No workspace'))
   return readChanges(github, repo, pull)
+}
+
+/** PROTOTYPE: what a run of a pull request's commits changed. */
+export function pullRange(repo: string, base: string, head: string): Promise<Changes> {
+  if (!github) return Promise.reject(new Error('No workspace'))
+  return readRange(github, repo, base, head)
 }
 
 /** PROTOTYPE: files' texts at commits, by `commit:path` expressions. */

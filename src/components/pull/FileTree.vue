@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // PROTOTYPE: the changed files as a tree, with what's viewed, what's new since the last visit, and generated files left out.
+// It follows the diff: the file being read stays in sight, or the folded folder it's in.
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { roving } from '@/components/keys'
 import { FILE_LOOKS } from '@/components/looks'
+import { still } from '@/components/motion'
 import { formatNumber } from '@/locale'
 import {
   freshFile,
@@ -19,7 +22,7 @@ import {
   type PullFile,
 } from '@/stores/pull'
 
-defineProps<{ active?: string | null }>()
+const props = defineProps<{ active?: string | null }>()
 const emit = defineEmits<{ pick: [path: string] }>()
 const { t } = useI18n()
 
@@ -72,6 +75,65 @@ const rows = computed<Row[]>(() => {
   return out
 })
 
+/** The row that stands for the active file: its own, or the folded folder it's in. */
+const holder = computed(() => {
+  const path = props.active
+  if (!path) return null
+  let found: string | null = null
+  for (const row of rows.value) {
+    if (row.kind === 'file' && row.file.path === path) return row.key
+    if (row.kind === 'folder' && closed.has(row.path) && path.startsWith(`${row.path}/`)) found = row.key
+  }
+  return found
+})
+
+// Keeps the holder in sight with a row or two around it, gliding there when it's near and jumping when it's far.
+const list = useTemplateRef<HTMLElement>('list')
+const ROOM = 2
+function follow(glide: boolean) {
+  const box = list.value
+  const row = holder.value && box?.querySelector<HTMLElement>(`[data-key="${CSS.escape(holder.value)}"]`)
+  if (!box || !row || !box.clientHeight) return
+  const top = row.offsetTop
+  const height = row.offsetHeight
+  const room = Math.min(ROOM * height, box.clientHeight / 4)
+  let to: number
+  if (top < box.scrollTop + room) to = top - room
+  else if (top + height > box.scrollTop + box.clientHeight - room) to = top + height + room - box.clientHeight
+  else return
+  const far = Math.abs(to - box.scrollTop) > box.clientHeight
+  if (far) to = top - (box.clientHeight - height) / 2
+  box.scrollTo({ top: to, behavior: glide && !far && !still() ? 'smooth' : 'instant' })
+}
+watch(holder, () => follow(true), { flush: 'post' })
+// Shown again after another part, or the column unfolded: it finds the file at once.
+let sizer: ResizeObserver | null = null
+let shown = false
+onMounted(() => {
+  if (!list.value) return
+  sizer = new ResizeObserver(() => {
+    const now = !!list.value?.clientHeight
+    if (now && !shown) follow(false)
+    shown = now
+  })
+  sizer.observe(list.value)
+})
+onBeforeUnmount(() => sizer?.disconnect())
+
+// Arrows: ↓ and ↑ from row to row, and toward the reading end to open a folder, back to fold it.
+const arrows = roving('button')
+function onKey(event: KeyboardEvent) {
+  const button = event.target as HTMLElement
+  const path = button.dataset.folder
+  const rtl = getComputedStyle(button).direction === 'rtl'
+  const open = event.key === (rtl ? 'ArrowLeft' : 'ArrowRight')
+  const fold = event.key === (rtl ? 'ArrowRight' : 'ArrowLeft')
+  if (path !== undefined && (open || fold)) {
+    event.preventDefault()
+    if (open === closed.has(path)) toggle(path)
+  } else arrows(event)
+}
+
 function toggle(path: string) {
   if (closed.has(path)) closed.delete(path)
   else closed.add(path)
@@ -84,6 +146,7 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
     <div class="shrink-0 border-b border-default p-3">
       <UInput
         v-model="filter"
+        data-file-filter
         size="sm"
         icon="i-octicon-filter-16"
         :placeholder="t('pull.filterFiles')"
@@ -91,13 +154,20 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
       />
     </div>
 
-    <ul class="min-h-0 flex-1 overflow-y-auto py-1 text-[13px]">
-      <li v-for="row in rows" :key="row.key">
+    <ul ref="list" class="relative min-h-0 flex-1 overflow-y-auto py-1 text-[13px]" @keydown="onKey">
+      <li v-for="row in rows" :key="row.key" :data-key="row.key">
         <button
           v-if="row.kind === 'folder'"
           type="button"
-          class="flex h-7 w-full items-center gap-1.5 pe-2 text-start text-toned transition-colors hover:bg-elevated pointer-coarse:h-10"
+          :data-folder="row.path"
+          class="relative flex h-7 w-full items-center gap-1.5 pe-2 text-start transition-colors hover:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary pointer-coarse:h-10"
+          :class="
+            holder === row.key
+              ? 'text-highlighted before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary/60'
+              : 'text-toned'
+          "
           :style="indent(row.depth)"
+          :aria-expanded="!closed.has(row.path)"
           @click="toggle(row.path)"
         >
           <UIcon
@@ -110,14 +180,15 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
         <button
           v-else
           type="button"
-          class="relative flex h-7 w-full items-center gap-1.5 pe-2 text-start transition-colors hover:bg-elevated pointer-coarse:h-10"
+          class="relative flex h-7 w-full items-center gap-1.5 pe-2 text-start transition-colors hover:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary pointer-coarse:h-10"
           :class="[
-            active === row.file.path
+            holder === row.key
               ? 'bg-elevated text-highlighted before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary'
               : 'text-toned',
             viewedState(row.file) === 'viewed' && 'opacity-60',
           ]"
           :style="indent(row.depth + 1)"
+          :aria-current="holder === row.key || undefined"
           @click="emit('pick', row.file.path)"
         >
           <UIcon

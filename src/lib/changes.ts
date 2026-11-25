@@ -25,6 +25,8 @@ export interface Changes {
   files: FileChange[]
   /** The repository's own word on generated files, from .gitattributes at the head. */
   attributes: string | null
+  /** GitHub listed only the first files of a run of commits: it gives no more than 300 for a comparison. */
+  capped?: boolean
 }
 
 type Raw = any // PROTOTYPE
@@ -60,6 +62,16 @@ export async function readChanges(
     files,
     attributes: attributes && 'text' in attributes ? attributes.text : null,
   }
+}
+
+// A comparison lists its first 300 files and no more, on any page.
+const COMPARED = 300
+
+/** What a run of commits changed, from the commit before it to its last: one REST request. */
+export async function readRange(gh: GitHub, repo: string, base: string, head: string): Promise<Changes> {
+  const compare = await gh.rest<Raw>(`/repos/${repo}/compare/${base}...${head}?per_page=1`)
+  const files: FileChange[] = (compare.files ?? []).map(toFile)
+  return { mergeBase: compare.merge_base_commit.sha, files, attributes: null, capped: files.length >= COMPARED }
 }
 
 // 100 blobs at a time still cost a point. GitHub cuts a blob's text off at 512,000 bytes.

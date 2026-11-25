@@ -7,19 +7,49 @@ import BrandMark from '@/components/BrandMark.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import IssuePanel from '@/components/IssuePanel.vue'
 import ItemList from '@/components/ItemList.vue'
+import { useKeys } from '@/components/keys'
+import KeysHelp from '@/components/KeysHelp.vue'
 import PullPage from '@/components/pull/PullPage.vue'
 import ReposPage from '@/components/ReposPage.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import SideBar from '@/components/SideBar.vue'
 import ViewDialog from '@/components/ViewDialog.vue'
 import { sides } from '@/locale'
-import { ui } from '@/stores/ui'
-import { page } from '@/stores/view'
+import { syncNow } from '@/stores/data'
+import { activeWorkspace } from '@/stores/settings'
+import { openKeys, openSettings, ui } from '@/stores/ui'
+import { openView, page } from '@/stores/view'
 
 const { t } = useI18n()
+
+// The shortcuts that work everywhere, asked after what's on the page: a pull request's numbers pick its parts.
+const views = Object.fromEntries(
+  [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [
+    String(n),
+    () => {
+      const view = activeWorkspace.value?.views[n - 1]
+      if (!view) return false
+      openView(view)
+    },
+  ]),
+)
+useKeys({ '?': openKeys, ',': openSettings, r: () => syncNow(true), ...views }, 0)
+
+/** Skips the sidebar and the filters, to the list or the diff. */
+function skip() {
+  document.querySelector<HTMLElement>('[data-main]')?.focus()
+}
 </script>
 
 <template>
+  <button
+    type="button"
+    class="sr-only z-50 rounded-md bg-default px-3 py-2 text-sm font-medium text-highlighted ring-2 ring-primary focus:not-sr-only focus:fixed focus:start-3 focus:top-3"
+    @click="skip"
+  >
+    {{ t('nav.skip') }}
+  </button>
+  <KeysHelp />
   <template v-if="page === 'pull'">
     <PullPage />
     <SettingsPanel />

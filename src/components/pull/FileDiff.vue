@@ -22,6 +22,7 @@ import {
   jumpTo,
   pull,
   reveal,
+  scope,
   threadsByPath,
   toggleViewed,
   viewedState,
@@ -396,8 +397,11 @@ const dir = computed(() =>
 )
 const base = computed(() => props.file.path.slice(dir.value.length))
 const fresh = computed(() => freshFile(props.file))
+// The file as the commits shown leave it.
 const onGitHub = computed(() =>
-  pull.value ? `https://github.com/${pull.value.ref.repo}/blob/${pull.value.headOid}/${props.file.path}` : '#',
+  pull.value
+    ? `https://github.com/${pull.value.ref.repo}/blob/${scope.value?.head ?? pull.value.headOid}/${props.file.path}`
+    : '#',
 )
 const estimate = computed(() => Math.min(4000, Math.max(3, props.file.additions + props.file.deletions + 6) * 20))
 const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), line.words) : [])
@@ -458,6 +462,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
         />
       </UTooltip>
       <button
+        v-if="!scope"
         type="button"
         class="tap inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] ring-1 transition-colors ring-inset"
         :class="

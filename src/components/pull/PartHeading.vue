@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 
 import { partFacts } from '@/components/pull/parts'
 import { formatNumber } from '@/locale'
-import { shownFiles, viewedCount } from '@/stores/pull'
+import { scope, shownFiles, viewedCount } from '@/stores/pull'
 import type { PullPart } from '@/stores/view'
 
 const props = defineProps<{ part: PullPart }>()
@@ -18,16 +18,19 @@ const viewed = computed(() => viewedCount.value / Math.max(shownFiles.value.leng
 <template>
   <div class="relative flex h-11 shrink-0 items-center gap-2 border-b border-default ps-4 pe-2 text-[13px]">
     <h2 class="font-medium text-highlighted">{{ t(`pull.tabs.${part}`) }}</h2>
-    <span v-if="part === 'files'" class="font-mono text-[12px] text-muted tabular-nums">
+    <span v-if="part === 'files' && !scope" class="font-mono text-[12px] text-muted tabular-nums">
       {{ t('pull.viewedOf', { n: formatNumber(viewedCount), of: formatNumber(shownFiles.length) }) }}
     </span>
+    <span v-else-if="part === 'files'" class="font-mono text-[12px] text-muted tabular-nums">{{
+      formatNumber(shownFiles.length)
+    }}</span>
     <span v-else-if="count !== null" class="font-mono text-[12px] text-muted tabular-nums">{{
       formatNumber(count)
     }}</span>
     <span class="flex-1" />
     <slot />
     <span
-      v-if="part === 'files'"
+      v-if="part === 'files' && !scope"
       class="absolute inset-x-0 -bottom-px h-0.5 origin-left bg-primary transition-transform duration-300 rtl:origin-right"
       :style="{ transform: `scaleX(${viewed})` }"
       role="progressbar"

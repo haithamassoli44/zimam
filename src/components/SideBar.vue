@@ -13,7 +13,7 @@ import SyncStatus from '@/components/SyncStatus.vue'
 import { progress } from '@/stores/data'
 import { activeRepos } from '@/stores/repos'
 import { activeWorkspace, settings } from '@/stores/settings'
-import { openSettings, openSetup, ui } from '@/stores/ui'
+import { openKeys, openSettings, openSetup, ui } from '@/stores/ui'
 import {
   activeView,
   askToRename,
@@ -172,6 +172,15 @@ function viewMenu(view: View): DropdownMenuItem[][] {
           :label="t('nav.settings')"
           :ui="{ base: 'px-2 text-toned', leadingIcon: 'text-muted' }"
           @click="openSettings"
+        />
+        <UButton
+          icon="i-octicon-command-palette-16"
+          color="neutral"
+          variant="ghost"
+          :aria-label="t('keys.title')"
+          :ui="{ leadingIcon: 'text-muted' }"
+          class="max-lg:hidden"
+          @click="openKeys"
         />
         <LanguageSwitch class="ms-auto" />
       </div>

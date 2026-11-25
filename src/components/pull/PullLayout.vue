@@ -6,19 +6,20 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UDrawer from '@nuxt/ui/components/Drawer.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, ref, useTemplateRef, watchPostEffect } from 'vue'
+import { computed, nextTick, ref, useTemplateRef, watchPostEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { useKeys } from '@/components/keys'
 import { columnWidth } from '@/components/pull/column'
 import ColumnEdge from '@/components/pull/ColumnEdge.vue'
 import FilesView from '@/components/pull/FilesView.vue'
 import PartHeading from '@/components/pull/PartHeading.vue'
-import { columnOpen, PART_ICONS, partFacts, pickPart, sheetOpen } from '@/components/pull/parts'
+import { columnOpen, PART_ICONS, partFacts, pickPart, sheetOpen, showPart } from '@/components/pull/parts'
 import PullHeader from '@/components/pull/PullHeader.vue'
 import PullPanels from '@/components/pull/PullPanels.vue'
 import { useStanding } from '@/components/pull/standing'
 import { formatNumber, sides } from '@/locale'
-import { shownFiles, viewedCount } from '@/stores/pull'
+import { scope, showAllChanges, shownFiles, stepCommits, viewedCount } from '@/stores/pull'
 import { large } from '@/stores/ui'
 import { PULL_PARTS, pullPart, type PullPart } from '@/stores/view'
 
@@ -28,6 +29,20 @@ const badge = (part: PullPart) => partFacts.value[part].fresh
 const { checks } = useStanding()
 // The strip marks the checks when something in them wants a look.
 const failing = computed(() => (checks.value && !checks.value.passing ? checks.value : null))
+
+// The numbers pick the parts in the strip's order, and the open one again folds the column. `/` filters the files.
+useKeys({
+  ...Object.fromEntries(PULL_PARTS.map((part, index) => [String(index + 1), () => pickPart(part)])),
+  '[': () => stepCommits(-1),
+  ']': () => stepCommits(1),
+  a: showAllChanges,
+  '/': async () => {
+    showPart('files')
+    await nextTick()
+    // The sheet on a phone slides up first.
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>('input[data-file-filter]')?.focus())
+  },
+})
 
 // The strip's marker slides to the middle of the open part's icon.
 const strip = useTemplateRef<HTMLElement>('strip')
@@ -53,10 +68,16 @@ watchPostEffect(() => {
           :class="!columnOpen && 'opacity-0'"
           :style="{ transform: `translateY(${marker}px) translateY(-50%)` }"
         />
-        <UTooltip v-for="part in PULL_PARTS" :key="part" :text="t(`pull.tabs.${part}`)" :content="{ side: sides.end }">
+        <UTooltip
+          v-for="(part, index) in PULL_PARTS"
+          :key="part"
+          :text="t(`pull.tabs.${part}`)"
+          :kbds="[String(index + 1)]"
+          :content="{ side: sides.end }"
+        >
           <button
             type="button"
-            class="relative grid size-9 place-items-center rounded-md transition-colors"
+            class="relative grid size-9 place-items-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-primary"
             :class="
               columnOpen && pullPart === part
                 ? 'bg-elevated text-highlighted'
@@ -135,7 +156,8 @@ watchPostEffect(() => {
         <span>
           {{ t(`pull.tabs.${part}`) }}
           <span v-if="part === 'files'" class="font-mono tabular-nums"
-            >{{ formatNumber(viewedCount) }}/{{ formatNumber(shownFiles.length) }}</span
+            ><template v-if="!scope">{{ formatNumber(viewedCount) }}/</template
+            >{{ formatNumber(shownFiles.length) }}</span
           >
         </span>
       </button>

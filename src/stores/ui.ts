@@ -1,6 +1,11 @@
 import { reactive, ref } from 'vue'
 
-export const ui = reactive({ menuOpen: false, settingsOpen: false, setup: null as 'new' | 'edit' | null })
+export const ui = reactive({
+  menuOpen: false,
+  settingsOpen: false,
+  keysOpen: false,
+  setup: null as 'new' | 'edit' | null,
+})
 
 // From 80rem, Tailwind's `xl`, an issue opens beside the list, where another row is a click away. Narrower screens lay
 // it over the list.
@@ -24,4 +29,8 @@ export function openSetup(mode: 'new' | 'edit') {
 
 export function openSettings() {
   Object.assign(ui, { menuOpen: false, settingsOpen: true })
+}
+
+export function openKeys() {
+  Object.assign(ui, { menuOpen: false, keysOpen: true })
 }

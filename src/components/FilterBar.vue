@@ -5,12 +5,12 @@ import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
-import { defineShortcuts } from '@nuxt/ui/composables'
 import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
 import FacetMenu, { type Option } from '@/components/FacetMenu.vue'
+import { useKeys } from '@/components/keys'
 import { CHOICES, NONE, singlePick, SORTS, toggleValue, type Facet } from '@/lib/filters'
 import { formatNumber } from '@/locale'
 import { displayRepo, historyPercent, owners, people, status } from '@/stores/data'
@@ -29,7 +29,7 @@ import {
 const { t } = useI18n()
 const search = useTemplateRef<{ inputRef: HTMLInputElement | null }>('search')
 
-defineShortcuts({ '/': () => search.value?.inputRef?.focus() })
+useKeys({ '/': () => search.value?.inputRef?.focus() })
 
 const counts = computed(() => result.value.counts)
 const selected = (facet: Facet) => filters[facet] as string[]

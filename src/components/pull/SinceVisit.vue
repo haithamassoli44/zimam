@@ -7,7 +7,7 @@ import { useI18n } from 'vue-i18n'
 
 import { formatList, formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { freshCounts, markTime, pretend, pull } from '@/stores/pull'
+import { freshCounts, isFresh, markTime, pretend, pull, showCommits } from '@/stores/pull'
 
 const emit = defineEmits<{ first: [] }>()
 const { t } = useI18n()
@@ -22,6 +22,13 @@ const parts = computed(() => {
   ].filter((part): part is string => !!part)
 })
 const when = computed(() => (markTime.value !== null ? relativeTime(markTime.value, now.value) : ''))
+
+// The commits since the visit, when they come last and aren't all of them: a way to read just those.
+const freshRun = computed(() => {
+  const commits = pull.value?.commits ?? []
+  const first = commits.findIndex((commit) => isFresh(commit.at))
+  return first > 0 && commits.slice(first).every((commit) => isFresh(commit.at)) ? first : null
+})
 </script>
 
 <template>
@@ -37,6 +44,15 @@ const when = computed(() => (markTime.value !== null ? relativeTime(markTime.val
       <span class="text-toned">{{ formatList(parts) || t('pull.since.nothing') }}</span>
       <span class="text-[12px] text-muted max-md:hidden">{{ t('pull.since.legend') }}</span>
       <span class="flex-1" />
+      <UButton
+        v-if="freshRun !== null"
+        size="xs"
+        color="neutral"
+        variant="outline"
+        icon="i-octicon-git-commit-16"
+        :label="t('pull.since.newCommits')"
+        @click="showCommits(freshRun, pull.commits.length - 1)"
+      />
       <UButton
         v-if="freshCounts?.files"
         size="xs"

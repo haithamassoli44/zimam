@@ -26,6 +26,7 @@ const { stand } = vi.hoisted(() => ({
 vi.mock('@nuxt/ui/components/Avatar.vue', stand('span'))
 vi.mock('@nuxt/ui/components/Button.vue', stand('button'))
 vi.mock('@nuxt/ui/components/Icon.vue', stand('span'))
+vi.mock('@nuxt/ui/components/Popover.vue', stand('span'))
 vi.mock('@nuxt/ui/components/Skeleton.vue', stand('div'))
 vi.mock('@nuxt/ui/components/Tooltip.vue', stand('span'))
 

@@ -5,6 +5,7 @@ import UIcon from '@nuxt/ui/components/Icon.vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import PersonLink from '@/components/PersonLink.vue'
 import HunkSnippet from '@/components/pull/HunkSnippet.vue'
 import { showThread } from '@/components/pull/parts'
 import PostBlock from '@/components/pull/PostBlock.vue'
@@ -61,7 +62,9 @@ const first = computed(() => props.thread.comments[0])
     <HunkSnippet v-if="snippet && first?.diffHunk" :hunk="first.diffHunk" />
     <div v-if="folded" class="flex min-h-10 items-center gap-2 px-3 text-[13px] text-muted">
       <span class="min-w-0 flex-1 truncate">
-        <bdi class="text-toned">{{ first?.author?.login ?? t('issue.ghost') }}</bdi>
+        <PersonLink :who="first?.author ?? null" class="text-toned"
+          ><bdi>{{ first?.author?.login ?? t('issue.ghost') }}</bdi></PersonLink
+        >
         · {{ t('pull.threadComments', { n: formatNumber(thread.total) }, thread.total) }}
         <template v-if="thread.resolved && thread.resolvedBy">
           · {{ t('pull.resolvedBy', { login: thread.resolvedBy }) }}</template

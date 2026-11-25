@@ -3,11 +3,12 @@ import type { Checks, Label, Merge, Person, Review } from '@/types'
 
 import type { GitHub } from './github'
 import { AUTHOR_FIELDS, POST_FIELDS, toAuthor, toPost, type Author, type Post } from './issue'
+import type { Who } from './people'
 import { ASSIGNEES, LABELS, toChecks, toMerge, toReview } from './queries'
 import type { IssueRef } from './refs'
 
 const AUTHOR = `author { ${AUTHOR_FIELDS} }`
-const REVIEWER = `requestedReviewer { kind: __typename ... on User { login avatarUrl(size: 64) } ... on Team { name slug avatarUrl(size: 64) } ... on Bot { login avatarUrl(size: 64) } ... on Mannequin { login avatarUrl(size: 64) } }`
+const REVIEWER = `requestedReviewer { kind: __typename ... on User { login avatarUrl(size: 64) } ... on Team { name slug organization { login } avatarUrl(size: 64) } ... on Bot { login avatarUrl(size: 64) } ... on Mannequin { login avatarUrl(size: 64) } }`
 const COMMIT =
   'oid abbreviatedOid messageHeadline committedDate author { name avatarUrl(size: 64) user { login } } statusCheckRollup { state }'
 
@@ -73,7 +74,7 @@ const PULL = `
         ${ASSIGNEES}
         reviewRequests(first: 20) { nodes { ${REVIEWER} } }
         latestOpinionatedReviews(first: 20) { nodes { state submittedAt ${AUTHOR} } }
-        commits(first: 100) { totalCount nodes { commit { ${COMMIT} } } }
+        commits(first: 100) { totalCount nodes { commit { ${COMMIT} messageBody parents(first: 1) { nodes { oid } } } } }
         lastCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         files(first: 100) { nodes { path viewerViewedState } }
         timelineItems(first: 100, itemTypes: [${TIMELINE_TYPES.join(', ')}]) {
@@ -104,12 +105,24 @@ const MORE_THREADS = `
 
 export type Reviewer =
   | { kind: 'user' | 'bot'; login: string; avatarUrl: string }
-  | { kind: 'team'; name: string; avatarUrl: string }
+  | { kind: 'team'; name: string; avatarUrl: string; team: string }
+
+/** A reviewer as a person link takes them: a team by its name, with where it lives. */
+export const reviewerWho = (reviewer: Reviewer | null): Who | null =>
+  !reviewer
+    ? null
+    : reviewer.kind === 'team'
+      ? { login: reviewer.name, avatarUrl: reviewer.avatarUrl, team: reviewer.team }
+      : { login: reviewer.login, avatarUrl: reviewer.avatarUrl, bot: reviewer.kind === 'bot' }
 
 export interface Commit {
   oid: string
   short: string
   headline: string
+  /** The message after its first line. Read for the pull request's own list of commits, not its timeline's. */
+  body: string
+  /** The commit it follows: its first parent, as a diff of the commit alone starts from. */
+  parent: string | null
   at: string
   author: { name: string; login: string | null; avatarUrl: string }
   checks: Checks | null
@@ -222,7 +235,8 @@ const toReviewPost = (raw: Raw): Post => toPost({ ...raw, createdAt: raw.submitt
 function toReviewer(raw: Raw): Reviewer | null {
   const who = raw?.requestedReviewer
   if (!who) return null
-  if (who.kind === 'Team') return { kind: 'team', name: who.name, avatarUrl: who.avatarUrl }
+  if (who.kind === 'Team')
+    return { kind: 'team', name: who.name, avatarUrl: who.avatarUrl, team: `${who.organization?.login}/${who.slug}` }
   return { kind: who.kind === 'Bot' ? 'bot' : 'user', login: who.login, avatarUrl: who.avatarUrl }
 }
 
@@ -234,11 +248,21 @@ const VERDICTS: Record<string, Verdict> = {
   PENDING: 'pending',
 }
 
+// GitHub cuts a long first line short with `…`, and starts the rest of the message with the rest of it after a `…`.
+function splitMessage(headline: string, body: string): { headline: string; body: string } {
+  if (!headline.endsWith('…') || !body.startsWith('…')) return { headline, body }
+  const [rest, ...more] = body.slice(1).split('\n')
+  return { headline: headline.slice(0, -1) + rest, body: more.join('\n').trim() }
+}
+
 function toCommit(raw: Raw): Commit {
+  const message = splitMessage(raw.messageHeadline, raw.messageBody?.trim() ?? '')
   return {
     oid: raw.oid,
     short: raw.abbreviatedOid,
-    headline: raw.messageHeadline,
+    headline: message.headline,
+    body: message.body,
+    parent: raw.parents?.nodes[0]?.oid ?? null,
     at: raw.committedDate,
     author: {
       name: raw.author?.name ?? '',

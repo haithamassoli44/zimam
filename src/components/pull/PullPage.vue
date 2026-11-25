@@ -6,6 +6,7 @@ import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { useKeys } from '@/components/keys'
 import { columnWidth } from '@/components/pull/column'
 import { columnOpen } from '@/components/pull/parts'
 import ProtoSwitch from '@/components/pull/ProtoSwitch.vue'
@@ -16,6 +17,7 @@ import { large, openSettings } from '@/stores/ui'
 import { activeView, leavePull, movePull, neighbors, openPull, viewName } from '@/stores/view'
 
 const { t } = useI18n()
+useKeys({ u: leavePull, J: () => movePull(neighbors.value.next), K: () => movePull(neighbors.value.previous) })
 const backLabel = computed(() => (activeView.value ? viewName(activeView.value) : t('filters.kind.pr')))
 const url = computed(
   () =>
@@ -27,15 +29,17 @@ const url = computed(
 <template>
   <div class="enter flex h-dvh flex-col bg-default">
     <header class="flex h-12 shrink-0 items-center gap-1 border-b border-default bg-muted px-3">
-      <UButton
-        color="neutral"
-        variant="ghost"
-        size="sm"
-        icon="i-octicon-arrow-left-16"
-        :label="backLabel"
-        :ui="{ leadingIcon: 'rtl:-scale-x-100', label: 'max-sm:sr-only' }"
-        @click="leavePull"
-      />
+      <UTooltip :text="t('keys.does.back')" :kbds="['u']">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          icon="i-octicon-arrow-left-16"
+          :label="backLabel"
+          :ui="{ leadingIcon: 'rtl:-scale-x-100', label: 'max-sm:sr-only' }"
+          @click="leavePull"
+        />
+      </UTooltip>
       <span class="mx-1 h-5 w-px bg-(--ui-border-accented)" />
       <span v-if="openPull" class="min-w-0 truncate font-mono text-[13px] text-toned" dir="ltr">{{
         openPull.repo
@@ -44,7 +48,7 @@ const url = computed(
       <span v-if="neighbors.at >= 0" class="font-mono text-[12px] text-muted tabular-nums max-sm:hidden">
         {{ formatNumber(neighbors.at + 1) }} / {{ formatNumber(neighbors.of) }}
       </span>
-      <UTooltip :text="t('pull.previous')">
+      <UTooltip :text="t('pull.previous')" :kbds="['Shift', 'K']">
         <UButton
           icon="i-octicon-chevron-up-16"
           color="neutral"
@@ -55,7 +59,7 @@ const url = computed(
           @click="movePull(neighbors.previous)"
         />
       </UTooltip>
-      <UTooltip :text="t('pull.next')">
+      <UTooltip :text="t('pull.next')" :kbds="['Shift', 'J']">
         <UButton
           icon="i-octicon-chevron-down-16"
           color="neutral"

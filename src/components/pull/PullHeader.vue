@@ -8,10 +8,11 @@ import { computed, onBeforeUnmount, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { PULL_LOOKS } from '@/components/looks'
+import PersonLink from '@/components/PersonLink.vue'
 import StatusChips from '@/components/pull/StatusChips.vue'
 import { formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { files, pull, scrolledBySelf, totals } from '@/stores/pull'
+import { pull, scrolledBySelf, totals } from '@/stores/pull'
 
 const { t } = useI18n()
 
@@ -19,7 +20,9 @@ const state = computed(() => pull.value?.state ?? 'open')
 const head = computed(() =>
   pull.value?.cross && pull.value.headOwner ? `${pull.value.headOwner}:${pull.value.head}` : pull.value?.head,
 )
-const counted = computed(() => (files.value.length ? totals.value : null))
+const counted = computed(() => (totals.value.files || totals.value.left ? totals.value : null))
+// Who the line names: whoever merged it, or its author.
+const who = computed(() => (state.value === 'merged' ? pull.value?.mergedBy : pull.value?.post.author) ?? null)
 
 // --- Folding ---
 const root = useTemplateRef<HTMLElement>('root')
@@ -137,16 +140,16 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
             }}
           </span>
           <span class="inline-flex items-center gap-1.5">
-            <UAvatar v-if="pull.post.author" :src="pull.post.author.avatarUrl" alt="" size="3xs" />
             <i18n-t
               :keypath="state === 'merged' ? 'pull.merged' : state === 'closed' ? 'pull.wanted' : 'pull.wants'"
               tag="span"
               scope="global"
             >
               <template #who>
-                <bdi class="font-medium text-toned">{{
-                  (state === 'merged' ? pull.mergedBy?.login : pull.post.author?.login) ?? t('issue.ghost')
-                }}</bdi>
+                <PersonLink :who="who" class="inline-flex items-center gap-1.5 align-bottom font-medium text-toned">
+                  <UAvatar v-if="who" :src="who.avatarUrl" alt="" size="3xs" />
+                  <bdi>{{ who?.login ?? t('issue.ghost') }}</bdi>
+                </PersonLink>
               </template>
               <template #n>{{ formatNumber(pull.commitCount) }}</template>
               <template #base

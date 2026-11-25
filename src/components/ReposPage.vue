@@ -6,11 +6,11 @@ import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
-import { defineShortcuts } from '@nuxt/ui/composables'
 import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
+import { useKeys } from '@/components/keys'
 import { useReorder } from '@/components/reorder'
 import RepoRow, { REPO_COLUMN_WIDTHS, REPO_COLUMNS, REPO_GRID } from '@/components/RepoRow.vue'
 import SyncFailed from '@/components/SyncFailed.vue'
@@ -24,7 +24,7 @@ const { t } = useI18n()
 const search = useTemplateRef<{ inputRef: HTMLInputElement | null }>('search')
 const scroller = useTemplateRef<HTMLElement>('scroller')
 
-defineShortcuts({ '/': () => search.value?.inputRef?.focus() })
+useKeys({ '/': () => search.value?.inputRef?.focus() })
 
 const shown = computed(() => repoResult.value.pinned.length + repoResult.value.rest.length)
 

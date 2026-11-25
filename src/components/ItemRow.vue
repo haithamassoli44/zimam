@@ -5,7 +5,6 @@ export const ROW_HEIGHT = { compact: 41, comfortable: 73 } as const
 
 <script setup lang="ts">
 import UAvatar from '@nuxt/ui/components/Avatar.vue'
-import UAvatarGroup from '@nuxt/ui/components/AvatarGroup.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
@@ -15,6 +14,7 @@ import { useI18n } from 'vue-i18n'
 import CheckRuns from '@/components/CheckRuns.vue'
 import LabelTag from '@/components/LabelTag.vue'
 import { CHECK_LOOKS, ISSUE_LOOKS, PULL_LOOKS, REVIEW_LOOKS } from '@/components/looks'
+import PersonLink from '@/components/PersonLink.vue'
 import { stateOf } from '@/lib/queries'
 import { formatList, formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
@@ -55,6 +55,11 @@ const review = computed(() => {
 })
 const diff = computed(() => (open.value && settings.show.size ? props.item.diff : null))
 const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), now.value))
+
+// Three faces, then a count of the rest.
+const FACES = 3
+const faces = computed(() => props.item.assignees.slice(0, FACES))
+const moreFaces = computed(() => props.item.assignees.slice(FACES).map((person) => person.login))
 
 const LABELS = 3
 const labels = computed(() => props.item.labels.slice(0, LABELS))
@@ -164,14 +169,15 @@ watch(
           >{{ repoName }}<span class="text-muted">#{{ item.number }}</span></span
         >
         <span v-if="archived">{{ t('item.archived') }}</span>
-        <span v-if="settings.show.author && item.author" class="inline-flex items-center gap-1.5">
-          <UAvatar :src="item.author.avatarUrl" :alt="item.author.login" size="3xs" />
-          <i18n-t keypath="item.by" tag="span" scope="global">
-            <template #login>
+        <!-- Out of the Tab order, like the row's other parts: the title is the row's one stop. -->
+        <i18n-t v-if="settings.show.author && item.author" keypath="item.by" tag="span" scope="global">
+          <template #login>
+            <PersonLink :who="item.author" tabindex="-1" class="inline-flex items-center gap-1.5 align-bottom">
+              <UAvatar :src="item.author.avatarUrl" alt="" size="3xs" />
               <bdi>{{ item.author.login }}</bdi>
-            </template>
-          </i18n-t>
-        </span>
+            </PersonLink>
+          </template>
+        </i18n-t>
         <UTooltip :text="t('item.opened', { time: fullDate(item.createdAt) })">
           <span>{{ t('item.updated', { time: updated }) }}</span>
         </UTooltip>
@@ -209,14 +215,34 @@ watch(
         </UPopover>
       </span>
       <span v-if="settings.show.assignees" class="hidden w-14 justify-end sm:flex">
-        <UTooltip
-          v-if="item.assignees.length"
-          :text="t('item.assignees', { names: formatList(item.assignees.map((person) => person.login)) })"
-        >
-          <UAvatarGroup size="2xs" :max="3">
-            <UAvatar v-for="person in item.assignees" :key="person.login" :src="person.avatarUrl" :alt="person.login" />
-          </UAvatarGroup>
-        </UTooltip>
+        <span v-if="item.assignees.length" class="flex flex-row-reverse items-center">
+          <span class="sr-only">{{
+            t('item.assignees', { names: formatList(item.assignees.map((p) => p.login)) })
+          }}</span>
+          <UTooltip v-if="moreFaces.length" :text="formatList(moreFaces)">
+            <span
+              class="relative -ms-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-elevated px-1 font-mono text-[10px] text-toned ring-2 ring-(--ui-bg) group-hover:ring-(--ui-bg-elevated)"
+              aria-hidden="true"
+              >+{{ formatNumber(moreFaces.length) }}</span
+            >
+          </UTooltip>
+          <PersonLink
+            v-for="person in faces.toReversed()"
+            :key="person.login"
+            :who="person"
+            :label="person.login"
+            tabindex="-1"
+            aria-hidden="true"
+            class="relative -ms-1.5 flex rounded-full last:ms-0 hover:z-1"
+          >
+            <UAvatar
+              :src="person.avatarUrl"
+              alt=""
+              size="2xs"
+              class="ring-2 ring-(--ui-bg) transition-colors group-hover:ring-(--ui-bg-elevated)"
+            />
+          </PersonLink>
+        </span>
       </span>
       <span v-if="settings.show.comments" class="flex w-10 items-center justify-end gap-1 font-mono tabular-nums">
         <template v-if="item.comments">

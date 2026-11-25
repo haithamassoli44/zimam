@@ -10,8 +10,10 @@ import { useI18n } from 'vue-i18n'
 
 import LabelTag from '@/components/LabelTag.vue'
 import { VERDICT_LOOKS } from '@/components/looks'
+import PersonLink from '@/components/PersonLink.vue'
 import { showPart } from '@/components/pull/parts'
 import { useStanding } from '@/components/pull/standing'
+import { reviewerWho } from '@/lib/pull'
 import { formatList, formatNumber } from '@/locale'
 import { pull, runGroups, runs, runsFailed } from '@/stores/pull'
 const { t } = useI18n()
@@ -34,8 +36,12 @@ const summary = computed(() =>
       </h3>
       <ul v-if="pull.verdicts.length || pull.requested.length" class="space-y-2">
         <li v-for="verdict in pull.verdicts" :key="verdict.author?.login" class="flex items-center gap-2">
-          <UAvatar v-if="verdict.author" :src="verdict.author.avatarUrl" alt="" size="3xs" />
-          <bdi class="min-w-0 flex-1 truncate text-toned">{{ verdict.author?.login }}</bdi>
+          <span class="min-w-0 flex-1">
+            <PersonLink :who="verdict.author" class="inline-flex max-w-full items-center gap-2 text-toned">
+              <UAvatar v-if="verdict.author" :src="verdict.author.avatarUrl" alt="" size="3xs" />
+              <bdi class="truncate">{{ verdict.author?.login ?? t('issue.ghost') }}</bdi>
+            </PersonLink>
+          </span>
           <UTooltip :text="t(`pull.verdicts.${verdict.verdict}`)">
             <UIcon
               :name="VERDICT_LOOKS[verdict.verdict].icon"
@@ -45,10 +51,12 @@ const summary = computed(() =>
           </UTooltip>
         </li>
         <li v-for="(reviewer, index) in pull.requested" :key="index" class="flex items-center gap-2">
-          <UAvatar :src="reviewer.avatarUrl" alt="" size="3xs" />
-          <bdi class="min-w-0 flex-1 truncate text-toned">{{
-            reviewer.kind === 'team' ? reviewer.name : reviewer.login
-          }}</bdi>
+          <span class="min-w-0 flex-1">
+            <PersonLink :who="reviewerWho(reviewer)" class="inline-flex max-w-full items-center gap-2 text-toned">
+              <UAvatar :src="reviewer.avatarUrl" alt="" size="3xs" />
+              <bdi class="truncate">{{ reviewer.kind === 'team' ? reviewer.name : reviewer.login }}</bdi>
+            </PersonLink>
+          </span>
           <UTooltip :text="t('pull.awaiting')">
             <UIcon :name="VERDICT_LOOKS.pending.icon" class="size-4" :class="VERDICT_LOOKS.pending.color" />
           </UTooltip>
@@ -91,9 +99,14 @@ const summary = computed(() =>
       </div>
       <div v-if="pull.assignees.length" class="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span class="text-muted">{{ t('issue.assignees') }}</span>
-        <span v-for="person in pull.assignees" :key="person.login" class="inline-flex items-center gap-1.5 text-toned">
+        <PersonLink
+          v-for="person in pull.assignees"
+          :key="person.login"
+          :who="person"
+          class="inline-flex items-center gap-1.5 text-toned"
+        >
           <UAvatar :src="person.avatarUrl" alt="" size="3xs" /><bdi>{{ person.login }}</bdi>
-        </span>
+        </PersonLink>
       </div>
     </section>
   </div>

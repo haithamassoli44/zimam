@@ -10,16 +10,17 @@ let left = null as { key: string; offset: number; rows: VirtualItem[] } | null
 import UButton from '@nuxt/ui/components/Button.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { computed, onBeforeUnmount, useTemplateRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ItemRow, { ROW_HEIGHT } from '@/components/ItemRow.vue'
+import { useKeys } from '@/components/keys'
 import { EASE_OUT, still } from '@/components/motion'
 import SyncFailed from '@/components/SyncFailed.vue'
 import { sameRef } from '@/lib/refs'
-import { displayRepo, gathered, highlighted, issueRef, items, repos } from '@/stores/data'
+import { displayRepo, gathered, highlighted, issueRef, itemRef, items, repos } from '@/stores/data'
 import { activeWorkspace, settings } from '@/stores/settings'
-import { activeView, isDefault, openIssue, query, resetFilters, result } from '@/stores/view'
+import { activeView, isDefault, leftPull, openIssue, query, resetFilters, result, viewName } from '@/stores/view'
 import type { Item } from '@/types'
 
 const { t } = useI18n()
@@ -87,10 +88,53 @@ watch(
 )
 
 const { gathering, failed } = gathered(() => items.value.size)
+
+// --- The keyboard: j and k, or ↓ and ↑ from a row, move the focus from row to row. Enter on a row opens it. ---
+
+/** Gives a row's title the focus, once the list has drawn it. */
+function focusRow(index: number, tries = 3) {
+  const count = rows.value.length
+  if (!count) return
+  const at = Math.max(0, Math.min(count - 1, index))
+  virtualizer.value.scrollToIndex(at, { align: 'auto' })
+  requestAnimationFrame(() => {
+    const link = scroller.value?.querySelector<HTMLElement>(`li[data-index="${at}"] a[data-row]`)
+    if (link) link.focus({ preventScroll: true })
+    else if (tries) focusRow(at, tries - 1)
+  })
+}
+/** The row that has the focus, or the first in sight. */
+function rowAt(): { index: number; focused: boolean } {
+  const row = document.activeElement?.closest<HTMLElement>('li[data-index]')
+  if (row && scroller.value?.contains(row)) return { index: Number(row.dataset.index), focused: true }
+  const top = scroller.value?.scrollTop ?? 0
+  return { index: virtualRows.value.find((each) => each.end > top + 1)?.index ?? 0, focused: false }
+}
+function moveFocus(by: -1 | 1) {
+  const { index, focused } = rowAt()
+  focusRow(focused ? index + by : index)
+}
+// An open issue takes j and k for itself, to go to the next one.
+useKeys({ j: () => moveFocus(1), k: () => moveFocus(-1) })
+function onArrow(event: KeyboardEvent) {
+  const by = ({ ArrowDown: 1, ArrowUp: -1 } as const)[event.key as 'ArrowDown' | 'ArrowUp']
+  if (!by || event.altKey || event.ctrlKey || event.metaKey || !(event.target as Element).matches('a[data-row]')) return
+  event.preventDefault()
+  moveFocus(by)
+}
+
+// Back from a pull request, its row has the focus again, as an issue's has once its panel closes.
+onMounted(() => {
+  const from = leftPull.value
+  leftPull.value = null
+  if (!from || (document.activeElement && document.activeElement !== document.body)) return
+  const index = rows.value.findIndex((item) => sameRef(itemRef(item), from))
+  if (index >= 0) focusRow(index)
+})
 </script>
 
 <template>
-  <div ref="scroller" class="overflow-y-auto">
+  <div ref="scroller" class="overflow-y-auto focus:outline-none" tabindex="-1" data-main>
     <div v-if="gathering" aria-busy="true">
       <p class="px-4 py-3 text-sm text-muted sm:px-6">{{ t('results.gathering') }}</p>
       <div
@@ -122,7 +166,13 @@ const { gathering, failed } = gathered(() => items.value.size)
       />
     </div>
 
-    <ul v-else class="enter relative" :style="{ height: `${virtualizer.getTotalSize()}px` }">
+    <ul
+      v-else
+      class="enter relative"
+      :style="{ height: `${virtualizer.getTotalSize()}px` }"
+      :aria-label="activeView ? viewName(activeView) : t('results.custom')"
+      @keydown="onArrow"
+    >
       <li
         v-for="row in virtualRows"
         :key="String(row.key)"

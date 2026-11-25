@@ -50,7 +50,8 @@
     "newWorkspace": "New workspace",
     "settings": "Settings",
     "menu": "Menu",
-    "repos": "Repositories"
+    "repos": "Repositories",
+    "skip": "Skip to content"
   },
   "presets": {
     "open": "Everything open",
@@ -266,6 +267,45 @@
     "reply": "Reply on GitHub",
     "video": "Watch the video on GitHub"
   },
+  "person": {
+    "followers": "no followers | 1 follower | {n} followers",
+    "joined": "On GitHub since {when}",
+    "team": "Team in {owner}",
+    "bot": "Bot",
+    "failed": "Couldn't load the profile"
+  },
+  "keys": {
+    "title": "Keyboard shortcuts",
+    "layout": "Shortcuts go by where the keys are, so they work the same with an Arabic layout.",
+    "groups": {
+      "everywhere": "Anywhere",
+      "list": "In the list",
+      "issue": "In an open issue",
+      "pull": "On a pull request",
+      "diff": "In its diff"
+    },
+    "does": {
+      "help": "Show these shortcuts",
+      "search": "Search, or filter a pull request's files",
+      "views": "Open a saved view, in the sidebar's order",
+      "refresh": "Check GitHub for changes",
+      "settings": "Open the settings",
+      "rows": "Next or previous row",
+      "rowsArrows": "Next or previous row, from a row",
+      "open": "Open the row",
+      "openOnGitHub": "Open the row on GitHub",
+      "issues": "Next or previous issue",
+      "close": "Close the issue",
+      "parts": "Files, conversation, commits, checks; again to fold",
+      "back": "Back to the list",
+      "pulls": "Next or previous pull request",
+      "commits": "Previous or next commit",
+      "allChanges": "Show all changes",
+      "changes": "Next or previous change",
+      "files": "Next or previous file",
+      "viewed": "Mark the file viewed"
+    }
+  },
   "sync": {
     "synced": "Updated {time}",
     "never": "Not synced yet",
@@ -432,6 +472,24 @@
     },
     "files": "Files",
     "filesCount": "no files | 1 file | {n} files",
+    "scope": {
+      "label": "Commits shown",
+      "all": "All changes",
+      "commits": "no commits | 1 commit | {n} commits",
+      "pick": "Pick commits",
+      "previous": "Previous commit",
+      "next": "Next commit",
+      "position": "Commit {n} of {of}",
+      "range": "Commits {from}–{to} of {of}",
+      "showAll": "Show all changes",
+      "more": "Show the whole message",
+      "less": "Show less",
+      "committed": "committed {when}",
+      "capped": "GitHub lists only the first 300 files these commits change.",
+      "empty": "These commits change no files.",
+      "shift": "Shift-click another commit to pick the run between them.",
+      "onGitHub": "Commit {sha} on GitHub"
+    },
     "viewedOf": "{n} of {of} viewed",
     "filterFiles": "Filter files",
     "reading": "Reading the files: {n} of {of}",
@@ -449,12 +507,6 @@
     },
     "whitespace": "Ignore whitespace",
     "whitespaceHelp": "Hide changes in spacing alone",
-    "keys": {
-      "title": "Keys",
-      "changes": "Next or previous change",
-      "files": "Next or previous file",
-      "viewed": "Mark the file viewed"
-    },
     "changesFailed": "Couldn't read the changed files.",
     "end": "That's every file.",
     "previousFile": "Previous file",
@@ -471,7 +523,8 @@
       "first": "First new change",
       "pretend": "Pretend visit",
       "firstVisit": "Your first visit. Next time, what you've already seen will be faded.",
-      "line": "New since your last visit"
+      "line": "New since your last visit",
+      "newCommits": "Show the new commits"
     },
     "verdicts": {
       "approved": "approved these changes",
@@ -534,6 +587,7 @@
     "behindShort": "Behind {base}",
     "awaitingCount": "Nobody awaited | Awaiting 1 reviewer | Awaiting {n} reviewers",
     "showDetails": "Show the details",
-    "readFailed": "GitHub couldn't give this file's text."
+    "readFailed": "GitHub couldn't give this file's text.",
+    "changesLabel": "Changed files"
   }
 }

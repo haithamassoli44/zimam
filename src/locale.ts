@@ -61,10 +61,16 @@ const numbers = computed(() => new Intl.NumberFormat(language.value.intl))
 const relative = computed(() => new Intl.RelativeTimeFormat(language.value.intl, { numeric: 'auto' }))
 const dates = computed(() => new Intl.DateTimeFormat(language.value.intl, { dateStyle: 'long', timeStyle: 'short' }))
 const clock = computed(() => new Intl.DateTimeFormat(language.value.intl, { timeStyle: 'short' }))
+const months = computed(() => new Intl.DateTimeFormat(language.value.intl, { month: 'long', year: 'numeric' }))
+const compact = computed(() => new Intl.NumberFormat(language.value.intl, { notation: 'compact' }))
 
 export const formatNumber = (value: number) => numbers.value.format(value)
 export const fullDate = (time: string | number) => dates.value.format(new Date(time))
 export const clockTime = (time: number) => clock.value.format(new Date(time))
+/** A month and its year: «March 2014». */
+export const monthYear = (time: string | number) => months.value.format(new Date(time))
+/** A number rounded to a short form: «1.2K». */
+export const compactNumber = (value: number) => compact.value.format(value)
 export const formatList = (values: string[]) => values.join(language.value.comma)
 
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

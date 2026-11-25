@@ -10,9 +10,9 @@ import { isPost, type Pull, type ReviewThread } from '@/lib/pull'
 import { refKey, type IssueRef } from '@/lib/refs'
 import type { FileMode } from '@/types'
 
-import { checkRuns, loaded, pullChanges, pullRequest, pullTexts } from './data'
+import { checkRuns, loaded, pullChanges, pullRange, pullRequest, pullTexts } from './data'
 import { activeWorkspace, postLook, settings } from './settings'
-import { openPull } from './view'
+import { openPull, pullScope } from './view'
 
 // --- Prototype switches ---------------------------------------------------------------------------------------------
 
@@ -116,6 +116,8 @@ async function load(which: IssueRef) {
   runs.value = null
   runsFailed.value = false
   markedGenerated.clear()
+  ranges.clear()
+  asked.clear()
   diffs.clear()
   forgetTokens()
   let answer: Pull
@@ -219,25 +221,125 @@ const customTests = computed(() => settings.generated.map(patternTest))
 // Files whose path doesn't tell but whose head text marks them generated, noted as the texts come in. The list changes
 // only when one turns up, not with every batch of texts.
 const markedGenerated = shallowReactive(new Set<string>())
+// Any side's text counts: the head's, or the last commit of the run of commits shown.
 function markIfGenerated(expression: string, content: Content) {
-  const head = pull.value?.headOid
-  if (!head || !expression.startsWith(`${head}:`) || !('text' in content)) return
-  const path = expression.slice(head.length + 1)
+  if (!('text' in content)) return
+  const path = expression.slice(expression.indexOf(':') + 1)
   if (generatedText(path, content.text)) markedGenerated.add(path)
 }
 
-export const files = computed<PullFile[]>(() => {
-  const found = changes.value
-  const current = pull.value
-  if (!found || !current) return []
-  const rules = attributeRules(found.attributes)
+/** Files from the base, or the commit before a run of commits, to `head`. The head's .gitattributes speaks for all. */
+function toFiles(found: Changes, head: string): PullFile[] {
+  const rules = attributeRules(changes.value?.attributes ?? null)
   return found.files
     .map((file) => {
-      const { old, new: next } = sides(file, found.mergeBase, current.headOid)
+      const { old, new: next } = sides(file, found.mergeBase, head)
       const byPath = generatedByPath(file.path, rules, customTests.value)
       return { ...file, oldAt: old, newAt: next, generated: byPath ?? markedGenerated.has(file.path) }
     })
     .toSorted((a, b) => comparePaths(a.path, b.path))
+}
+
+/** Every file the pull request changes, whatever commits the diff shows. */
+const allFiles = computed<PullFile[]>(() =>
+  changes.value && pull.value ? toFiles(changes.value, pull.value.headOid) : [],
+)
+
+// --- Commits shown ----------------------------------------------------------------------------------------------------
+
+/** A run of the pull request's commits, by place in its list, from the commit before the first to the last. */
+export interface Scope {
+  key: string
+  base: string
+  head: string
+  from: number
+  to: number
+}
+
+/** The commits the diff shows, as the address names them. Null for all the changes, or for commits it can't find. */
+export const scope = computed<Scope | null>(() => {
+  const named = pullScope.value
+  const commits = pull.value?.commits ?? []
+  if (!named || !commits.length) return null
+  const at = (sha: string) => commits.findIndex((commit) => commit.oid.startsWith(sha))
+  let from: number
+  let to: number
+  if (named.includes('..')) {
+    const [before, last] = named.split('..')
+    to = at(last)
+    // The run starts after a commit of the pull request's, or with the first, after the commit before it.
+    const after = at(before)
+    from = after >= 0 ? after + 1 : commits[0].parent?.startsWith(before) ? 0 : -1
+  } else from = to = at(named)
+  if (from < 0 || to < from) return null
+  const base = commits[from].parent ?? commits[from - 1]?.oid
+  if (!base) return null
+  return { key: `${base}..${commits[to].oid}`, base, head: commits[to].oid, from, to }
+})
+
+/** Shows a run of commits, from the `from`th to the `to`th, or one alone. All of them shows all the changes. */
+export function showCommits(from: number, to = from) {
+  const commits = pull.value?.commits ?? []
+  const [first, last] = from <= to ? [from, to] : [to, from]
+  if (!commits[first] || !commits[last]) return
+  if (first === 0 && last === commits.length - 1 && commits.length > 1) pullScope.value = null
+  else if (first === last) pullScope.value = commits[first].oid
+  else pullScope.value = `${commits[first].parent ?? commits[first - 1]?.oid}..${commits[last].oid}`
+}
+export function showAllChanges() {
+  pullScope.value = null
+}
+
+/** The commit before or after those shown, alone. From all the changes, the first commit comes next. */
+export function stepCommits(by: -1 | 1) {
+  const count = pull.value?.commits.length ?? 0
+  const shown = scope.value
+  const next = !shown ? (by === 1 ? 0 : -1) : by === 1 ? shown.to + 1 : shown.from - 1
+  if (next >= 0 && next < count) showCommits(next)
+}
+
+// What runs of commits changed, by their key, read when first shown. Each lasts while the pull request is open.
+const ranges = shallowReactive(new Map<string, Changes | 'failed'>())
+const asked = new Set<string>()
+watch(scope, async (shown) => {
+  const current = pull.value
+  if (!shown || !current || asked.has(shown.key)) return
+  asked.add(shown.key)
+  const mine = ticket
+  try {
+    const found = await pullRange(current.ref.repo, shown.base, shown.head)
+    if (mine !== ticket) return
+    ranges.set(shown.key, found)
+    await readInto(
+      current.ref.repo,
+      toFiles(found, shown.head).flatMap((file) => [file.oldAt, file.newAt].filter((at) => at !== null)),
+      mine,
+    )
+  } catch {
+    if (mine === ticket) ranges.set(shown.key, 'failed')
+  }
+})
+
+/** What the shown commits changed: read, still on its way (null), or not to be had. */
+const scopeChanges = computed(() => (scope.value ? (ranges.get(scope.value.key) ?? null) : null))
+
+/** The files the diff can show: the pull request's, or those the commits shown changed. */
+export const files = computed<PullFile[]>(() => {
+  const shown = scope.value
+  if (!shown) return allFiles.value
+  const found = scopeChanges.value
+  return found && found !== 'failed' ? toFiles(found, shown.head) : []
+})
+
+/** Whether the diff's files are still on their way, or couldn't be read. */
+export const filesState = computed<'loading' | 'failed' | 'ready'>(() => {
+  if (scope.value) return scopeChanges.value === 'failed' ? 'failed' : scopeChanges.value ? 'ready' : 'loading'
+  return changesProblem.value ? 'failed' : changes.value ? 'ready' : 'loading'
+})
+/** GitHub listed only the first files the shown commits changed. */
+export const filesCapped = computed(() => {
+  const found = scopeChanges.value
+  return !!found && found !== 'failed' && !!found.capped
 })
 
 // Folders before files at each level, as a file tree lists them.
@@ -264,16 +366,20 @@ export const shownFiles = computed(() =>
   showGenerated.value ? files.value : files.value.filter((file) => !file.generated),
 )
 
-/** Lines added and removed, without generated files. */
-export const totals = computed(() => {
-  const counted = files.value.filter((file) => !file.generated)
+/** The pull request's lines added and removed, without generated files, whatever commits the diff shows. */
+export const totals = computed(() => sizeOf(allFiles.value))
+/** The same for the commits shown. */
+export const shownTotals = computed(() => sizeOf(files.value))
+
+function sizeOf(list: PullFile[]) {
+  const counted = list.filter((file) => !file.generated)
   return {
     additions: counted.reduce((sum, file) => sum + file.additions, 0),
     deletions: counted.reduce((sum, file) => sum + file.deletions, 0),
     files: counted.length,
-    left: generatedFiles.value.length,
+    left: list.length - counted.length,
   }
-})
+}
 
 // --- Diffs ----------------------------------------------------------------------------------------------------------
 
@@ -294,15 +400,17 @@ export function diffOf(file: PullFile): FileDiff | null | 'binary' | 'tooBig' | 
   if ('binary' in old || 'binary' in next) return 'binary'
   if ('tooBig' in old || 'tooBig' in next) return 'tooBig'
   if (!('text' in old) || !('text' in next)) return 'failed'
-  const at = visitedAt(file)
+  // A run of commits shows its own changes, with no marks from the last visit.
+  const marked = !scope.value
+  const at = marked ? visitedAt(file) : null
   let visited: string | null | undefined
   if (at) {
     const then = texts.get(at)
     if (!then) return null
     // Not there then: every change is new. A copy that couldn't be read says nothing either way.
     visited = 'text' in then ? then.text : 'missing' in then ? null : undefined
-  } else if (markHead.value) visited = next.text
-  const key = `${file.oldAt}|${file.newAt}|${settings.ignoreSpace}|${markHead.value}`
+  } else if (marked && markHead.value) visited = next.text
+  const key = `${file.oldAt}|${file.newAt}|${settings.ignoreSpace}|${marked && markHead.value}`
   let diff = diffs.get(key)
   if (!diff) {
     diff = diffFiles({
@@ -322,8 +430,12 @@ const seenNow = computed(() => (openPull.value ? seenAll[refKey(openPull.value)]
 
 type ViewedState = 'viewed' | 'changed' | null
 
-/** Viewed, viewed but changed since (so no longer ticked), or not. GitHub's own tick counts too. */
+/**
+ * Viewed, viewed but changed since (so no longer ticked), or not. GitHub's own tick counts too. A tick is for a file as
+ * the whole pull request leaves it, so the commits shown alone have none, as on GitHub.
+ */
 export function viewedState(file: PullFile): ViewedState {
+  if (scope.value) return null
   const blob = seenNow.value?.viewed[file.path]
   // '-' marks a file the reader unticked here, whatever GitHub says.
   if (blob === '-') return null
@@ -336,7 +448,7 @@ export function viewedState(file: PullFile): ViewedState {
 
 export function toggleViewed(file: PullFile) {
   const seen = seenNow.value
-  if (!seen) return
+  if (!seen || scope.value) return
   if (viewedState(file) === 'viewed') {
     seen.viewed[file.path] = '-'
   } else seen.viewed[file.path] = file.blob
@@ -356,8 +468,10 @@ watch(shownFiles, (list) => {
   if (!list.some((file) => file.path === currentFile.value)) currentFile.value = list[0]?.path ?? null
 })
 
-/** Changed since the last visit: the file is new since, or its text differs from then. */
-export function freshFile(file: PullFile): boolean {
+/** Changed since the last visit: the file is new since, or its text differs from then. Unmarked in a run of commits. */
+export const freshFile = (file: PullFile) => !scope.value && changedSinceVisit(file)
+
+function changedSinceVisit(file: PullFile): boolean {
   const at = visitedAt(file)
   const then = at ? texts.get(at) : undefined
   const now = file.newAt ? texts.get(file.newAt) : undefined
@@ -389,7 +503,7 @@ export const freshCounts = computed(() => {
   return {
     commits: current.commits.filter((commit) => isFresh(commit.at)).length,
     comments: talk.length + replies.length,
-    files: shownFiles.value.filter(freshFile).length,
+    files: allFiles.value.filter((file) => (showGenerated.value || !file.generated) && changedSinceVisit(file)).length,
   }
 })
 
@@ -412,7 +526,8 @@ export const fileAsked = shallowRef<string | null>(null)
 /** A thread asked for from the conversation. The file it's on opens it, brings its line into view, and clears this. */
 export const jumpTo = shallowRef<ReviewThread | null>(null)
 export function jump(thread: ReviewThread) {
-  showGenerated.value ||= files.value.some((file) => file.path === thread.path && file.generated)
+  if (scope.value && !threadsByPath.value.get(thread.path)?.includes(thread)) showAllChanges()
+  showGenerated.value ||= allFiles.value.some((file) => file.path === thread.path && file.generated)
   currentFile.value = thread.path
   jumpTo.value = thread
 }
@@ -427,9 +542,17 @@ export function reveal(element: Element, block: ScrollLogicalPosition) {
 /** Whether the diff's latest scroll was its own, from reveal(), and not the reader's. */
 export const scrolledBySelf = () => performance.now() - selfScrolledAt < 400
 
+// A thread's line is a line of the file as the pull request leaves it. In a run of commits, threads show on the files
+// those commits leave as they are now, on the new side; elsewhere their lines would point at other code.
 export const threadsByPath = computed(() => {
   const map = new Map<string, ReviewThread[]>()
-  for (const thread of shownThreads.value) map.set(thread.path, [...(map.get(thread.path) ?? []), thread])
+  const now = scope.value ? new Map(allFiles.value.map((file) => [file.path, file.blob])) : null
+  const shown = now && new Map(files.value.map((file) => [file.path, file.blob]))
+  for (const thread of shownThreads.value) {
+    if (shown && (thread.side !== 'new' || !shown.has(thread.path) || shown.get(thread.path) !== now.get(thread.path)))
+      continue
+    map.set(thread.path, [...(map.get(thread.path) ?? []), thread])
+  }
   return map
 })
 
