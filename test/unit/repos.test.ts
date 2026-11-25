@@ -84,13 +84,19 @@ describe('repoRows', () => {
     expect(web.counts).toMatchObject({ awaiting: 1, failing: 1, conflicts: 1 })
   })
 
-  it("takes open issues and pull requests from GitHub's totals, and counts archived repositories too", () => {
-    const [old] = rowsOf(
-      [repo('old', { isArchived: true, openIssues: 7, openPrs: 3 })],
-      [pr('waiting', 'old'), pr('closed', 'old', { state: 'closed' })],
-      NOW,
-    )
-    expect(old.counts).toEqual({ issues: 7, prs: 3, awaiting: 1, failing: 0, conflicts: 0 })
+  it("takes open issues and pull requests from GitHub's totals while they load, and counts archived repositories too", () => {
+    const repos = [repo('old', { isArchived: true, openIssues: 7, openPrs: 3 })]
+    const found = [pr('waiting', 'old'), pr('closed', 'old', { state: 'closed' })]
+    const [loading] = rowsOf(repos, found, NOW, { old: ['open'] })
+    expect(loading.counts).toEqual({ issues: 7, prs: 3, awaiting: 1, failing: 0, conflicts: 0 })
+    const [loaded] = rowsOf(repos, found, NOW)
+    expect(loaded.counts).toEqual({ issues: 0, prs: 1, awaiting: 1, failing: 0, conflicts: 0 })
+  })
+
+  it('counts an issue opened since GitHub last gave its totals', () => {
+    // GitHub's totals are read every 15 minutes or so; the issue came with the last search.
+    const [quiet] = rowsOf([repo('quiet', { openIssues: 0 })], [item('new', 'quiet')], NOW)
+    expect(quiet.counts.issues).toBe(1)
   })
 
   it('takes the last push or the last change, whichever is later', () => {
@@ -164,7 +170,11 @@ describe('pickRows', () => {
       repo('api', { openIssues: 9, pushedAt: at(2) }),
       repo('old', { isArchived: true, pushedAt: at(300) }),
     ],
-    [],
+    [
+      item('w1', 'web', { createdAt: at(400), updatedAt: at(400) }),
+      item('a1', 'api', { createdAt: at(400), updatedAt: at(400) }),
+      item('a2', 'api', { createdAt: at(400), updatedAt: at(400) }),
+    ],
     NOW,
   )
   const names = (filters: Partial<ReturnType<typeof defaultRepoFilters>>, pinned: string[] = []) => {

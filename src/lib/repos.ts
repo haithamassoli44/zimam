@@ -22,7 +22,10 @@ export const WEEKS = 26
 interface CountOf {
   /** The list that shows what it counts. */
   filters: Partial<Filters>
-  /** GitHub's own total. Without one, the count tallies the items read so far that match the filters. */
+  /**
+   * GitHub's own total, which counts while the repository's open items load. Every count tallies the items read so far
+   * that match the filters once they have: the total is only as fresh as the last read of the repositories.
+   */
   total?: (repo: Repo) => number
 }
 
@@ -39,7 +42,7 @@ export type Count = keyof typeof COUNTS
 
 export const COUNT_KEYS = Object.keys(COUNTS) as Count[]
 
-/** The counts that come from the items read so far, rather than from GitHub's totals. */
+/** The counts that come from the items read so far alone, with no total from GitHub to show while they load. */
 export const TALLIED = COUNT_KEYS.filter((key) => !(COUNTS[key] as CountOf).total)
 
 export type RepoSort = 'activity' | 'name' | Count
@@ -80,9 +83,7 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
   const tallies = new Map<string, { row: RepoRow; oldestClosed: Record<Item['kind'], number> }>()
   for (const repo of ctx.repos.values()) {
     const pushedAt = repo.pushedAt ? Date.parse(repo.pushedAt) : 0
-    const counts = Object.fromEntries(
-      COUNT_KEYS.map((key) => [key, (COUNTS[key] as CountOf).total?.(repo) ?? 0]),
-    ) as Record<Count, number>
+    const counts = Object.fromEntries(COUNT_KEYS.map((key) => [key, 0])) as Record<Count, number>
     const row: RepoRow = {
       repo,
       counts,
@@ -94,7 +95,7 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
     tallies.set(repo.id, { row, oldestClosed: { issue: Infinity, pr: Infinity } })
   }
   // In an archived repository too, so the counts don't depend on the list's default of active ones.
-  const tallied = TALLIED.map(
+  const tallied = COUNT_KEYS.map(
     (key) => [key, matcher({ ...defaultFilters(), status: [], ...COUNTS[key].filters }, ctx)] as const,
   )
   for (const item of items) {
@@ -119,6 +120,8 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
     if (!kinds) continue
     const { openIssues, openPrs } = row.repo
     const open = kinds.includes('open')
+    if (open)
+      for (const key of COUNT_KEYS) row.counts[key] = (COUNTS[key] as CountOf).total?.(row.repo) ?? row.counts[key]
     row.countsLoading = open && openPrs > 0
     row.weeksLoading =
       (open && openIssues + openPrs > 0) ||
