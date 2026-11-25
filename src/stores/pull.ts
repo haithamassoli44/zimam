@@ -376,6 +376,8 @@ export interface PullFile extends FileChange {
   generated: boolean
   /** The commit the diff shows it at: the head, or the last of the commits shown. */
   at: string
+  /** The commit its old side is read at: where the base and the head meet, or the commit before those shown. */
+  base: string
   /** Expressions of its two sides' texts, null for a side it doesn't have. */
   oldAt: string | null
   newAt: string | null
@@ -390,7 +392,7 @@ function toFiles(s: Session, found: Changes, head: string): PullFile[] {
     .map((file) => {
       const { old, new: next } = sides(file, found.mergeBase, head)
       const generated = isGenerated.value(file.path) ?? s.marked.has(file.path)
-      return { ...file, at: head, oldAt: old, newAt: next, generated }
+      return { ...file, at: head, base: found.mergeBase, oldAt: old, newAt: next, generated }
     })
     .toSorted((a, b) => comparePaths(a.path, b.path))
 }

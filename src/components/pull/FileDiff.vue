@@ -15,7 +15,7 @@ import SkeletonLines from '@/components/SkeletonLines.vue'
 import { splitRows, visibleBlocks, type FileDiff, type Line } from '@/lib/diff'
 import { languageOf, tokenize, type Token } from '@/lib/highlight'
 import type { ReviewThread } from '@/lib/pull'
-import { blobUrl } from '@/lib/refs'
+import { changedFileUrl } from '@/lib/refs'
 import { formatNumber } from '@/locale'
 import {
   canTick,
@@ -330,8 +330,8 @@ const dir = computed(() =>
 )
 const base = computed(() => props.file.path.slice(dir.value.length))
 const fresh = computed(() => freshFile(props.file))
-// The file as the commits shown leave it.
-const onGitHub = computed(() => (pull.value ? blobUrl(pull.value.ref.repo, props.file.at, props.file.path) : '#'))
+// The file as the commits shown leave it, or as it was before them when they removed it.
+const onGitHub = computed(() => (pull.value ? changedFileUrl(pull.value.ref.repo, props.file) : '#'))
 // What a file likely shows before it's drawn: its changes and some lines around them.
 const unread = computed(() => ({ '--lines': Math.max(3, props.file.additions + props.file.deletions + 6) }))
 </script>
