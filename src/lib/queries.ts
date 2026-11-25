@@ -84,7 +84,7 @@ export const ONE_REPO = `
 // rest. Repositories the token can't read come back null.
 const contributed = (kind: string, type: string) =>
   `${kind}: repositoriesContributedTo(first: 100, includeUserRepositories: true, contributionTypes: [${type}]) {
-    nodes { ...RepoFields }
+    totalCount nodes { ...RepoFields }
   }`
 
 export const CONTRIBUTED = `

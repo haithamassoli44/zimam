@@ -26,7 +26,7 @@ function raw(fullName: string, overrides: Partial<RawRepo> = {}): RawRepo {
   }
 }
 
-const nodes = (list: (RawRepo | null)[]) => ({ nodes: list })
+const nodes = (list: (RawRepo | null)[]) => ({ totalCount: list.length, nodes: list })
 
 /** A GitHub that lists `recent` contributions by kind, and pages of what was opened, each page given in full. */
 function github(
@@ -83,7 +83,7 @@ describe('contributionsOf', () => {
       },
     )
     const { contributions, partial } = await contributionsOf(gh, 'ali')
-    expect(partial).toBe(false)
+    expect(partial).toEqual([])
     const byName = Object.fromEntries(contributions.map((found) => [found.repo.fullName, found]))
     expect(Object.keys(byName).toSorted()).toEqual(['acme/web', 'nuxt/api', 'old/tool'])
     expect(byName['acme/web']).toMatchObject({
@@ -101,9 +101,21 @@ describe('contributionsOf', () => {
     const page = [{ createdAt: '2026-01-01T00:00:00Z', repository: web }]
     const gh = github({}, { pullRequests: Array.from({ length: OPENED_PAGES + 2 }, () => page), issues: [[]] })
     const { contributions, partial } = await contributionsOf(gh, 'ali')
-    expect(partial).toBe(true)
+    expect(partial).toEqual(['pr'])
     expect(contributions[0].prs).toBe(OPENED_PAGES)
     expect(gh.asked.filter((call) => call.startsWith('pullRequests'))).toHaveLength(OPENED_PAGES)
+  })
+
+  it('says which kinds GitHub listed more of than it read', async () => {
+    const recent = { commit: [raw('acme/web')] }
+    const gh = github(recent, { pullRequests: [[]], issues: [[]] })
+    const query = gh.query.bind(gh)
+    gh.query = (async (text: string, variables?: Record<string, unknown>) => {
+      const data = (await query(text, variables)) as { user: Record<string, { totalCount: number }> }
+      if (text === CONTRIBUTED) data.user.commit.totalCount = 120
+      return data
+    }) as GitHub['query']
+    expect((await contributionsOf(gh, 'ali')).partial).toEqual(['commit'])
   })
 })
 
@@ -166,6 +178,7 @@ describe('pickContributions', () => {
     expect(names(shown)).toEqual(['acme/web'])
     expect(kinds).toEqual({ commit: 1, pr: 1, issue: 1, review: 0 })
     expect(Object.fromEntries([...owners].map(([owner, { count }]) => [owner, count]))).toEqual({ acme: 1, nuxt: 1 })
-    expect(statuses).toEqual({ active: 3, archived: 1 })
+    expect(statuses).toEqual({ active: 1, archived: 0 })
+    expect(pick({ owners: ['old'] }).statuses).toEqual({ active: 0, archived: 1 })
   })
 })

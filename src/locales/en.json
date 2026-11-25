@@ -52,7 +52,7 @@
     "loading": "Gathering your contributions from GitHub…",
     "failed": "Couldn't load your contributions",
     "none": "GitHub lists no contributions this token can read",
-    "partial": "You opened more than Zimam reads, so the counts cover your latest 1,000 pull requests and 1,000 issues.",
+    "partial": "GitHub lists more than Zimam reads, so the counts marked + cover your latest 1,000 pull requests and issues, and 100 repositories of each kind of contribution.",
     "search": "Search repositories and descriptions",
     "kindsTitle": "Contribution",
     "kinds": {

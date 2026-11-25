@@ -7,8 +7,7 @@ import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
-import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
@@ -24,7 +23,7 @@ import {
   type Contribution,
   type ContributionKind,
 } from '@/lib/sources'
-import { formatNumber, relativeTime } from '@/locale'
+import { formatList, formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import type { Repo, Source } from '@/types'
 
@@ -41,21 +40,26 @@ const ICONS: Record<ContributionKind, string> = {
 }
 
 const entries = shallowRef<Contribution[] | null>(null)
-const partial = ref(false)
+const partial = ref<ContributionKind[]>([])
 const failed = ref(false)
 
+// Only the latest load shows: one for an earlier token may answer after it.
+let loads = 0
 async function load() {
+  const at = ++loads
   failed.value = false
   entries.value = null
   try {
     const found = await contributionsOf(props.gh, props.login)
+    if (at !== loads) return
     entries.value = found.contributions
     partial.value = found.partial
   } catch {
-    failed.value = true
+    if (at === loads) failed.value = true
   }
 }
 void load()
+onUnmounted(() => loads++)
 // A new token may see other repositories, or be someone else's.
 watch(() => [props.gh, props.login], load)
 
@@ -135,6 +139,8 @@ function resetFilters() {
   Object.assign(filters, { ...defaultContributionFilters(), sort: filters.sort })
 }
 
+const kindsText = (entry: Contribution) => formatList(entry.kinds.map((kind) => t(`contrib.kinds.${kind}`)))
+
 const lastOpened = (entry: Contribution) =>
   entry.lastAt ? t('contrib.lastOpened', { time: relativeTime(Date.parse(entry.lastAt), now.value) }) : ''
 </script>
@@ -159,10 +165,10 @@ const lastOpened = (entry: Contribution) =>
       <dl class="enter grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div
           v-for="stat in [
-            { key: 'repos', icon: 'i-octicon-repo-16', value: totals.repos },
-            { key: 'owners', icon: 'i-octicon-organization-16', value: totals.owners },
-            { key: 'prs', icon: ICONS.pr, value: totals.prs },
-            { key: 'issues', icon: ICONS.issue, value: totals.issues },
+            { key: 'repos', icon: 'i-octicon-repo-16', value: totals.repos, capped: partial.length > 0 },
+            { key: 'owners', icon: 'i-octicon-organization-16', value: totals.owners, capped: partial.length > 0 },
+            { key: 'prs', icon: ICONS.pr, value: totals.prs, capped: partial.includes('pr') },
+            { key: 'issues', icon: ICONS.issue, value: totals.issues, capped: partial.includes('issue') },
           ]"
           :key="stat.key"
           class="rounded-md bg-elevated/50 px-3 py-2"
@@ -172,11 +178,11 @@ const lastOpened = (entry: Contribution) =>
             <span class="truncate">{{ t(`contrib.stats.${stat.key}`) }}</span>
           </dt>
           <dd class="font-mono text-lg font-medium text-highlighted tabular-nums">
-            {{ formatNumber(stat.value) }}<span v-if="partial && (stat.key === 'prs' || stat.key === 'issues')">+</span>
+            {{ formatNumber(stat.value) }}<span v-if="stat.capped">+</span>
           </dd>
         </div>
       </dl>
-      <p v-if="partial" class="text-xs text-muted">{{ t('contrib.partial') }}</p>
+      <p v-if="partial.length" class="text-xs text-muted">{{ t('contrib.partial') }}</p>
 
       <div class="flex flex-wrap items-center gap-2">
         <UInput
@@ -271,10 +277,9 @@ const lastOpened = (entry: Contribution) =>
               entry.repo.description
             }}</span>
             <span class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-toned">
-              <span class="flex items-center gap-1.5">
-                <UTooltip v-for="kind in entry.kinds" :key="kind" :text="t(`contrib.kinds.${kind}`)">
-                  <UIcon :name="ICONS[kind]" class="size-3.5 text-muted" :aria-label="t(`contrib.kinds.${kind}`)" />
-                </UTooltip>
+              <span class="flex items-center gap-1.5" :title="kindsText(entry)">
+                <UIcon v-for="kind in entry.kinds" :key="kind" :name="ICONS[kind]" class="size-3.5 text-muted" />
+                <span class="sr-only">{{ kindsText(entry) }}</span>
               </span>
               <span v-if="entry.prs" class="tabular-nums">{{ t('contrib.prs', entry.prs) }}</span>
               <span v-if="entry.issues" class="tabular-nums">{{ t('contrib.issues', entry.issues) }}</span>

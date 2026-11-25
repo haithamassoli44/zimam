@@ -123,12 +123,13 @@ export const OPENED_PAGES = 10
 
 /**
  * The repositories someone contributed to, that the token can read. GitHub lists the recent ones by kind of
- * contribution, and what they opened finds the older ones. `partial` when they opened more than was read.
+ * contribution, 100 of each at most, and what they opened finds the older ones. `partial` names the kinds GitHub
+ * listed more of than were read.
  */
 export async function contributionsOf(
   gh: GitHub,
   login: string,
-): Promise<{ contributions: Contribution[]; partial: boolean }> {
+): Promise<{ contributions: Contribution[]; partial: ContributionKind[] }> {
   const found = new Map<string, Contribution>()
   const add = (raw: RawRepo, kind: ContributionKind) => {
     let entry = found.get(raw.id)
@@ -137,10 +138,15 @@ export async function contributionsOf(
     return entry
   }
   type User<T> = { user: T | null }
-  const recent = await gh.query<User<Record<ContributionKind, { nodes: (RawRepo | null)[] }>>>(CONTRIBUTED, { login })
+  type Listed = { totalCount: number; nodes: (RawRepo | null)[] }
+  const recent = await gh.query<User<Record<ContributionKind, Listed>>>(CONTRIBUTED, { login })
   if (!recent.user) throw new GitHubError(login, 'query')
-  for (const kind of CONTRIBUTION_KINDS) for (const raw of recent.user[kind].nodes) if (raw) add(raw, kind)
-  let partial = false
+  const partial = new Set<ContributionKind>()
+  for (const kind of CONTRIBUTION_KINDS) {
+    const listed = recent.user[kind]
+    for (const raw of listed.nodes) if (raw) add(raw, kind)
+    if (listed.totalCount > listed.nodes.length) partial.add(kind)
+  }
   for (const [kind, list] of [
     ['pr', 'pullRequests'],
     ['issue', 'issues'],
@@ -163,9 +169,9 @@ export async function contributionsOf(
       after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null
       if (!after) break
     }
-    partial ||= after !== null
+    if (after !== null) partial.add(kind)
   }
   for (const entry of found.values())
     entry.kinds.sort((a, b) => CONTRIBUTION_KINDS.indexOf(a) - CONTRIBUTION_KINDS.indexOf(b))
-  return { contributions: [...found.values()], partial }
+  return { contributions: [...found.values()], partial: CONTRIBUTION_KINDS.filter((kind) => partial.has(kind)) }
 }

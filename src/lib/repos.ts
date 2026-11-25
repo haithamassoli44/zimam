@@ -248,19 +248,26 @@ const CONTRIBUTION_ORDER: Record<ContributionSort, (a: Contribution, b: Contribu
  * counts with the others applied, as the list's do.
  */
 export function pickContributions(entries: Contribution[], filters: ContributionFilters) {
-  const { kept, counts: statuses } = findRepos(entries, (entry) => entry.repo, filters, pickerText)
+  const { kept: searched } = findRepos(entries, (entry) => entry.repo, { q: filters.q, status: [] }, pickerText)
+  const ofStatus = (entry: Contribution) => !filters.status.length || filters.status.includes(statusOf(entry.repo))
   const ofKind = (entry: Contribution) =>
     !filters.kinds.length || entry.kinds.some((kind) => filters.kinds.includes(kind))
   const ofOwner = (entry: Contribution) => !filters.owners.length || filters.owners.includes(entry.repo.owner)
+  const statuses: Record<RepoStatus, number> = { active: 0, archived: 0 }
   const kinds = Object.fromEntries(CONTRIBUTION_KINDS.map((kind) => [kind, 0])) as Record<ContributionKind, number>
   const owners = new Map<string, { count: number; avatar: string }>()
-  for (const entry of kept) {
-    if (ofOwner(entry)) for (const kind of entry.kinds) kinds[kind]++
-    if (!ofKind(entry)) continue
-    const owner = owners.get(entry.repo.owner) ?? { count: 0, avatar: entry.repo.ownerAvatar }
-    owner.count++
-    owners.set(entry.repo.owner, owner)
+  for (const entry of searched) {
+    const [status, kind, owner] = [ofStatus(entry), ofKind(entry), ofOwner(entry)]
+    if (kind && owner) statuses[statusOf(entry.repo)]++
+    if (status && owner) for (const each of entry.kinds) kinds[each]++
+    if (status && kind) {
+      const tally = owners.get(entry.repo.owner) ?? { count: 0, avatar: entry.repo.ownerAvatar }
+      tally.count++
+      owners.set(entry.repo.owner, tally)
+    }
   }
-  const shown = kept.filter((entry) => ofKind(entry) && ofOwner(entry)).toSorted(CONTRIBUTION_ORDER[filters.sort])
+  const shown = searched
+    .filter((entry) => ofStatus(entry) && ofKind(entry) && ofOwner(entry))
+    .toSorted(CONTRIBUTION_ORDER[filters.sort])
   return { shown, statuses, kinds, owners }
 }
