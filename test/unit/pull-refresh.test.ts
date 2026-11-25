@@ -26,6 +26,10 @@ const github = vi.hoisted(() => ({
   changeReads: [] as string[],
   // The reads of what changed that fail, by head, or by the run of commits they're of.
   failing: new Set<string>(),
+  // What runs of commits changed, by `base..head`, and the files' texts by `commit:path`, some held until let go.
+  ranges: new Map<string, Changes['files']>(),
+  texts: new Map<string, string>(),
+  textHolds: new Map<string, Promise<void>>(),
 }))
 vi.mock('@/lib/pull', async (original) => ({
   ...(await original<typeof import('@/lib/pull')>()),
@@ -53,10 +57,12 @@ vi.mock('@/lib/changes', async (original) => ({
   readRange: async (_gh: unknown, _repo: string, base: string, head: string) => {
     github.changeReads.push(`${base}..${head}`)
     if (github.failing.has(`${base}..${head}`)) throw new Error('network')
-    return { mergeBase: base, files: [file('one.ts')], capped: false }
+    return { mergeBase: base, files: github.ranges.get(`${base}..${head}`) ?? [file('one.ts')], capped: false }
   },
-  readTexts: async (_gh: unknown, _repo: string, at: string[]) =>
-    at.map(() => ({ content: { text: 'a\n' }, version: 'v' })),
+  readTexts: async (_gh: unknown, _repo: string, at: string[]) => {
+    await Promise.all(at.map((each) => github.textHolds.get(each) ?? Promise.resolve()))
+    return at.map((each) => ({ content: { text: github.texts.get(each) ?? 'a\n' }, version: 'v' }))
+  },
   readVersions: async () => [],
 }))
 vi.mock('@/lib/checks', async (original) => ({
@@ -116,6 +122,9 @@ const file = (path: string) => ({
   blob: path,
 })
 
+// A file as a commit leaves it, changed, by its blob.
+const modified = (blob: string) => ({ ...file('gen.ts'), status: 'modified' as const, blob })
+
 const commit = (oid: string, parent: string) => ({
   oid,
   short: oid,
@@ -163,6 +172,9 @@ beforeEach(() => {
   // The repository the list's copy is in, by which it's found before the page says its id.
   repos.value = new Map([['R1', { id: 'R1', fullName: REF.repo } as Repo]])
   status.value.syncedAt = null
+  github.ranges = new Map()
+  github.texts = new Map()
+  github.textHolds = new Map()
   github.pullFails = 0
   github.pullHold = null
   openPull.value = null
@@ -328,6 +340,67 @@ describe('reading the open pull request again', () => {
     await flushPromises()
     expect(filesState.value).toBe('ready')
     expect(shownFiles.value.map((shown) => [shown.path, shown.at])).toEqual([['one.ts', 'c2']])
+  })
+
+  it('shows a file a push takes the generated mark off, though the old text comes after', async () => {
+    github.changes.set('h2', { mergeBase: 'base', files: [{ ...file('one.ts'), blob: 'one2' }], capped: false })
+    github.texts.set('h1:one.ts', '// @generated\nexport const one = 1\n')
+    github.texts.set('h2:one.ts', 'export const one = 2\n')
+    await opened(pullAt('h1'), pullAt('h2'), pullAt('h1'), pullAt('h2'))
+    expect(shownFiles.value).toEqual([])
+    await refreshPull()
+    await flushPromises()
+    expect(shownFiles.value.map((shown) => [shown.path, shown.at])).toEqual([['one.ts', 'h2']])
+
+    // Back to the first head, its text still on its way as the second head comes again.
+    const old = held()
+    github.texts.set('h3:one.ts', '// @generated\n')
+    github.changes.set('h3', github.changes.get('h1')!)
+    github.pulls.splice(2, 1, pullAt('h3'))
+    github.textHolds.set('h3:one.ts', old.promise)
+    await refreshPull()
+    await refreshPull()
+    old.open()
+    await flushPromises()
+    expect(shownFiles.value.map((shown) => [shown.path, shown.at])).toEqual([['one.ts', 'h2']])
+  })
+
+  it('keeps a file its text marks generated hidden through a push that leaves it as it was', async () => {
+    github.changes.set('h2', { mergeBase: 'base', files: [file('one.ts')], capped: false })
+    github.texts.set('h1:one.ts', '// @generated\n')
+    github.texts.set('h2:one.ts', '// @generated\n')
+    await opened(pullAt('h1'), pullAt('h2'))
+    expect(shownFiles.value).toEqual([])
+    // The new head's text is slow to come.
+    const slow = held()
+    github.textHolds.set('h2:one.ts', slow.promise)
+    await refreshPull()
+    await flushPromises()
+    expect(pull.value?.headOid).toBe('h2')
+    expect(shownFiles.value).toEqual([])
+    slow.open()
+    await flushPromises()
+    expect(shownFiles.value).toEqual([])
+  })
+
+  it("doesn't take a commit's generated mark for all the changes, nor miss it when its text was read already", async () => {
+    const commits = [commit('c1', 'base'), commit('c2', 'c1'), commit('c3', 'c2')]
+    github.changes.set('c3', { mergeBase: 'base', files: [modified('gen3')], capped: false })
+    github.ranges.set('c1..c2', [modified('gen2')])
+    github.ranges.set('c2..c3', [modified('gen3')])
+    // The second commit marks the file generated; the third takes the mark off.
+    github.texts.set('c2:gen.ts', '// @generated\n')
+    github.texts.set('c3:gen.ts', 'export {}\n')
+    // The third commit first, which reads the second's text as its old side.
+    pullScope.value = { before: null, last: 'c3' }
+    await opened(pullAt('c3', { commits, commitCount: 3 }))
+    expect(shownFiles.value.map((shown) => shown.path)).toEqual(['gen.ts'])
+    pullScope.value = { before: null, last: 'c2' }
+    await flushPromises()
+    expect(shownFiles.value).toEqual([])
+    pullScope.value = null
+    await flushPromises()
+    expect(shownFiles.value.map((shown) => shown.path)).toEqual(['gen.ts'])
   })
 
   it("shows the newer head's checks when the older head's answer comes after", async () => {

@@ -92,7 +92,12 @@ interface Session {
   commitsRead: boolean
   textsDone: number
   textsTotal: number
-  /** Files whose new side's text marks them generated, by path. */
+  /**
+   * The files' new sides, by `commit:path`, with what their marks go by, and the marks of those whose text says they're
+   * generated. A mark goes with the text, by its blob, so a push that changes the file takes it off, one that leaves the
+   * file as it was keeps it, and a commit with another text doesn't share it.
+   */
+  newSides: Map<string, NewSide>
   marked: Set<string>
   showGenerated: boolean
   diffs: Map<string, FileDiff>
@@ -134,6 +139,7 @@ function newSession(ref: IssueRef, gh: GitHub): Session {
     commitsRead: false,
     textsDone: 0,
     textsTotal: 0,
+    newSides: new Map(),
     marked: shallowReactive(new Set()),
     showGenerated: false,
     diffs: new Map(),
@@ -337,6 +343,13 @@ function listCopy(ref: IssueRef): Item | undefined {
   return undefined
 }
 
+/** A file's new side as a mark of generated text goes by: its path, and its blob, whatever commit it's read at. */
+interface NewSide {
+  path: string
+  mark: string
+}
+const markOf = (file: { path: string; blob: string }) => `${file.blob} ${file.path}`
+
 /**
  * Reads the texts of the files a run's diff shows, or all the changes': each file's two sides, and in all the changes
  * its copy from the last visit, together, so the top of the page fills first.
@@ -347,7 +360,7 @@ function readTextsOf(s: Session, pull: Pull, files: PullFile[], run: Scope | nul
     pull,
     files.flatMap((file) => [
       { at: file.oldAt },
-      { at: file.newAt, path: file.path },
+      { at: file.newAt, side: { path: file.path, mark: markOf(file) } },
       { at: run ? null : visitedAt(s, file) },
     ]),
   )
@@ -357,8 +370,14 @@ function readTextsOf(s: Session, pull: Pull, files: PullFile[], run: Scope | nul
  * Reads the texts not asked for yet: a small first read, so the top of the page fills first, then the rest side by
  * side. A read that fails leaves its own files unreadable, not the whole diff. A file's new side may mark it generated.
  */
-async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null; path?: string }[]) {
-  const fresh = wanted.filter((each): each is { at: string; path?: string } => !!each.at && !s.asked.has(each.at))
+async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null; side?: NewSide }[]) {
+  // A file's new side may have been read already, as another diff's old side.
+  for (const { at, side } of wanted)
+    if (at && side && !s.newSides.has(at)) {
+      s.newSides.set(at, side)
+      markGenerated(s, at)
+    }
+  const fresh = wanted.filter((each): each is { at: string; side?: NewSide } => !!each.at && !s.asked.has(each.at))
   for (const { at } of fresh) s.asked.add(at)
   s.textsTotal += fresh.length
   const reads: (typeof fresh)[] = []
@@ -371,15 +390,22 @@ async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null
         pull.ref.repo,
         read.map((each) => each.at),
       )
-      read.forEach(({ at, path }, index) => {
+      read.forEach(({ at }, index) => {
         const { content, version } = answers[index]
         s.texts.set(at, content)
         if (version !== undefined) s.versions.set(at, version)
-        if (path && 'text' in content && isGenerated.value(path, content.text)) s.marked.add(path)
+        markGenerated(s, at)
       })
       s.textsDone += read.length
     }),
   )
+}
+
+/** Marks a file's new side generated, once its text is here, when the text says so. */
+function markGenerated(s: Session, at: string) {
+  const side = s.newSides.get(at)
+  const content = s.texts.get(at)
+  if (side && content && 'text' in content && isGenerated.value(side.path, content.text)) s.marked.add(side.mark)
 }
 
 /**
@@ -436,7 +462,7 @@ function toFiles(s: Session, found: Changes, head: string): PullFile[] {
   return found.files
     .map((file) => {
       const { old, new: next } = sides(file, found.mergeBase, head)
-      const generated = isGenerated.value(file.path) ?? s.marked.has(file.path)
+      const generated = isGenerated.value(file.path) ?? (next !== null && s.marked.has(markOf(file)))
       return { ...file, at: head, base: found.mergeBase, oldAt: old, newAt: next, generated }
     })
     .toSorted((a, b) => comparePaths(a.path, b.path))
