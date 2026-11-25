@@ -6,11 +6,13 @@ import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { columnWidth } from '@/components/pull/column'
+import { columnOpen } from '@/components/pull/parts'
 import ProtoSwitch from '@/components/pull/ProtoSwitch.vue'
 import PullLayout from '@/components/pull/PullLayout.vue'
 import { formatNumber } from '@/locale'
 import { problem, pull, reloadPull } from '@/stores/pull'
-import { openSettings } from '@/stores/ui'
+import { large, openSettings } from '@/stores/ui'
 import { activeView, leavePull, movePull, neighbors, openPull, viewName } from '@/stores/view'
 
 const { t } = useI18n()
@@ -23,7 +25,7 @@ const url = computed(
 </script>
 
 <template>
-  <div class="flex h-dvh flex-col bg-default">
+  <div class="enter flex h-dvh flex-col bg-default">
     <header class="flex h-12 shrink-0 items-center gap-1 border-b border-default bg-muted px-3">
       <UButton
         color="neutral"
@@ -103,14 +105,32 @@ const url = computed(
         />
       </div>
     </div>
-    <div v-else-if="!pull" class="mx-auto w-full max-w-5xl space-y-4 px-6 pt-8" aria-busy="true">
+    <!-- While it loads, the page is drawn in its own shape: the header, the strip and the column, and the diff. -->
+    <div v-else-if="!pull" class="flex min-h-0 flex-1 flex-col" aria-busy="true">
       <span class="sr-only">{{ t('pull.loading') }}</span>
-      <USkeleton class="h-8 w-3/4" />
-      <USkeleton class="h-4 w-1/2" />
-      <div class="space-y-2 pt-6">
-        <USkeleton v-for="n in 8" :key="n" class="h-3.5" :style="{ width: `${45 + ((n * 23) % 45)}%` }" />
+      <div class="space-y-3 border-b border-default px-4 py-3 sm:px-6" aria-hidden="true">
+        <USkeleton class="my-1.5 h-4 w-2/3 max-w-xl" />
+        <USkeleton class="h-6 w-1/2 max-w-md" />
+      </div>
+      <div class="flex min-h-0 flex-1" aria-hidden="true">
+        <template v-if="large">
+          <div class="w-12 shrink-0 border-e border-default bg-muted" />
+          <div v-if="columnOpen" class="shrink-0 border-e border-default" :style="{ width: `${columnWidth}px` }">
+            <div class="flex h-11 items-center border-b border-default px-4"><USkeleton class="h-3 w-24" /></div>
+            <div class="space-y-3 p-4">
+              <USkeleton v-for="n in 6" :key="n" class="h-3" :style="{ width: `${40 + ((n * 17) % 45)}%` }" />
+            </div>
+          </div>
+        </template>
+        <div class="min-w-0 flex-1">
+          <div class="flex h-11 items-center border-b border-default px-3 sm:px-4"><USkeleton class="h-6 w-40" /></div>
+          <div class="space-y-3 p-4 sm:px-6">
+            <USkeleton class="h-10" />
+            <USkeleton v-for="n in 8" :key="n" class="h-3" :style="{ width: `${45 + ((n * 23) % 45)}%` }" />
+          </div>
+        </div>
       </div>
     </div>
-    <PullLayout v-else />
+    <PullLayout v-else class="enter" />
   </div>
 </template>

@@ -154,7 +154,7 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
         {{ t('pull.generatedHidden', { n: formatNumber(generatedFiles.length) }, generatedFiles.length) }} ·
         <button
           type="button"
-          class="font-medium text-toned hover:text-highlighted hover:underline"
+          class="font-medium text-toned transition-colors hover:text-highlighted hover:underline"
           @click="showGenerated = true"
         >
           {{ t('issue.show') }}
@@ -163,7 +163,7 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
       <button
         v-else
         type="button"
-        class="font-medium text-toned hover:text-highlighted hover:underline"
+        class="font-medium text-toned transition-colors hover:text-highlighted hover:underline"
         @click="showGenerated = false"
       >
         {{ t('pull.hideGenerated', { n: formatNumber(generatedFiles.length) }, generatedFiles.length) }}

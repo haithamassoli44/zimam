@@ -134,7 +134,14 @@ const { gathering, failed } = gathered(() => repos.value.size)
 
       <div class="flex items-center gap-2 px-4 py-3 sm:px-6">
         <ChoiceGroup :label="t('filters.status.title')" :choices="statuses" :picked="isPicked" @pick="pick" />
-        <UButton v-if="filtered" color="neutral" variant="link" :label="t('filters.clear')" @click="clear" />
+        <UButton
+          v-if="filtered"
+          color="neutral"
+          variant="link"
+          class="enter"
+          :label="t('filters.clear')"
+          @click="clear"
+        />
       </div>
     </div>
 
@@ -167,7 +174,7 @@ const { gathering, failed } = gathered(() => repos.value.size)
         />
       </div>
 
-      <template v-else>
+      <div v-else class="enter">
         <div
           class="sticky top-0 z-10 hidden min-h-9 items-center border-b border-default bg-default px-6 py-1.5 text-xs leading-4 text-muted"
           :class="REPO_GRID"
@@ -205,7 +212,7 @@ const { gathering, failed } = gathered(() => repos.value.size)
           <h2 v-if="repoResult.rest.length" :class="GROUP">{{ t('repos.rest') }}</h2>
         </template>
         <RepoRow v-for="row in repoResult.rest" :key="row.repo.id" :row="row" />
-      </template>
+      </div>
       <p class="sr-only" aria-live="polite">{{ moved }}</p>
     </div>
   </div>

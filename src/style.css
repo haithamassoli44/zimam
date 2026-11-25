@@ -145,6 +145,47 @@ body {
   }
 }
 
+/* What takes the place of something else fades in: a page, a part of the pull request page, an issue once it's read.
+   The animation runs again whenever the element is added, or its `display: none` goes. `enter-aside` also comes a
+   little way in from the side it sits on, and `enter-below` up from below, unless motion is turned down. */
+.enter {
+  animation: enter 160ms var(--ease-out);
+}
+.enter-aside,
+.enter-below {
+  animation: enter 240ms var(--ease-out);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .enter-aside {
+    --enter-from: translateX(12px);
+    animation-name: enter-moved;
+    &:dir(rtl) {
+      --enter-from: translateX(-12px);
+    }
+  }
+  .enter-below {
+    --enter-from: translateY(4px);
+    animation-name: enter-moved;
+  }
+}
+@keyframes enter {
+  from {
+    opacity: 0;
+  }
+}
+/* Another theme or language crossfades in: see src/components/crossfade.ts. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+  animation-timing-function: var(--ease-out);
+}
+@keyframes enter-moved {
+  from {
+    opacity: 0;
+    transform: var(--enter-from);
+  }
+}
+
 /* The text of an issue or a comment: GitHub's HTML, cleaned by src/lib/clean.ts, in Zimam's type and colors. */
 .issue-text {
   font-size: 0.875rem;
@@ -531,14 +572,4 @@ body {
 }
 .diff-bars > div {
   scrollbar-width: thin;
-}
-
-/* A part of the pull request page fades in each time it shows: the animation runs again whenever `display: none` goes. */
-.part-in {
-  animation: part-in 160ms var(--ease-out);
-}
-@keyframes part-in {
-  from {
-    opacity: 0;
-  }
 }

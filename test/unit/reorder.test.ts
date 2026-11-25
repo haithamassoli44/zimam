@@ -6,7 +6,8 @@ import { useReorder } from '@/components/reorder'
 
 const HEIGHT = 40
 
-// Rows 40 pixels tall, one under the other, each drawn where its transform puts it. jsdom lays nothing out.
+// Rows 40 pixels tall, one under the other in a list at the top, each drawn where its transform puts it. jsdom lays
+// nothing out.
 function layOut() {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const rows = [...(this.parentElement?.children ?? [])]
@@ -15,6 +16,9 @@ function layOut() {
     return { top, bottom: top + HEIGHT, height: HEIGHT } as DOMRect
   })
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(HEIGHT)
+  vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+    return [...(this.parentElement?.children ?? [])].indexOf(this) * HEIGHT
+  })
 }
 
 function list() {

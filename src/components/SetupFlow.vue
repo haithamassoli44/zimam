@@ -166,7 +166,7 @@ function finish() {
 </script>
 
 <template>
-  <main class="min-h-dvh bg-default" :class="!workspace && 'lg:grid lg:grid-cols-2'">
+  <main class="enter min-h-dvh bg-default" :class="!workspace && 'lg:grid lg:grid-cols-2'">
     <div class="flex flex-col px-6 py-6 sm:px-12 lg:min-h-dvh lg:px-16">
       <header class="flex h-10 items-center justify-between">
         <BrandMark />
@@ -238,8 +238,15 @@ function finish() {
             :ui="{ leadingIcon: 'text-muted' }"
             @click="useGhToken"
           />
-          <UAlert v-if="tokenError" color="error" variant="subtle" icon="i-octicon-alert-16" :title="tokenError" />
-          <div v-if="viewer" class="flex items-center gap-2 text-sm text-toned">
+          <UAlert
+            v-if="tokenError"
+            class="enter"
+            color="error"
+            variant="subtle"
+            icon="i-octicon-alert-16"
+            :title="tokenError"
+          />
+          <div v-if="viewer" class="enter flex items-center gap-2 text-sm text-toned">
             <UAvatar :src="viewer.avatarUrl" :alt="viewer.login" size="2xs" />
             <span>{{ t('setup.readingAs', { login: viewer.name || viewer.login }) }}</span>
           </div>
@@ -252,7 +259,7 @@ function finish() {
           />
         </section>
 
-        <section v-if="viewer" class="mt-8 space-y-4 border-t border-default pt-8">
+        <section v-if="viewer" class="enter-below mt-8 space-y-4 border-t border-default pt-8">
           <h2 class="font-medium text-highlighted">{{ t('setup.sourcesStep') }}</h2>
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
@@ -338,7 +345,7 @@ function finish() {
           </form>
         </section>
 
-        <section v-if="viewer && picked.length" class="mt-8 space-y-4 border-t border-default pt-8">
+        <section v-if="viewer && picked.length" class="enter-below mt-8 space-y-4 border-t border-default pt-8">
           <h2 class="font-medium text-highlighted">{{ t('setup.nameStep') }}</h2>
           <UFormField :label="t('setup.nameLabel')" :ui="{ label: 'font-normal text-toned' }">
             <UInput v-model="name" :placeholder="defaultName" class="w-full" />

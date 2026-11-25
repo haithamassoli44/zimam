@@ -233,7 +233,9 @@ describe('Show more while the issue is read again', () => {
     await wrapper?.setProps({ issue: { repo: 'acme/web', number: 13 } })
     pages[0]?.answer()
     await flushPromises()
-    expect(wrapper?.find('h2').exists()).toBe(false)
+    // The last issue stays in sight while the next is read, but out of reach, and without what Show more brought.
+    expect(wrapper?.find('[inert]').exists()).toBe(true)
+    expect(comments()).toBe(PAGE)
   })
 })
 

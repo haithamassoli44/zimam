@@ -262,7 +262,7 @@
     "show": "Show",
     "more": "No more comments | Show 1 more comment | Show {n} more comments",
     "moreFailed": "Couldn't load more comments",
-    "readOnly": "Read-only here.",
+    "readOnly": "Read-only here",
     "reply": "Reply on GitHub",
     "video": "Watch the video on GitHub"
   },
@@ -290,6 +290,7 @@
   },
   "settings": {
     "title": "Settings",
+    "display": "Display",
     "language": "Language",
     "theme": "Theme",
     "themes": {

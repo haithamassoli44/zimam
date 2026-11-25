@@ -46,6 +46,16 @@ function move(by: -1 | 1) {
 }
 
 const thread = shallowRef<Thread | null>(null)
+// Going to another issue leaves the last one in sight, dimmed, while the next is read, so a quick read goes straight
+// from one to the other. Only a slow one shows the placeholder.
+const stale = ref(false)
+const STALE_MS = 400
+let staleTimer = 0
+function fresh(answer: Thread | null) {
+  clearTimeout(staleTimer)
+  thread.value = answer
+  stale.value = false
+}
 const problem = ref<'missing' | 'failed' | null>(null)
 const loadingMore = ref(false)
 const moreFailed = ref(false)
@@ -63,7 +73,9 @@ async function load(refresh: boolean, settle = 0) {
   const issue = props.issue
   const mine = ++ticket
   if (!refresh) {
-    thread.value = null
+    clearTimeout(staleTimer)
+    stale.value = thread.value !== null
+    if (stale.value) staleTimer = window.setTimeout(() => fresh(null), STALE_MS)
     problem.value = null
     moreTicket++
     loadingMore.value = false
@@ -88,7 +100,7 @@ async function load(refresh: boolean, settle = 0) {
       if (!answer.after || answer.comments.length >= shown) break
       answer = await moreComments(answer)
     }
-    thread.value = answer
+    fresh(answer)
     problem.value = null
     const from = focusFrom
     focusFrom = null
@@ -100,6 +112,7 @@ async function load(refresh: boolean, settle = 0) {
     if (mine !== ticket) return
     focusFrom = null
     if (refresh && thread.value) return
+    fresh(null)
     problem.value = error instanceof IssueMissing ? 'missing' : 'failed'
   }
 }
@@ -163,6 +176,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKey)
   // What's still to load is for a panel no longer there.
   ticket++
+  clearTimeout(staleTimer)
 })
 
 const state = computed(() => thread.value?.state ?? (listed.value ? stateOf(listed.value) : 'open'))
@@ -290,7 +304,15 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
         </div>
       </div>
 
-      <template v-else>
+      <!-- Each issue fades in. The last one, while the next is read, dims a moment later, so a quick read doesn't. -->
+      <div
+        v-else
+        :key="refKey(thread.ref)"
+        class="enter transition-opacity"
+        :class="stale && 'opacity-40 delay-150 duration-300'"
+        :inert="stale"
+        :aria-busy="stale || undefined"
+      >
         <div class="px-4 pt-5 pb-4 sm:px-6">
           <h2
             ref="heading"
@@ -364,7 +386,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
                   :href="post.url"
                   target="_blank"
                   rel="noopener"
-                  class="rounded-sm hover:text-toned hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+                  class="rounded-sm transition-colors hover:text-toned hover:underline focus-visible:outline-2 focus-visible:outline-primary"
                   >{{ ago(post.createdAt) }}</a
                 >
               </UTooltip>
@@ -392,17 +414,18 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           class="flex flex-wrap items-center gap-x-1.5 border-t border-default px-4 pt-4 pb-7 text-[13px] text-muted sm:px-6"
         >
           {{ t('issue.readOnly') }}
+          <span aria-hidden="true">·</span>
           <a
             :href="thread.url"
             target="_blank"
             rel="noopener"
-            class="inline-flex items-center gap-1 rounded-sm font-medium text-toned hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+            class="inline-flex items-center gap-1 rounded-sm font-medium text-toned transition-colors hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
           >
             {{ t('issue.reply') }}
             <UIcon name="i-octicon-link-external-16" class="size-4" />
           </a>
         </p>
-      </template>
+      </div>
     </div>
   </div>
 </template>

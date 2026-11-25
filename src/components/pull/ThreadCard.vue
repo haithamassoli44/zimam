@@ -41,7 +41,7 @@ const first = computed(() => props.thread.comments[0])
       <button
         v-if="props.where"
         type="button"
-        class="min-w-0 truncate font-mono text-toned hover:text-primary hover:underline"
+        class="min-w-0 truncate font-mono text-toned transition-colors hover:text-primary hover:underline"
         dir="ltr"
         @click="showThread(thread)"
       >

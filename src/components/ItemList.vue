@@ -1,16 +1,25 @@
+<script lang="ts">
+import type { VirtualItem } from '@tanstack/vue-virtual'
+
+// Where the list was scrolled to as it went, with the heights of the rows it had measured: back from a pull request or
+// the repositories, the same workspace, density and filters show the list where it was.
+let left = null as { key: string; offset: number; rows: VirtualItem[] } | null
+</script>
+
 <script setup lang="ts">
 import UButton from '@nuxt/ui/components/Button.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, onBeforeUnmount, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ItemRow, { ROW_HEIGHT } from '@/components/ItemRow.vue'
+import { EASE_OUT, still } from '@/components/motion'
 import SyncFailed from '@/components/SyncFailed.vue'
 import { sameRef } from '@/lib/refs'
 import { displayRepo, gathered, highlighted, issueRef, items, repos } from '@/stores/data'
-import { settings } from '@/stores/settings'
-import { isDefault, openIssue, query, resetFilters, result } from '@/stores/view'
+import { activeWorkspace, settings } from '@/stores/settings'
+import { activeView, isDefault, openIssue, query, resetFilters, result } from '@/stores/view'
 import type { Item } from '@/types'
 
 const { t } = useI18n()
@@ -30,6 +39,9 @@ function rowProps(item: Item) {
   }
 }
 
+const place = computed(() => `${activeWorkspace.value?.id} ${settings.density} ${query.value}`)
+const back = left?.key === place.value ? left : null
+
 const virtualizer = useVirtualizer(
   computed(() => ({
     count: rows.value.length,
@@ -37,8 +49,15 @@ const virtualizer = useVirtualizer(
     estimateSize: () => ROW_HEIGHT[settings.density],
     getItemKey: (index: number) => rows.value[index]?.id ?? index,
     overscan: 12,
+    initialOffset: back?.offset ?? 0,
+    initialMeasurementsCache: back?.rows ?? [],
   })),
 )
+
+onBeforeUnmount(() => {
+  const offset = scroller.value?.scrollTop ?? 0
+  left = { key: place.value, offset, rows: virtualizer.value.takeSnapshot() }
+})
 
 const virtualRows = computed(() => virtualizer.value.getVirtualItems())
 
@@ -47,6 +66,14 @@ function measure(element: unknown) {
 }
 
 watch(query, () => scroller.value?.scrollTo({ top: 0 }))
+
+// Another saved view fades in, rather than its rows taking the last one's places at once.
+watch(
+  () => activeView.value?.id,
+  (view) => {
+    if (view && !still()) scroller.value?.animate({ opacity: [0, 1] }, { duration: 160, easing: EASE_OUT })
+  },
+)
 
 // The issue that ↑ and ↓ in its panel move to stays in sight.
 watch(openIssue, (issue) => {
@@ -95,7 +122,7 @@ const { gathering, failed } = gathered(() => items.value.size)
       />
     </div>
 
-    <ul v-else class="relative" :style="{ height: `${virtualizer.getTotalSize()}px` }">
+    <ul v-else class="enter relative" :style="{ height: `${virtualizer.getTotalSize()}px` }">
       <li
         v-for="row in virtualRows"
         :key="String(row.key)"

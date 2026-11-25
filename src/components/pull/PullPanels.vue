@@ -15,14 +15,14 @@ defineProps<{ part: PullPart }>()
 
 <template>
   <div class="relative min-h-0 flex-1">
-    <div v-show="part === 'files'" class="part-in absolute inset-0">
+    <div v-show="part === 'files'" class="enter absolute inset-0">
       <FileTree :active="activeFile" @pick="showFile" />
     </div>
-    <div v-show="part === 'conversation'" class="part-in absolute inset-0 overflow-y-auto">
+    <div v-show="part === 'conversation'" class="enter absolute inset-0 overflow-y-auto">
       <PullStatus />
       <div class="border-t border-default"><PullTimeline /></div>
     </div>
-    <div v-show="part === 'commits'" class="part-in absolute inset-0 overflow-y-auto"><CommitList /></div>
-    <div v-show="part === 'checks'" class="part-in absolute inset-0 overflow-y-auto"><ChecksList /></div>
+    <div v-show="part === 'commits'" class="enter absolute inset-0 overflow-y-auto"><CommitList /></div>
+    <div v-show="part === 'checks'" class="enter absolute inset-0 overflow-y-auto"><ChecksList /></div>
   </div>
 </template>

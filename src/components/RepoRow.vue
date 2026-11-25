@@ -87,14 +87,15 @@ const label = (count: Shown) =>
   `${t(`repos.columns.${count.key}`)}: ${count.loading ? t('repos.loading') : formatNumber(count.count)}`
 const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-primary'
 
-// The pin and the link to GitHub sit by the name on narrow screens, and in a column of their own on wide ones. An
-// unpinned repository shows its pin on hover, and always on a touch screen. A pinned one's handle sits with them on
+// The pin and the link to GitHub sit by the name on narrow screens, and in a column of their own on wide ones. They show
+// on hover, and always on a touch screen, but a pinned repository's pin always shows. Its handle sits with them on
 // narrow screens, away from the edge, where a swipe would go back a page, and at the start of the row on wide ones.
 const BUTTON = { color: 'neutral', variant: 'ghost', size: 'xs' } as const
+const ON_HOVER = 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100'
 const pin = computed(() => ({
   ...BUTTON,
   icon: 'i-octicon-pin-16',
-  class: !pinned.value && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+  class: !pinned.value && ON_HOVER,
   'aria-label': t('repos.pinLabel', { name: repo.value.fullName }),
   'aria-pressed': pinned.value,
   ui: { leadingIcon: pinned.value ? 'text-highlighted' : 'text-muted' },
@@ -116,6 +117,7 @@ const link = computed(() => ({
   target: '_blank',
   rel: 'noopener',
   icon: 'i-octicon-link-external-16',
+  class: ON_HOVER,
   'aria-label': t('repos.onGitHub', { name: repo.value.fullName }),
   ui: { leadingIcon: 'text-muted' },
 }))

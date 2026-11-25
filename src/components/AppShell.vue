@@ -24,7 +24,7 @@ const { t } = useI18n()
     <PullPage />
     <SettingsPanel />
   </template>
-  <div v-else class="flex h-dvh">
+  <div v-else class="enter flex h-dvh">
     <aside class="hidden w-66 shrink-0 border-e border-default bg-muted lg:flex">
       <SideBar />
     </aside>
@@ -51,10 +51,10 @@ const { t } = useI18n()
         />
         <BrandMark />
       </header>
-      <ReposPage v-if="page === 'repos'" class="min-h-0 flex-1" />
+      <ReposPage v-if="page === 'repos'" class="enter min-h-0 flex-1" />
       <template v-else>
-        <FilterBar class="shrink-0" />
-        <ItemList class="min-h-0 flex-1" />
+        <FilterBar class="enter shrink-0" />
+        <ItemList class="enter min-h-0 flex-1" />
       </template>
     </main>
 

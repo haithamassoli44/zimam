@@ -84,7 +84,7 @@ watchPostEffect(() => {
       <aside
         v-if="large"
         v-show="columnOpen"
-        class="part-in flex shrink-0 flex-col border-e border-default"
+        class="enter flex shrink-0 flex-col border-e border-default"
         :style="{ width: `${columnWidth}px` }"
       >
         <PartHeading :part="pullPart">

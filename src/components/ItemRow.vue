@@ -118,7 +118,7 @@ watch(
     />
 
     <UTooltip :text="stateText">
-      <span class="relative flex shrink-0" :class="!compact && 'mt-1'">
+      <span class="relative flex shrink-0" :class="!compact && 'mt-1 self-start'">
         <UIcon :name="state.look.icon" class="size-4" :class="state.look.color" />
         <span
           v-if="conflicts"

@@ -194,13 +194,14 @@ const historyShown = computed(() => {
             v-if="lastView"
             color="neutral"
             variant="ghost"
-            class="hidden sm:inline-flex lg:@max-[47rem]:hidden"
+            class="enter hidden sm:inline-flex lg:@max-[47rem]:hidden"
             :label="t('views.update', { name: viewName(lastView) })"
             @click="updateView(lastView)"
           />
           <UButton
             color="neutral"
             icon="i-octicon-bookmark-16"
+            class="enter"
             :label="t('views.save')"
             :ui="{ label: 'hidden sm:block', leadingIcon: 'sm:hidden' }"
             @click="askToSave"
@@ -241,7 +242,14 @@ const historyShown = computed(() => {
         @toggle="(value) => toggle(facet, value)"
       />
 
-      <UButton v-if="!isDefault" color="neutral" variant="link" :label="t('filters.clear')" @click="resetFilters" />
+      <UButton
+        v-if="!isDefault"
+        color="neutral"
+        variant="link"
+        class="enter"
+        :label="t('filters.clear')"
+        @click="resetFilters"
+      />
 
       <span v-if="historyShown !== null" class="text-xs text-muted sm:ms-auto">{{
         t('results.historyLoading', { percent: historyShown })

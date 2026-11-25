@@ -164,11 +164,12 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
 
     <p class="flex flex-wrap items-center gap-x-1.5 border-t border-default px-4 pt-4 text-[13px] text-muted">
       {{ t('issue.readOnly') }}
+      <span aria-hidden="true">·</span>
       <a
         :href="pull.url"
         target="_blank"
         rel="noopener"
-        class="inline-flex items-center gap-1 font-medium text-toned hover:text-highlighted hover:underline"
+        class="inline-flex items-center gap-1 rounded-sm font-medium text-toned transition-colors hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
       >
         {{ t('pull.reviewOnGitHub') }}<UIcon name="i-octicon-link-external-16" class="size-4" />
       </a>

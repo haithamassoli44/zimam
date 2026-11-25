@@ -11,6 +11,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ChoiceGroup from '@/components/ChoiceGroup.vue'
+import { crossfade } from '@/components/motion'
 import { languageName, sides } from '@/locale'
 import { install, installed, installPrompt, manualInstall } from '@/pwa'
 import { deleteWorkspace, reloadWorkspace } from '@/stores/data'
@@ -36,19 +37,19 @@ const groups = computed(() => [
     key: 'language',
     choices: LOCALES.map((value) => ({ value, label: languageName(value), lang: value })),
     picked: (value: string) => settings.locale === value,
-    pick: (value: string) => (settings.locale = value as typeof settings.locale),
+    pick: (value: string) => crossfade(() => (settings.locale = value as typeof settings.locale)),
   },
   {
     key: 'theme',
     choices: THEMES.map((value) => ({ value, label: t(`settings.themes.${value}`) })),
     picked: (value: string) => settings.theme === value,
-    pick: (value: string) => (settings.theme = value as typeof settings.theme),
+    pick: (value: string) => crossfade(() => (settings.theme = value as typeof settings.theme)),
   },
   {
     key: 'density',
     choices: DENSITIES.map((value) => ({ value, label: t(`settings.densities.${value}`) })),
     picked: (value: string) => settings.density === value,
-    pick: (value: string) => (settings.density = value as typeof settings.density),
+    pick: (value: string) => crossfade(() => (settings.density = value as typeof settings.density)),
   },
 ])
 
@@ -124,28 +125,31 @@ async function upload(event: Event) {
 <template>
   <USlideover v-model:open="ui.settingsOpen" :title="t('settings.title')" :side="sides.end">
     <template #body>
+      <!-- Each section has a heading, and each setting in it a quieter name of its own. -->
       <div class="space-y-6">
-        <div v-for="group in groups" :key="group.key" class="space-y-2">
-          <p class="text-sm font-medium text-highlighted" aria-hidden="true">{{ t(`settings.${group.key}`) }}</p>
-          <ChoiceGroup
-            :label="t(`settings.${group.key}`)"
-            :choices="group.choices"
-            :picked="group.picked"
-            class="w-full *:flex-1 *:justify-center"
-            @pick="group.pick"
-          />
-        </div>
-
-        <fieldset class="space-y-2 pointer-coarse:space-y-0">
-          <legend class="mb-3 text-sm font-medium text-highlighted">{{ t('settings.rows') }}</legend>
-          <USwitch
-            v-for="part in ROW_PARTS"
-            :key="part"
-            v-model="settings.show[part]"
-            :label="t(`settings.parts.${part}`)"
-            :ui="{ root: 'items-center', label: 'pointer-coarse:py-3' }"
-          />
-        </fieldset>
+        <section class="space-y-4">
+          <h3 class="font-medium text-highlighted">{{ t('settings.display') }}</h3>
+          <div v-for="group in groups" :key="group.key" class="space-y-2">
+            <p class="text-sm text-toned" aria-hidden="true">{{ t(`settings.${group.key}`) }}</p>
+            <ChoiceGroup
+              :label="t(`settings.${group.key}`)"
+              :choices="group.choices"
+              :picked="group.picked"
+              class="w-full *:flex-1 *:justify-center"
+              @pick="group.pick"
+            />
+          </div>
+          <fieldset class="space-y-2 pointer-coarse:space-y-0">
+            <legend class="mb-2 text-sm text-toned">{{ t('settings.rows') }}</legend>
+            <USwitch
+              v-for="part in ROW_PARTS"
+              :key="part"
+              v-model="settings.show[part]"
+              :label="t(`settings.parts.${part}`)"
+              :ui="{ root: 'items-center', label: 'font-normal pointer-coarse:py-3' }"
+            />
+          </fieldset>
+        </section>
 
         <USeparator />
         <section class="space-y-4">

@@ -35,7 +35,7 @@ watch(
 <template>
   <aside
     v-if="wide && openIssue"
-    class="flex w-[clamp(28rem,36vw,35rem)] shrink-0 flex-col border-s border-default"
+    class="enter-aside flex w-[clamp(28rem,36vw,35rem)] shrink-0 flex-col border-s border-default"
     :aria-label="t('issue.title', { ref: formatRef(openIssue) })"
   >
     <IssueView :issue="openIssue" :opener="opener" docked />

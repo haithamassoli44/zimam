@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import UButton from '@nuxt/ui/components/Button.vue'
 
+import { crossfade } from '@/components/motion'
 import { languageName, otherLocale, switchLanguage } from '@/locale'
 </script>
 
@@ -11,6 +12,6 @@ import { languageName, otherLocale, switchLanguage } from '@/locale'
     :lang="otherLocale"
     :label="languageName(otherLocale)"
     :ui="{ base: 'px-2 text-toned' }"
-    @click="switchLanguage"
+    @click="crossfade(switchLanguage)"
   />
 </template>

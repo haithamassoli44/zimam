@@ -56,7 +56,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
             :href="post.url"
             target="_blank"
             rel="noopener"
-            class="rounded-sm hover:text-toned hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+            class="rounded-sm transition-colors hover:text-toned hover:underline focus-visible:outline-2 focus-visible:outline-primary"
             >{{ ago }}</a
           >
         </UTooltip>

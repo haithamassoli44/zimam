@@ -488,7 +488,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
       <div v-if="loose.length" class="border-b border-default bg-muted px-4 py-2 text-[13px]">
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 text-toned hover:text-highlighted"
+          class="inline-flex items-center gap-1.5 text-toned transition-colors hover:text-highlighted"
           @click="showLoose = !showLoose"
         >
           <UIcon
@@ -556,7 +556,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
                 />
                 <button
                   type="button"
-                  class="inline-flex items-center gap-1.5 px-2 hover:text-highlighted"
+                  class="inline-flex items-center gap-1.5 px-2 transition-colors hover:text-highlighted"
                   @click="expand(row, 'all')"
                 >
                   <UIcon name="i-octicon-unfold-16" class="size-4" />
