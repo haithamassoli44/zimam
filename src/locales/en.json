@@ -511,6 +511,7 @@
     "whitespaceHelp": "Hide changes in spacing alone",
     "changesFailed": "Couldn't read the changed files.",
     "end": "That's every file.",
+    "noEnd": "No newline at end of file",
     "previousFile": "Previous file",
     "nextFile": "Next file",
     "viewedNext": "Viewed, next",

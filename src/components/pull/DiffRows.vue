@@ -100,8 +100,14 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
               :class="[piece.changed && 'diff-word', piece.italic && 'italic', piece.bold && 'font-medium']"
               :style="piece.color ? { color: piece.color } : undefined"
               >{{ piece.text }}</span
-            ></span
-          >
+            ><span
+              v-if="cell.line?.noEnd"
+              role="img"
+              class="ms-1.5 inline-flex align-[-2px] text-error"
+              :aria-label="t('pull.noEnd')"
+              :title="t('pull.noEnd')"
+              ><UIcon name="i-octicon-no-entry-16" class="size-3.5" /></span
+          ></span>
         </div>
       </template>
       <div

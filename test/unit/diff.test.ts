@@ -30,6 +30,36 @@ describe('diffFiles', () => {
     expect(added.text.slice(added.words![0].from, added.words![0].to)).toBe('12')
   })
 
+  it('shows a change to the line end after the last line, and marks the side without one', () => {
+    const removed = diffFiles({ old: 'hello\n', new: 'hello', ignoreSpace: false })
+    expect(kinds(removed.lines)).toEqual(['d1:', 'a:1'])
+    expect([removed.additions, removed.deletions, removed.changes]).toEqual([1, 1, [0]])
+    expect(removed.lines.map((line) => [line.text, line.noEnd])).toEqual([
+      ['hello', undefined],
+      ['hello', true],
+    ])
+    const added = diffFiles({ old: 'a\nhello', new: 'a\nhello\n' })
+    expect(kinds(added.lines)).toEqual(['s1:1', 'd2:', 'a:2'])
+    expect(added.lines.map((line) => line.noEnd)).toEqual([undefined, true, undefined])
+  })
+
+  it('marks only changed last lines without a line end, and ignores the line end with white space', () => {
+    expect(diffFiles({ old: 'a\nb', new: 'a\nb' }).lines.some((line) => line.noEnd)).toBe(false)
+    const changed = diffFiles({ old: 'a\nb', new: 'a\nc' })
+    expect(changed.lines.map((line) => [line.kind, line.text, line.noEnd])).toEqual([
+      ['same', 'a', undefined],
+      ['del', 'b', true],
+      ['add', 'c', true],
+    ])
+    expect(diffFiles({ old: 'hello\n', new: 'hello', ignoreSpace: true }).changes).toEqual([])
+    expect(diffFiles({ old: '', new: '' }).lines).toEqual([])
+  })
+
+  it('counts a line end removed since the last visit as new', () => {
+    const diff = diffFiles({ old: 'hello\n', new: 'hello', visited: 'hello\n' })
+    expect(diff.lines.find((line) => line.kind === 'add')?.seen).toBe(false)
+  })
+
   it('shows lines without their Windows line end, but a change of line ends still shows', () => {
     const same = diffFiles({ old: 'a\r\nb\r\n', new: 'a\r\nc\r\n' })
     expect(same.lines.map((line) => line.text)).toEqual(['a', 'b', 'c'])
