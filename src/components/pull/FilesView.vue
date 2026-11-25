@@ -28,8 +28,10 @@ import {
   canTick,
   commitSteps,
   fileMode,
+  filesCapped,
   filesState,
   freshFile,
+  pull,
   scope,
   setFileMode,
   shownFiles,
@@ -296,6 +298,9 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
     >
       <ScopeCard v-if="scope" />
       <SinceVisit v-else @first="firstNew" />
+      <p v-if="!scope && filesCapped && pull" class="border-b border-default px-4 py-2 text-[12px] text-muted sm:px-6">
+        {{ t('pull.capped', { n: formatNumber(pull.changedFiles) }) }}
+      </p>
       <div v-if="filesState === 'failed'" class="px-6 py-16 text-center text-toned">{{ t('pull.changesFailed') }}</div>
       <div v-else-if="filesState === 'loading'" class="space-y-3 px-6 py-8" aria-busy="true">
         <USkeleton v-for="n in 4" :key="n" class="h-10" />
@@ -307,7 +312,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
       <template v-else-if="!one">
         <FileDiff v-for="file in mountedFiles" :key="diffKey(file.path)" :file="file" />
         <p v-if="mountedFiles.length === shownFiles.length" class="px-6 py-10 text-center text-[13px] text-muted">
-          {{ t('pull.end') }}
+          {{ filesCapped ? t('pull.cappedEnd') : t('pull.end') }}
         </p>
       </template>
 

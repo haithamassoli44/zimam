@@ -85,6 +85,7 @@ function pullAt(head: string, extra: Partial<Pull> = {}): Pull {
     files: [],
     entries: [],
     threads: [],
+    cut: false,
     ...extra,
   }
 }

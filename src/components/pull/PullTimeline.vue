@@ -138,6 +138,7 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
       </p>
     </template>
 
+    <p v-if="pull.cut" class="border-t border-default px-4 py-4 text-[13px] text-muted">{{ t('pull.cut') }}</p>
     <p class="flex flex-wrap items-center gap-x-1.5 border-t border-default px-4 pt-4 text-[13px] text-muted">
       {{ t('issue.readOnly') }}
       <span aria-hidden="true">·</span>

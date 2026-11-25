@@ -126,8 +126,8 @@ const PULL = `
     }
   }`
 
-/** The rest of one of the pull request's lists, a page at a time, as far as its limit. */
-async function restOf(gh: GitHub, id: string, list: List, first: Raw): Promise<Raw[]> {
+/** The rest of one of the pull request's lists, a page at a time, as far as its limit, and whether that was all. */
+async function restOf(gh: GitHub, id: string, list: List, first: Raw): Promise<{ nodes: Raw[]; all: boolean }> {
   const query = `query($id: ID!, $after: String!) { node(id: $id) { ... on PullRequest { ${page(list, true)} } } }`
   const nodes: Raw[] = [...first.nodes]
   let at = first.pageInfo
@@ -136,7 +136,7 @@ async function restOf(gh: GitHub, id: string, list: List, first: Raw): Promise<R
     nodes.push(...next.nodes)
     at = next.pageInfo
   }
-  return nodes.filter(Boolean)
+  return { nodes: nodes.filter(Boolean), all: !at.hasNextPage }
 }
 
 export interface Commit {
@@ -244,6 +244,8 @@ export interface Pull {
   files: ChangedFileSummary[]
   entries: Entry[]
   threads: ReviewThread[]
+  /** Whether its conversation or its review threads go on past what is read of them, the latest left out. */
+  cut: boolean
 }
 
 type Raw = any // The raw answer isn't typed field by field.
@@ -377,7 +379,7 @@ export async function readPull(gh: GitHub, ref: IssueRef, onHeads?: (heads: Pull
   const [timeline, threadNodes, files] = await Promise.all(
     (['timelineItems', 'reviewThreads', 'files'] as const).map((list) => restOf(gh, raw.id, list, raw[list])),
   )
-  const threads = threadNodes.map(toThread)
+  const threads = threadNodes.nodes.map(toThread)
 
   return {
     id: raw.id,
@@ -412,8 +414,9 @@ export async function readPull(gh: GitHub, ref: IssueRef, onHeads?: (heads: Pull
     })),
     commits: (raw.commits.nodes as Raw[]).map((node) => toCommit(node.commit)),
     commitCount: raw.commits.totalCount,
-    files: files.map((file) => ({ path: file.path, viewedOnGitHub: file.viewerViewedState })),
-    entries: toEntries(timeline, threads),
+    files: files.nodes.map((file) => ({ path: file.path, viewedOnGitHub: file.viewerViewedState })),
+    entries: toEntries(timeline.nodes, threads),
     threads,
+    cut: !timeline.all || !threadNodes.all,
   }
 }
