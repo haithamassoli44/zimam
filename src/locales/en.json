@@ -52,6 +52,7 @@
     "loading": "Gathering your contributions from GitHub…",
     "failed": "Couldn't load your contributions",
     "none": "GitHub lists no contributions this token can read",
+    "noneRead": "No contributions this token can read in what Zimam read. There may be more beyond it.",
     "reposCut": "Some repositories may be missing: GitHub lists only your 100 most recent of some kinds of contribution, or you opened more than Zimam reads.",
     "countsCut": "You opened more than the latest 1,000 pull requests or issues Zimam reads, so the counts marked + or “at least” may be higher.",
     "search": "Search repositories and descriptions",

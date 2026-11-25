@@ -135,9 +135,11 @@ export interface Discovery {
   countsCut: OpenedKind[]
 }
 
-// An error about a repository the token can't read is under `nodes`, and that repository is only left out. Any other
-// error means a list wasn't read at all.
-const listFailed = (errors: QueryError[]) => errors.some((error) => !error.path?.includes('nodes'))
+// A repository the token may not read, or that is gone, is only left out: GitHub says so under `nodes`. Any other
+// error, about a list or an item in it, means something wasn't read that should have been.
+const LEFT_OUT = new Set(['FORBIDDEN', 'NOT_FOUND'])
+const unread = (errors: QueryError[]) =>
+  errors.some((error) => !(LEFT_OUT.has(error.type ?? '') && error.path?.includes('nodes')))
 
 /**
  * The repositories someone contributed to, that the token can read. GitHub lists the recent ones by kind of
@@ -149,7 +151,7 @@ export async function contributionsOf(gh: GitHub, login: string, signal?: AbortS
     signal?.throwIfAborted()
     const answer = await gh.request<T>(text, variables)
     signal?.throwIfAborted()
-    if (listFailed(answer.errors)) throw new GitHubError(answer.errors[0].message, 'query')
+    if (unread(answer.errors)) throw new GitHubError(answer.errors[0].message, 'query')
     return answer.data
   }
   const found = new Map<string, Contribution>()

@@ -186,6 +186,41 @@ describe('contributionsOf', () => {
     expect(contributions.map((found) => [found.repo.fullName, found.issues])).toEqual([['acme/web', 1]])
   })
 
+  // Where GitHub would say a repository can't be read: in the recent list, and in the history.
+  const NODE_ERRORS: { where: string; story: Story; call: string; path: (string | number)[] }[] = [
+    {
+      where: 'recent',
+      story: { recent: { commit: [null, raw('acme/web')] } },
+      call: 'recent',
+      path: ['user', 'commit', 'nodes', 0],
+    },
+    {
+      where: 'history',
+      story: {
+        opened: { pullRequests: [[at('2026-01-01T00:00:00Z', null), at('2026-02-01T00:00:00Z', raw('acme/web'))]] },
+      },
+      call: 'pullRequests:0',
+      path: ['user', 'list', 'nodes', 0, 'repository'],
+    },
+  ]
+  const told = ({ story, call, path }: (typeof NODE_ERRORS)[number], type: string) =>
+    github({ ...story, errors: { [call]: [{ type, message: type, path }] } })
+
+  it.each(
+    NODE_ERRORS.flatMap((place) => ['FORBIDDEN', 'NOT_FOUND'].map((type) => [place.where, type, place] as const)),
+  )('leaves out a repository the %s list says is %s, and reads on', async (_, type, place) => {
+    const { contributions, reposCut, countsCut } = await contributionsOf(told(place, type), 'ali')
+    expect(contributions.map((found) => found.repo.fullName)).toEqual(['acme/web'])
+    expect({ reposCut, countsCut }).toEqual({ reposCut: false, countsCut: [] })
+  })
+
+  it.each(NODE_ERRORS.map((place) => [place.where, place] as const))(
+    'fails, to try again, on an unexpected error about an item in the %s list',
+    async (_, place) => {
+      await expect(contributionsOf(told(place, 'INTERNAL'), 'ali')).rejects.toMatchObject({ kind: 'query' })
+    },
+  )
+
   it('asks for no more pages once stopped, and gives nothing', async () => {
     const page = [at('2026-01-01T00:00:00Z', raw('acme/web'))]
     const { promise: pending, resolve: release } = deferred()

@@ -168,9 +168,12 @@ const lastOpened = (entry: Contribution) =>
         <USkeleton v-for="index in 5" :key="index" class="h-4" :style="{ width: `${30 + ((index * 17) % 40)}%` }" />
       </div>
     </div>
-    <p v-else-if="!entries.length" class="py-6 text-center text-sm text-muted">{{ t('contrib.none') }}</p>
     <template v-else>
-      <dl class="enter grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <!-- Nothing found in a cut read may only mean nothing found yet, so the notices show either way. -->
+      <p v-if="!entries.length" class="py-6 text-center text-sm text-muted">
+        {{ t(reposCut ? 'contrib.noneRead' : 'contrib.none') }}
+      </p>
+      <dl v-else class="enter grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div
           v-for="stat in [
             { key: 'repos', icon: 'i-octicon-repo-16', value: totals.repos, capped: reposCut },
@@ -193,146 +196,150 @@ const lastOpened = (entry: Contribution) =>
       <p v-if="reposCut" class="text-xs text-muted">{{ t('contrib.reposCut') }}</p>
       <p v-if="countsCut.length" class="text-xs text-muted">{{ t('contrib.countsCut') }}</p>
 
-      <div class="flex flex-wrap items-center gap-2">
-        <UInput
-          v-model="filters.q"
-          icon="i-octicon-search-16"
-          :placeholder="t('contrib.search')"
-          :aria-label="t('contrib.search')"
-          class="min-w-40 flex-1"
-        />
-        <UDropdownMenu :items="sortItems" :content="{ align: 'end' }">
-          <UButton
-            color="neutral"
-            variant="ghost"
-            icon="i-octicon-sort-desc-16"
-            :label="t(`contrib.sorts.${filters.sort}`)"
-            :aria-label="t('filters.sort')"
-            :ui="{ base: 'text-toned', leadingIcon: 'text-muted' }"
+      <template v-if="entries.length">
+        <div class="flex flex-wrap items-center gap-2">
+          <UInput
+            v-model="filters.q"
+            icon="i-octicon-search-16"
+            :placeholder="t('contrib.search')"
+            :aria-label="t('contrib.search')"
+            class="min-w-40 flex-1"
           />
-        </UDropdownMenu>
-      </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <ChoiceGroup
-          :label="t('contrib.kindsTitle')"
-          :choices="kinds"
-          :picked="(value) => filters.kinds.includes(value as ContributionKind)"
-          @pick="filters.kinds = toggleIn(filters.kinds, $event as ContributionKind)"
-        />
-        <FacetMenu
-          v-if="owners.length > 1 || filters.owners.length"
-          :title="t('filters.owner.title')"
-          :options="owners"
-          :picked="filters.owners"
-          @toggle="filters.owners = toggleIn(filters.owners, $event)"
-        />
-        <ChoiceGroup
-          :label="t('filters.status.title')"
-          :choices="statuses"
-          :picked="(value) => filters.status.includes(value as RepoStatus)"
-          @pick="toggleStatus(filters, $event as RepoStatus)"
-        />
-        <UButton
-          v-if="filtered"
-          color="neutral"
-          variant="link"
-          size="sm"
-          :label="t('filters.clear')"
-          @click="resetFilters"
-        />
-      </div>
+          <UDropdownMenu :items="sortItems" :content="{ align: 'end' }">
+            <UButton
+              color="neutral"
+              variant="ghost"
+              icon="i-octicon-sort-desc-16"
+              :label="t(`contrib.sorts.${filters.sort}`)"
+              :aria-label="t('filters.sort')"
+              :ui="{ base: 'text-toned', leadingIcon: 'text-muted' }"
+            />
+          </UDropdownMenu>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <ChoiceGroup
+            :label="t('contrib.kindsTitle')"
+            :choices="kinds"
+            :picked="(value) => filters.kinds.includes(value as ContributionKind)"
+            @pick="filters.kinds = toggleIn(filters.kinds, $event as ContributionKind)"
+          />
+          <FacetMenu
+            v-if="owners.length > 1 || filters.owners.length"
+            :title="t('filters.owner.title')"
+            :options="owners"
+            :picked="filters.owners"
+            @toggle="filters.owners = toggleIn(filters.owners, $event)"
+          />
+          <ChoiceGroup
+            :label="t('filters.status.title')"
+            :choices="statuses"
+            :picked="(value) => filters.status.includes(value as RepoStatus)"
+            @pick="toggleStatus(filters, $event as RepoStatus)"
+          />
+          <UButton
+            v-if="filtered"
+            color="neutral"
+            variant="link"
+            size="sm"
+            :label="t('filters.clear')"
+            @click="resetFilters"
+          />
+        </div>
 
-      <div
-        class="enter max-h-96 overflow-y-auto rounded-md border border-default"
-        role="group"
-        :aria-label="t('contrib.title')"
-      >
-        <label
-          v-for="entry in shown"
-          :key="entry.repo.id"
-          class="flex cursor-pointer items-start gap-3 border-b border-default px-3 py-2.5 transition-colors last:border-b-0 hover:bg-elevated/50"
-          :class="broughtBy(entry.repo) && 'cursor-default'"
+        <div
+          class="enter max-h-96 overflow-y-auto rounded-md border border-default"
+          role="group"
+          :aria-label="t('contrib.title')"
         >
-          <UCheckbox
-            class="mt-0.5"
-            :model-value="isPicked(entry.repo) || !!broughtBy(entry.repo)"
-            :disabled="!!broughtBy(entry.repo)"
-            @update:model-value="tick(entry.repo, $event)"
-          />
-          <UAvatar :src="entry.repo.ownerAvatar" :alt="entry.repo.owner" size="2xs" class="mt-0.5" />
-          <span class="min-w-0 flex-1">
-            <span class="flex min-w-0 items-center gap-2">
-              <bdi class="min-w-0 truncate text-sm text-highlighted" dir="ltr">
-                <span class="text-toned">{{ entry.repo.owner }}/</span>{{ entry.repo.name }}
-              </bdi>
-              <UIcon
-                v-if="entry.repo.isPrivate"
-                name="i-octicon-lock-16"
-                class="size-3.5 shrink-0 text-muted"
-                :aria-label="t('contrib.private')"
-              />
-              <span
-                v-if="entry.repo.isArchived"
-                class="inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
-                >{{ t('item.archived') }}</span
-              >
-              <span
-                v-if="broughtBy(entry.repo)"
-                class="inline-flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 text-xs text-primary"
-                >{{ t('contrib.via', { name: broughtBy(entry.repo) }) }}</span
-              >
-            </span>
-            <span v-if="entry.repo.description" class="mt-0.5 block truncate text-xs text-muted" dir="auto">{{
-              entry.repo.description
-            }}</span>
-            <span class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-toned">
-              <span class="flex items-center gap-1.5" :title="kindsText(entry)">
-                <UIcon v-for="kind in entry.kinds" :key="kind" :name="ICONS[kind]" class="size-3.5 text-muted" />
-                <span class="sr-only">{{ kindsText(entry) }}</span>
-              </span>
-              <span v-if="entry.prs" class="tabular-nums">{{ count('pr', entry.prs) }}</span>
-              <span v-if="entry.issues" class="tabular-nums">{{ count('issue', entry.issues) }}</span>
-              <span v-if="entry.repo.language" class="flex items-center gap-1">
-                <span
-                  class="size-2 rounded-full"
-                  :style="{ background: entry.repo.language.color ?? 'currentColor' }"
-                  aria-hidden="true"
+          <label
+            v-for="entry in shown"
+            :key="entry.repo.id"
+            class="flex cursor-pointer items-start gap-3 border-b border-default px-3 py-2.5 transition-colors last:border-b-0 hover:bg-elevated/50"
+            :class="broughtBy(entry.repo) && 'cursor-default'"
+          >
+            <UCheckbox
+              class="mt-0.5"
+              :model-value="isPicked(entry.repo) || !!broughtBy(entry.repo)"
+              :disabled="!!broughtBy(entry.repo)"
+              @update:model-value="tick(entry.repo, $event)"
+            />
+            <UAvatar :src="entry.repo.ownerAvatar" :alt="entry.repo.owner" size="2xs" class="mt-0.5" />
+            <span class="min-w-0 flex-1">
+              <span class="flex min-w-0 items-center gap-2">
+                <bdi class="min-w-0 truncate text-sm text-highlighted" dir="ltr">
+                  <span class="text-toned">{{ entry.repo.owner }}/</span>{{ entry.repo.name }}
+                </bdi>
+                <UIcon
+                  v-if="entry.repo.isPrivate"
+                  name="i-octicon-lock-16"
+                  class="size-3.5 shrink-0 text-muted"
+                  :aria-label="t('contrib.private')"
                 />
-                {{ entry.repo.language.name }}
+                <span
+                  v-if="entry.repo.isArchived"
+                  class="inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
+                  >{{ t('item.archived') }}</span
+                >
+                <span
+                  v-if="broughtBy(entry.repo)"
+                  class="inline-flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 text-xs text-primary"
+                  >{{ t('contrib.via', { name: broughtBy(entry.repo) }) }}</span
+                >
               </span>
-              <span v-if="entry.lastAt" class="text-muted">{{ lastOpened(entry) }}</span>
+              <span v-if="entry.repo.description" class="mt-0.5 block truncate text-xs text-muted" dir="auto">{{
+                entry.repo.description
+              }}</span>
+              <span class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-toned">
+                <span class="flex items-center gap-1.5" :title="kindsText(entry)">
+                  <UIcon v-for="kind in entry.kinds" :key="kind" :name="ICONS[kind]" class="size-3.5 text-muted" />
+                  <span class="sr-only">{{ kindsText(entry) }}</span>
+                </span>
+                <span v-if="entry.prs" class="tabular-nums">{{ count('pr', entry.prs) }}</span>
+                <span v-if="entry.issues" class="tabular-nums">{{ count('issue', entry.issues) }}</span>
+                <span v-if="entry.repo.language" class="flex items-center gap-1">
+                  <span
+                    class="size-2 rounded-full"
+                    :style="{ background: entry.repo.language.color ?? 'currentColor' }"
+                    aria-hidden="true"
+                  />
+                  {{ entry.repo.language.name }}
+                </span>
+                <span v-if="entry.lastAt" class="text-muted">{{ lastOpened(entry) }}</span>
+              </span>
             </span>
-          </span>
-        </label>
-        <p v-if="!shown.length" class="px-3 py-6 text-center text-sm text-muted">{{ t('filters.nothing') }}</p>
-      </div>
+          </label>
+          <p v-if="!shown.length" class="px-3 py-6 text-center text-sm text-muted">{{ t('filters.nothing') }}</p>
+        </div>
 
-      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
-        <span class="text-toned">
-          {{ t('contrib.pickedCount', { n: formatNumber(pickedHere.length) }, pickedHere.length) }}
-          <span v-if="hidden" class="text-muted">· {{ t('contrib.hidden', { n: formatNumber(hidden) }, hidden) }}</span>
-        </span>
-        <span class="flex items-center gap-3">
-          <UButton
-            color="neutral"
-            variant="link"
-            size="sm"
-            class="p-0"
-            :disabled="!addable.length"
-            :label="t('contrib.pickShown', { n: formatNumber(addable.length) }, addable.length)"
-            @click="tickShown"
-          />
-          <UButton
-            color="neutral"
-            variant="link"
-            size="sm"
-            class="p-0"
-            :disabled="!pickedHere.length"
-            :label="t('setup.clearPicked')"
-            @click="clearHere"
-          />
-        </span>
-      </div>
+        <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+          <span class="text-toned">
+            {{ t('contrib.pickedCount', { n: formatNumber(pickedHere.length) }, pickedHere.length) }}
+            <span v-if="hidden" class="text-muted"
+              >· {{ t('contrib.hidden', { n: formatNumber(hidden) }, hidden) }}</span
+            >
+          </span>
+          <span class="flex items-center gap-3">
+            <UButton
+              color="neutral"
+              variant="link"
+              size="sm"
+              class="p-0"
+              :disabled="!addable.length"
+              :label="t('contrib.pickShown', { n: formatNumber(addable.length) }, addable.length)"
+              @click="tickShown"
+            />
+            <UButton
+              color="neutral"
+              variant="link"
+              size="sm"
+              class="p-0"
+              :disabled="!pickedHere.length"
+              :label="t('setup.clearPicked')"
+              @click="clearHere"
+            />
+          </span>
+        </div>
+      </template>
     </template>
   </div>
 </template>
