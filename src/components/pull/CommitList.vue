@@ -1,18 +1,19 @@
 <script setup lang="ts">
-// PROTOTYPE: the pull request's commits, newest last, with their checks and what's new since the last visit. Picking one
+// The pull request's commits, newest last, with their checks and what's new since the last visit. Picking one
 // shows its changes alone in the diff, and Shift picks the run from the one picked before. All the changes come first.
-import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { useI18n } from 'vue-i18n'
 
 import { roving } from '@/components/keys'
+import LineCounts from '@/components/LineCounts.vue'
 import { CHECK_LOOKS } from '@/components/looks'
 import PersonLink from '@/components/PersonLink.vue'
-import { sheetOpen } from '@/components/pull/parts'
-import { formatNumber, fullDate, relativeTime } from '@/locale'
-import { now } from '@/stores/clock'
-import { isFresh, pull, scope, showAllChanges, showCommits, totals } from '@/stores/pull'
+import { toDiff } from '@/components/pull/navigation'
+import SkeletonLines from '@/components/SkeletonLines.vue'
+import TimeAgo from '@/components/TimeAgo.vue'
+import { commitUrl } from '@/lib/refs'
+import { formatNumber } from '@/locale'
+import { freshCommit, pull, scope, showAllChanges, showCommits, totals } from '@/stores/pull'
 
 const { t } = useI18n()
 
@@ -31,21 +32,21 @@ function pick(index: number, event: MouseEvent) {
   } else {
     anchor = index
     showCommits(index)
-    // On a phone the sheet gives way to the diff, as a file picked from the tree does.
-    sheetOpen.value = false
+    toDiff()
   }
 }
 function all() {
   anchor = null
   showAllChanges()
-  sheetOpen.value = false
+  toDiff()
 }
 const arrows = roving('button[aria-pressed]')
 const picked = (index: number) => !!scope.value && index >= scope.value.from && index <= scope.value.to
 </script>
 
 <template>
-  <ul v-if="pull" class="pb-6 text-[13px]" @keydown="arrows">
+  <SkeletonLines v-if="!pull" :lines="8" :label="t('pull.loading')" class="p-4" />
+  <ul v-else class="pb-6 text-[13px]" @keydown="arrows">
     <li
       class="relative flex items-center gap-3 border-b border-default px-4 py-3 transition-colors"
       :class="!scope ? PICKED : 'hover:bg-elevated/60'"
@@ -55,9 +56,7 @@ const picked = (index: number) => !!scope.value && index >= scope.value.from && 
         <span class="block font-medium text-highlighted">{{ t('pull.scope.all') }}</span>
         <span class="text-muted">
           {{ t('pull.filesCount', { n: formatNumber(totals.files) }, totals.files) }}
-          <span class="ms-1 font-mono text-[12px] tabular-nums" dir="ltr"
-            >+{{ formatNumber(totals.additions) }} −{{ formatNumber(totals.deletions) }}</span
-          >
+          <LineCounts :additions="totals.additions" :deletions="totals.deletions" class="ms-1 text-[12px]" />
         </span>
       </button>
     </li>
@@ -68,28 +67,25 @@ const picked = (index: number) => !!scope.value && index >= scope.value.from && 
       :class="picked(index) ? PICKED : 'hover:bg-elevated/60'"
     >
       <span
-        v-if="isFresh(commit.at)"
+        v-if="freshCommit(commit)"
         class="absolute start-1.5 top-5 size-1.5 rounded-full bg-primary"
         aria-hidden="true"
       />
       <PersonLink
-        :who="commit.author.login ? commit.author : null"
-        :label="commit.author.login ?? commit.author.name"
+        :who="commit.author"
+        picture="2xs"
+        :name="false"
         tabindex="-1"
         class="relative z-1 mt-0.5 flex shrink-0 rounded-full"
-      >
-        <UAvatar :src="commit.author.avatarUrl" alt="" size="2xs" />
-      </PersonLink>
+      />
       <button type="button" :class="COVER" :aria-pressed="picked(index)" @click="pick(index, $event)">
         <bdi class="line-clamp-2 font-medium text-highlighted" dir="auto">{{ commit.headline }}</bdi>
         <span class="text-muted">
           <template v-if="commit.author.login !== pull.post.author?.login"
             ><bdi>{{ commit.author.login ?? commit.author.name }}</bdi> ·
           </template>
-          <UTooltip :text="fullDate(commit.at)"
-            ><span>{{ relativeTime(Date.parse(commit.at), now) }}</span></UTooltip
-          >
-          <span v-if="isFresh(commit.at)" class="ms-1 font-medium text-primary">{{ t('pull.new') }}</span>
+          <TimeAgo :at="commit.at" />
+          <span v-if="freshCommit(commit)" class="ms-1 font-medium text-primary">{{ t('pull.new') }}</span>
         </span>
       </button>
       <UIcon
@@ -99,11 +95,11 @@ const picked = (index: number) => !!scope.value && index >= scope.value.from && 
         :class="CHECK_LOOKS[commit.checks].color"
       />
       <a
-        :href="`https://github.com/${pull.ref.repo}/pull/${pull.ref.number}/commits/${commit.oid}`"
+        :href="commitUrl(pull.ref, commit.oid)"
         target="_blank"
         rel="noopener"
         :aria-label="t('pull.scope.onGitHub', { sha: commit.short })"
-        class="relative z-1 shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[12px] text-toned ring-1 ring-default transition-colors ring-inset hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary"
+        class="relative z-1 shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[12px] text-toned ring-1 ring-default focus-ring transition-colors ring-inset hover:text-highlighted"
         >{{ commit.short }}</a
       >
     </li>

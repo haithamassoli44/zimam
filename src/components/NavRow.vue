@@ -11,7 +11,7 @@ const emit = defineEmits<{ pick: [] }>()
   <div class="group relative">
     <button
       type="button"
-      class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-start text-sm transition-colors focus-visible:outline-2 focus-visible:outline-primary pointer-coarse:h-11"
+      class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-start text-sm focus-ring transition-colors pointer-coarse:h-11"
       :class="[
         active
           ? 'bg-elevated font-medium text-highlighted ring-1 ring-default ring-inset'

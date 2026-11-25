@@ -1,9 +1,10 @@
-// PROTOTYPE: where the open pull request stands on review, on its checks and on merging, in words and looks. The
+// Where the open pull request stands on review, on its checks and on merging, in words and looks. The
 // header's pills, the side bar and the conversation say it the same way.
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { CHECK_LOOKS, MERGE_LOOKS, REVIEW_LOOKS } from '@/components/looks'
+import { CHECK_LOOKS, REVIEW_LOOKS } from '@/components/looks'
+import { MERGE_LOOKS } from '@/components/pull/looks'
 import { mergeStanding, reviewStanding } from '@/lib/pull'
 import { formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
@@ -26,10 +27,9 @@ export function useStanding() {
     }
   })
 
-  /** `passing`: nothing to look at. */
   const checks = computed(() => {
     const state = pull.value?.checks
-    return state ? { ...CHECK_LOOKS[state], text: t(`filters.checks.${state}`), passing: state === 'success' } : null
+    return state ? { ...CHECK_LOOKS[state], text: t(`filters.checks.${state}`) } : null
   })
 
   /** `short`: the few words a pill has room for, only when the merge is held up. */
@@ -41,7 +41,7 @@ export function useStanding() {
     const text = {
       merged: () =>
         t('pull.mergedBy', {
-          who: current.mergedBy?.login ?? '',
+          who: current.mergedBy?.login ?? t('issue.ghost'),
           into: base,
           when: relativeTime(Date.parse(current.mergedAt!), now.value),
         }),

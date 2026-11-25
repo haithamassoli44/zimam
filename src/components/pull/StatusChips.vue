@@ -1,12 +1,12 @@
 <script setup lang="ts">
-// PROTOTYPE: who has to act next, in a line: the review, the checks, and anything in the way of merging. Each opens its
+// Who has to act next, in a line: the review, the checks, and anything in the way of merging. Each opens its
 // part of the pull request.
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import { computed } from 'vue'
 
 import { showPart } from '@/components/pull/parts'
 import { useStanding } from '@/components/pull/standing'
-import type { PullPart } from '@/stores/view'
+import type { PullPart } from '@/lib/refs'
 
 /** `small`: the pills keep only their icons below large screens. */
 defineProps<{ small?: boolean }>()

@@ -4,9 +4,10 @@ import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { CHECK_LOOKS } from '@/components/looks'
-import { RUN_STATES, type CheckRuns } from '@/lib/checks'
-import { formatList, formatNumber } from '@/locale'
+import CheckRow from '@/components/CheckRow.vue'
+import { runsSummary } from '@/components/checks'
+import type { CheckRuns } from '@/lib/checks'
+import { formatNumber } from '@/locale'
 import { checkRuns } from '@/stores/data'
 import type { Item } from '@/types'
 
@@ -21,15 +22,7 @@ checkRuns(props.item).then(
   () => (failed.value = true),
 )
 
-const summary = computed(() => {
-  const runs = answer.value?.runs ?? []
-  return formatList(
-    RUN_STATES.flatMap((state) => {
-      const n = runs.filter((run) => run.state === state).length
-      return n ? [t(`checks.count.${state}`, { n: formatNumber(n) }, n)] : []
-    }),
-  )
-})
+const summary = computed(() => runsSummary(answer.value?.runs ?? []))
 
 const more = computed(() => (answer.value ? answer.value.total - answer.value.runs.length : 0))
 const onGitHub = computed(() => `${props.item.url}/checks`)
@@ -56,31 +49,7 @@ const onGitHub = computed(() => `${props.item.url}/checks`)
 
     <ul v-else class="enter max-h-80 overflow-y-auto p-1">
       <li v-for="(run, index) in answer.runs" :key="index">
-        <component
-          :is="run.url ? 'a' : 'div'"
-          :href="run.url ?? undefined"
-          :target="run.url ? '_blank' : undefined"
-          :rel="run.url ? 'noopener' : undefined"
-          class="group flex min-h-8 items-center gap-2 rounded-md px-2 py-1 text-sm pointer-coarse:min-h-11"
-          :class="
-            run.url &&
-            'transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary'
-          "
-        >
-          <UIcon :name="CHECK_LOOKS[run.state].icon" class="size-4 shrink-0" :class="CHECK_LOOKS[run.state].color" />
-          <span class="sr-only">{{ t(`checks.states.${run.state}`) }}:</span>
-          <span class="min-w-0 flex-1">
-            <bdi class="block truncate text-toned rtl:text-right" dir="auto">{{ run.name }}</bdi>
-            <bdi v-if="run.detail" class="block truncate text-xs text-muted rtl:text-right" dir="auto">{{
-              run.detail
-            }}</bdi>
-          </span>
-          <UIcon
-            v-if="run.url"
-            name="i-octicon-link-external-16"
-            class="size-4 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-100"
-          />
-        </component>
+        <CheckRow :run="run" class="rounded-md px-2 text-sm" />
       </li>
     </ul>
 
@@ -90,7 +59,7 @@ const onGitHub = computed(() => `${props.item.url}/checks`)
         :href="onGitHub"
         target="_blank"
         rel="noopener"
-        class="inline-flex items-center gap-1 rounded-sm text-toned transition-colors hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+        class="inline-flex items-center gap-1 rounded-sm text-toned focus-ring transition-colors hover:text-highlighted hover:underline"
       >
         {{ t('checks.onGitHub') }}
         <UIcon name="i-octicon-link-external-16" class="size-4" />

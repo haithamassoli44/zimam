@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// PROTOTYPE: what changed since the reader's last visit, in one line, with a way to the first new change.
+// What changed since the reader's last visit, in one line, with a way to the first new change.
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import { computed } from 'vue'
@@ -7,7 +7,7 @@ import { useI18n } from 'vue-i18n'
 
 import { formatList, formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import { freshCounts, isFresh, markTime, pretend, pull, showCommits } from '@/stores/pull'
+import { firstFreshCommit, freshCounts, markTime, pull, showCommits } from '@/stores/pull'
 
 const emit = defineEmits<{ first: [] }>()
 const { t } = useI18n()
@@ -22,13 +22,6 @@ const parts = computed(() => {
   ].filter((part): part is string => !!part)
 })
 const when = computed(() => (markTime.value !== null ? relativeTime(markTime.value, now.value) : ''))
-
-// The commits since the visit, when they come last and aren't all of them: a way to read just those.
-const freshRun = computed(() => {
-  const commits = pull.value?.commits ?? []
-  const first = commits.findIndex((commit) => isFresh(commit.at))
-  return first > 0 && commits.slice(first).every((commit) => isFresh(commit.at)) ? first : null
-})
 </script>
 
 <template>
@@ -45,13 +38,13 @@ const freshRun = computed(() => {
       <span class="text-[12px] text-muted max-md:hidden">{{ t('pull.since.legend') }}</span>
       <span class="flex-1" />
       <UButton
-        v-if="freshRun !== null"
+        v-if="firstFreshCommit !== null"
         size="xs"
         color="neutral"
         variant="outline"
         icon="i-octicon-git-commit-16"
         :label="t('pull.since.newCommits')"
-        @click="showCommits(freshRun, pull.commits.length - 1)"
+        @click="showCommits(firstFreshCommit, pull.commits.length - 1)"
       />
       <UButton
         v-if="freshCounts?.files"
@@ -62,9 +55,6 @@ const freshRun = computed(() => {
         :label="t('pull.since.first')"
         @click="emit('first')"
       />
-      <span v-if="pretend" class="rounded-sm px-1.5 text-[11px] text-muted ring-1 ring-accented ring-inset">{{
-        t('pull.since.pretend')
-      }}</span>
     </template>
     <p v-else class="flex items-start gap-2 text-toned">
       <UIcon name="i-octicon-eye-16" class="mt-0.5 size-4 shrink-0 text-muted" />{{ t('pull.since.firstVisit') }}

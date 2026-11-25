@@ -14,9 +14,11 @@
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
 
-  /* Nuxt UI's menus animate with --ease-out too. */
+  /* Every move eases out on one curve, Nuxt UI's menus too, and src/components/motion.ts reads it from here. Feedback
+     takes the default duration; what enters, a little longer. */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --default-transition-duration: 160ms;
+  --enter-duration: 240ms;
   --default-transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -95,6 +97,32 @@
   color: var(--merged);
 }
 
+/* Where the keyboard is: a ring around the focused element, or inside it where a ring around it would be cut off. */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--ui-primary);
+  }
+}
+@utility focus-ring-inset {
+  &:focus-visible {
+    outline: 2px solid var(--ui-primary);
+    outline-offset: -2px;
+  }
+}
+
+/* A small word beside a name or a file: a bot, a role, outdated, generated. */
+@utility tag {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: 1.125rem;
+  padding-inline: 0.375rem;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--ui-text-toned);
+  box-shadow: inset 0 0 0 1px var(--ui-border-accented);
+}
+
 /* On a touch screen, a control that looks smaller than 48px still takes a tap 48px across, centered on it. */
 @utility tap {
   @media (pointer: coarse) {
@@ -149,11 +177,11 @@ body {
    The animation runs again whenever the element is added, or its `display: none` goes. `enter-aside` also comes a
    little way in from the side it sits on, and `enter-below` up from below, unless motion is turned down. */
 .enter {
-  animation: enter 160ms var(--ease-out);
+  animation: enter var(--default-transition-duration) var(--ease-out);
 }
 .enter-aside,
 .enter-below {
-  animation: enter 240ms var(--ease-out);
+  animation: enter var(--enter-duration) var(--ease-out);
 }
 @media (prefers-reduced-motion: no-preference) {
   .enter-aside {
@@ -173,10 +201,10 @@ body {
     opacity: 0;
   }
 }
-/* Another theme or language crossfades in: see src/components/crossfade.ts. */
+/* Another theme or language crossfades in: see src/components/motion.ts. */
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation-duration: 240ms;
+  animation-duration: var(--enter-duration);
   animation-timing-function: var(--ease-out);
 }
 @keyframes enter-moved {
@@ -407,7 +435,7 @@ body {
   }
 }
 
-/* PROTOTYPE: the pull request page's diff. Syntax colors come from Shiki's CSS-variables theme. */
+/* The pull request page's diff. Syntax colors come from Shiki's CSS-variables theme. */
 :root {
   --diff-add: #e8f5eb;
   --diff-add-word: #bde2c6;
@@ -449,12 +477,40 @@ body {
   --shiki-token-link: #9fb1ff;
 }
 
-.diff-code {
+/* A diff's sizes. FileDiff.vue gives the counts: `--digits` in the longest line number, `--longest` characters in a
+   side's longest line, and `--lines` a file is likely to show before it's drawn. */
+:root {
+  --diff-line: 20px;
+  --diff-sign: 1.25rem;
+  --diff-end: 1rem;
+}
+.diff-code,
+.diff-bars {
+  --num-w: calc(var(--digits) * 1ch + 1.25rem);
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 20px;
+}
+.diff-code {
+  line-height: var(--diff-line);
   color: var(--shiki-foreground);
   tab-size: 4;
+}
+.diff-split {
+  grid-template-columns: var(--num-w) minmax(0, 1fr) var(--num-w) minmax(0, 1fr);
+}
+.diff-unified {
+  grid-template-columns: var(--num-w) var(--num-w) minmax(0, 1fr);
+}
+.diff-one-sided {
+  grid-template-columns: var(--num-w) minmax(0, 1fr);
+}
+/* A file's height before it's drawn, so the scroll doesn't jump much once it is. */
+.diff-unread {
+  height: min(4000px, calc(var(--lines) * var(--diff-line)));
+}
+/* A split view's scroll bar spans its side's longest line. */
+.diff-span {
+  width: calc(var(--longest) * 1ch + var(--diff-sign) + var(--diff-end));
 }
 .diff-num {
   padding-inline: 0.5rem;
@@ -466,7 +522,7 @@ body {
 }
 .diff-cell {
   min-width: 0;
-  padding-inline-end: 1rem;
+  padding-inline-end: var(--diff-end);
 }
 .diff-scroll .diff-cell {
   overflow: hidden;
@@ -482,7 +538,7 @@ body {
 }
 .diff-sign {
   display: inline-block;
-  width: 1.25rem;
+  width: var(--diff-sign);
   padding-inline-start: 0.375rem;
   color: var(--ui-text-muted);
   user-select: none;
@@ -527,42 +583,15 @@ body {
     color-mix(in oklab, var(--ui-border) 60%, transparent) 6px 7px
   );
 }
-/* The line a thread jumped to lights up at once and fades back slowly. */
-.diff-num,
-.diff-cell {
-  transition: box-shadow 800ms var(--ease-out);
+/* The line a thread jumped to lights up at once, stays a moment, and fades back. */
+@keyframes diff-hot {
+  0%,
+  66% {
+    background-color: color-mix(in oklab, var(--ui-primary) 14%, transparent);
+  }
 }
 .diff-hot {
-  box-shadow: inset 0 0 0 9999px color-mix(in oklab, var(--ui-primary) 14%, transparent);
-  transition-duration: 0ms;
-}
-.diff-fresh.diff-hot {
-  box-shadow:
-    inset 3px 0 0 var(--ui-primary),
-    inset 0 0 0 9999px color-mix(in oklab, var(--ui-primary) 14%, transparent);
-}
-.diff-marker {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  display: flex;
-  border-radius: 9999px;
-  box-shadow: 0 0 0 2px var(--ui-bg);
-  cursor: pointer;
-}
-.diff-marker-count {
-  position: absolute;
-  top: -5px;
-  right: -7px;
-  min-width: 14px;
-  height: 14px;
-  padding-inline: 3px;
-  border-radius: 9999px;
-  background: var(--ui-primary);
-  color: var(--ui-text-inverted);
-  font-size: 9px;
-  line-height: 14px;
-  text-align: center;
+  animation: diff-hot 2.4s var(--ease-out);
 }
 .diff-thread {
   background: var(--ui-bg-muted);

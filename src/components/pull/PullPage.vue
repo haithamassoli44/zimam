@@ -1,35 +1,31 @@
 <script setup lang="ts">
-// PROTOTYPE: a pull request on its own page, at GitHub's address on Zimam's host.
+// A pull request on its own page, at GitHub's address on Zimam's host.
 import UButton from '@nuxt/ui/components/Button.vue'
-import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { useKeys } from '@/components/keys'
-import { columnWidth } from '@/components/pull/column'
-import { columnOpen } from '@/components/pull/parts'
-import ProtoSwitch from '@/components/pull/ProtoSwitch.vue'
+import { kbds, useKeys, useMain } from '@/components/keys'
 import PullLayout from '@/components/pull/PullLayout.vue'
+import { pullUrl, refKey } from '@/lib/refs'
 import { formatNumber } from '@/locale'
 import { problem, pull, reloadPull } from '@/stores/pull'
-import { large, openSettings } from '@/stores/ui'
+import { openSettings } from '@/stores/ui'
 import { activeView, leavePull, movePull, neighbors, openPull, viewName } from '@/stores/view'
 
 const { t } = useI18n()
-useKeys({ u: leavePull, J: () => movePull(neighbors.value.next), K: () => movePull(neighbors.value.previous) })
+useKeys({ back: leavePull, pulls: [() => movePull(neighbors.value.next), () => movePull(neighbors.value.previous)] })
+// When the pull request can't be read, what says so is the page's main part, as the diff is otherwise.
+const page = useTemplateRef<HTMLElement>('page')
+useMain(page)
 const backLabel = computed(() => (activeView.value ? viewName(activeView.value) : t('filters.kind.pr')))
-const url = computed(
-  () =>
-    pull.value?.url ??
-    (openPull.value ? `https://github.com/${openPull.value.repo}/pull/${openPull.value.number}` : '#'),
-)
+const url = computed(() => pull.value?.url ?? (openPull.value ? pullUrl(openPull.value) : '#'))
 </script>
 
 <template>
   <div class="enter flex h-dvh flex-col bg-default">
     <header class="flex h-12 shrink-0 items-center gap-1 border-b border-default bg-muted px-3">
-      <UTooltip :text="t('keys.does.back')" :kbds="['u']">
+      <UTooltip :text="t('keys.does.back')" :kbds="kbds('back')">
         <UButton
           color="neutral"
           variant="ghost"
@@ -48,7 +44,7 @@ const url = computed(
       <span v-if="neighbors.at >= 0" class="font-mono text-[12px] text-muted tabular-nums max-sm:hidden">
         {{ formatNumber(neighbors.at + 1) }} / {{ formatNumber(neighbors.of) }}
       </span>
-      <UTooltip :text="t('pull.previous')" :kbds="['Shift', 'K']">
+      <UTooltip :text="t('pull.previous')" :kbds="kbds('pulls', 1)">
         <UButton
           icon="i-octicon-chevron-up-16"
           color="neutral"
@@ -59,7 +55,7 @@ const url = computed(
           @click="movePull(neighbors.previous)"
         />
       </UTooltip>
-      <UTooltip :text="t('pull.next')" :kbds="['Shift', 'J']">
+      <UTooltip :text="t('pull.next')" :kbds="kbds('pulls')">
         <UButton
           icon="i-octicon-chevron-down-16"
           color="neutral"
@@ -81,7 +77,6 @@ const url = computed(
         trailing-icon="i-octicon-link-external-16"
         :ui="{ label: 'max-sm:sr-only', trailingIcon: 'text-muted' }"
       />
-      <ProtoSwitch />
       <UTooltip :text="t('nav.settings')">
         <UButton
           icon="i-octicon-gear-16"
@@ -94,7 +89,12 @@ const url = computed(
       </UTooltip>
     </header>
 
-    <div v-if="problem" class="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+    <div
+      v-if="problem"
+      ref="page"
+      class="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center focus:outline-none"
+      tabindex="-1"
+    >
       <p class="max-w-md text-toned">{{ t('pull.failed') }}</p>
       <p class="max-w-md font-mono text-[12px] text-muted">{{ problem }}</p>
       <div class="flex gap-2">
@@ -109,32 +109,6 @@ const url = computed(
         />
       </div>
     </div>
-    <!-- While it loads, the page is drawn in its own shape: the header, the strip and the column, and the diff. -->
-    <div v-else-if="!pull" class="flex min-h-0 flex-1 flex-col" aria-busy="true">
-      <span class="sr-only">{{ t('pull.loading') }}</span>
-      <div class="space-y-3 border-b border-default px-4 py-3 sm:px-6" aria-hidden="true">
-        <USkeleton class="my-1.5 h-4 w-2/3 max-w-xl" />
-        <USkeleton class="h-6 w-1/2 max-w-md" />
-      </div>
-      <div class="flex min-h-0 flex-1" aria-hidden="true">
-        <template v-if="large">
-          <div class="w-12 shrink-0 border-e border-default bg-muted" />
-          <div v-if="columnOpen" class="shrink-0 border-e border-default" :style="{ width: `${columnWidth}px` }">
-            <div class="flex h-11 items-center border-b border-default px-4"><USkeleton class="h-3 w-24" /></div>
-            <div class="space-y-3 p-4">
-              <USkeleton v-for="n in 6" :key="n" class="h-3" :style="{ width: `${40 + ((n * 17) % 45)}%` }" />
-            </div>
-          </div>
-        </template>
-        <div class="min-w-0 flex-1">
-          <div class="flex h-11 items-center border-b border-default px-3 sm:px-4"><USkeleton class="h-6 w-40" /></div>
-          <div class="space-y-3 p-4 sm:px-6">
-            <USkeleton class="h-10" />
-            <USkeleton v-for="n in 8" :key="n" class="h-3" :style="{ width: `${45 + ((n * 23) % 45)}%` }" />
-          </div>
-        </div>
-      </div>
-    </div>
-    <PullLayout v-else class="enter" />
+    <PullLayout v-else-if="openPull" :key="refKey(openPull)" class="enter" />
   </div>
 </template>

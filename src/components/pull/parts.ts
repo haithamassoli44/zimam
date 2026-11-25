@@ -1,19 +1,20 @@
-// PROTOTYPE: the parts of a pull request the side column shows: each one's icon, its count, and what's new in it since
-// the last visit. And whether the column is open, or on a narrow screen the sheet that takes its place, so anything on
-// the page can show a part.
-import { computed, ref } from 'vue'
+// The parts of a pull request beside its diff: each one's icon, and what the strip, the phone's bar and its heading say
+// of it. And on a narrow screen, the sheet that takes the column's place, so anything on the page can show a part.
+import { computed, ref, shallowRef } from 'vue'
 
-import { isPost, type ReviewThread } from '@/lib/pull'
-import { fileAsked, freshCounts, jump, pull, runs, shownEntries, shownFiles } from '@/stores/pull'
+import { CHECK_LOOKS } from '@/components/looks'
+import { columnOpen } from '@/components/pull/column'
+import { isPost } from '@/lib/pull'
+import { PULL_PARTS, type PullPart } from '@/lib/refs'
+import { freshCounts, pull, runs, shownEntries, shownFiles, viewed } from '@/stores/pull'
 import { large } from '@/stores/ui'
-import { pullPart, type PullPart } from '@/stores/view'
+import { pullPart } from '@/stores/view'
 
-/** The column, on a wide screen. */
-export const columnOpen = ref(true)
-/** The sheet, on a narrow one. */
+/** The sheet, on a narrow screen, where the column would be. */
 export const sheetOpen = ref(false)
+/** The files' filter, while the tree is on screen, for `/` to focus. */
+export const fileFilter = shallowRef<HTMLInputElement | null>(null)
 
-/** Shows a part: in the column, or in the sheet. */
 export function showPart(part: PullPart) {
   pullPart.value = part
   if (large.value) columnOpen.value = true
@@ -26,33 +27,44 @@ export function pickPart(part: PullPart) {
   else showPart(part)
 }
 
-/** A file from the tree, shown in the diff: a sheet over it closes. */
-export function showFile(path: string) {
-  sheetOpen.value = false
-  fileAsked.value = path
-}
-
-/** A thread from the conversation, shown in the diff: a sheet over it closes. */
-export function showThread(thread: ReviewThread) {
-  sheetOpen.value = false
-  jump(thread)
-}
-
-export const PART_ICONS: Record<PullPart, string> = {
+const ICONS: Record<PullPart, string> = {
   files: 'i-octicon-file-diff-16',
   conversation: 'i-octicon-comment-discussion-16',
   commits: 'i-octicon-git-commit-16',
   checks: 'i-octicon-checklist-16',
 }
 
-/** `count`: how many there are, or null while unknown. `fresh`: how many are new since the last visit. */
-export const partFacts = computed<Record<PullPart, { count: number | null; fresh: number }>>(() => {
+/**
+ * The parts, in their order, with what's known of each. `count`: how many there are, or null while unknown. `fresh`:
+ * how many are new since the last visit. `alert`: a look that asks for a look, as failing checks do. `viewed`: how
+ * many files are viewed, where they take ticks.
+ */
+interface Facts {
+  count: number | null
+  fresh: number
+  alert: { icon: string; color: string } | null
+  viewed: { n: number; of: number } | null
+}
+export const parts = computed(() => {
   const current = pull.value
   const fresh = freshCounts.value
-  return {
-    files: { count: shownFiles.value.length || null, fresh: fresh?.files ?? 0 },
-    conversation: { count: current ? shownEntries.value.filter(isPost).length : null, fresh: fresh?.comments ?? 0 },
-    commits: { count: current?.commitCount ?? null, fresh: fresh?.commits ?? 0 },
-    checks: { count: runs.value?.runs.length ?? null, fresh: 0 },
+  const checks = current?.checks
+  const none = { alert: null, viewed: null }
+  const facts: Record<PullPart, Facts> = {
+    files: { ...none, count: shownFiles.value.length || null, fresh: fresh?.files ?? 0, viewed: viewed.value },
+    conversation: {
+      ...none,
+      count: current ? shownEntries.value.filter(isPost).length : null,
+      fresh: fresh?.comments ?? 0,
+    },
+    commits: { ...none, count: current?.commitCount ?? null, fresh: fresh?.commits ?? 0 },
+    checks: {
+      ...none,
+      count: runs.value?.total ?? null,
+      fresh: 0,
+      alert: checks && checks !== 'success' ? CHECK_LOOKS[checks] : null,
+    },
   }
+  return PULL_PARTS.map((part) => ({ part, icon: ICONS[part], ...facts[part] }))
 })
+export type Part = (typeof parts.value)[number]

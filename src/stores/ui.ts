@@ -14,7 +14,7 @@ const WIDE = matchMedia('(min-width: 80rem)')
 export const wide = ref(WIDE.matches)
 WIDE.addEventListener('change', (event) => (wide.value = event.matches))
 
-// PROTOTYPE: from 64rem, Tailwind's `lg`, a pull request's parts sit in a column beside its diff; narrower, in a sheet.
+// From 64rem, Tailwind's `lg`, a pull request's parts sit in a column beside its diff; narrower, in a sheet.
 // Below 40rem, Tailwind's `sm`, a diff shows unified, with no room for two sides.
 const LARGE = matchMedia('(min-width: 64rem)')
 const PHONE = matchMedia('(max-width: 40rem)')

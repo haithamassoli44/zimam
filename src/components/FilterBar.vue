@@ -29,7 +29,7 @@ import {
 const { t } = useI18n()
 const search = useTemplateRef<{ inputRef: HTMLInputElement | null }>('search')
 
-useKeys({ '/': () => search.value?.inputRef?.focus() })
+useKeys({ search: () => search.value?.inputRef?.focus() })
 
 const counts = computed(() => result.value.counts)
 const selected = (facet: Facet) => filters[facet] as string[]
@@ -164,7 +164,7 @@ const historyShown = computed(() => {
                   <li v-for="[key, example] in SYNTAX" :key="key">
                     <button
                       type="button"
-                      class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-start transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                      class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-start focus-ring-inset transition-colors hover:bg-elevated focus-visible:bg-elevated"
                       @click="(close(), addToSearch(example))"
                     >
                       <code class="font-mono text-xs text-highlighted" dir="ltr">{{ example }}</code>

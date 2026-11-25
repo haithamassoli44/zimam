@@ -1,12 +1,12 @@
 <script setup lang="ts">
-// PROTOTYPE: the edge between the side column and the diff. Dragging it sets the column's width; dragging well past the
+// The edge between the side column and the diff. Dragging it sets the column's width; dragging well past the
 // narrowest folds the column away, and dragging back out brings it back. A double click goes back to the first width.
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { COLUMN, columnWidth, setColumn, widest } from '@/components/pull/column'
+import { COLUMN, columnOpen, columnWidth, setColumn, widest } from '@/components/pull/column'
+import { rtl } from '@/locale'
 
-const open = defineModel<boolean>('open', { required: true })
 const { t } = useI18n()
 
 const dragging = ref(false)
@@ -15,16 +15,16 @@ watch(dragging, (on) => {
   document.documentElement.style.userSelect = on ? 'none' : ''
 })
 // Toward the diff widens the column, in either direction of writing.
-const towardDiff = (element: Element) => (getComputedStyle(element).direction === 'rtl' ? -1 : 1)
+const towardDiff = () => (rtl.value ? -1 : 1)
 
 function drag(event: PointerEvent) {
   if (event.button !== 0) return
   event.preventDefault()
   const edge = event.currentTarget as HTMLElement
   edge.setPointerCapture(event.pointerId)
-  const sign = towardDiff(edge)
+  const sign = towardDiff()
   const startX = event.clientX
-  const from = open.value ? columnWidth.value : 0
+  const from = columnOpen.value ? columnWidth.value : 0
   const before = columnWidth.value
   dragging.value = true
   let frame = 0
@@ -32,8 +32,8 @@ function drag(event: PointerEvent) {
     cancelAnimationFrame(frame)
     frame = requestAnimationFrame(() => {
       const width = from + (moved.clientX - startX) * sign
-      open.value = width >= COLUMN.min - 80
-      if (open.value) setColumn(width, false)
+      columnOpen.value = width >= COLUMN.fold
+      if (columnOpen.value) setColumn(width, false)
     })
   }
   const end = () => {
@@ -42,7 +42,7 @@ function drag(event: PointerEvent) {
     edge.removeEventListener('pointerup', end)
     edge.removeEventListener('pointercancel', end)
     // Folded by dragging, it opens again at the width it had.
-    setColumn(open.value ? columnWidth.value : before)
+    setColumn(columnOpen.value ? columnWidth.value : before)
   }
   edge.addEventListener('pointermove', move)
   edge.addEventListener('pointerup', end)
@@ -50,13 +50,13 @@ function drag(event: PointerEvent) {
 }
 
 function reset() {
-  open.value = true
+  columnOpen.value = true
   setColumn(COLUMN.start)
 }
 
 function nudge(event: KeyboardEvent) {
-  const by = (event.shiftKey ? 64 : 16) * towardDiff(event.currentTarget as Element)
-  const width = open.value ? columnWidth.value : 0
+  const by = (event.shiftKey ? 64 : 16) * towardDiff()
+  const width = columnOpen.value ? columnWidth.value : 0
   const moves: Record<string, number> = {
     ArrowRight: width + by,
     ArrowLeft: width - by,
@@ -66,7 +66,7 @@ function nudge(event: KeyboardEvent) {
   const next = moves[event.key] as number | undefined
   if (next === undefined) return
   event.preventDefault()
-  open.value = true
+  columnOpen.value = true
   setColumn(next)
 }
 </script>
@@ -80,7 +80,7 @@ function nudge(event: KeyboardEvent) {
       :aria-label="t('pull.panel.resize')"
       :aria-valuemin="COLUMN.min"
       :aria-valuemax="widest"
-      :aria-valuenow="open ? columnWidth : COLUMN.min"
+      :aria-valuenow="columnOpen ? columnWidth : COLUMN.min"
       class="group absolute inset-y-0 -start-1 w-2 cursor-col-resize touch-none outline-none"
       @pointerdown="drag"
       @dblclick="reset"

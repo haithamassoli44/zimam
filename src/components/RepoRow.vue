@@ -85,7 +85,7 @@ function follow(event: MouseEvent, filters: Partial<Filters>) {
 
 const label = (count: Shown) =>
   `${t(`repos.columns.${count.key}`)}: ${count.loading ? t('repos.loading') : formatNumber(count.count)}`
-const LINK = 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-primary'
+const LINK = 'rounded-sm hover:underline focus-ring'
 
 // The pin and the link to GitHub sit by the name on narrow screens, and in a column of their own on wide ones. They show
 // on hover, and always on a touch screen, but a pinned repository's pin always shows. Its handle sits with them on
@@ -132,7 +132,7 @@ const link = computed(() => ({
       v-if="pinned"
       v-bind="handle"
       type="button"
-      class="absolute inset-y-0 start-0 hidden w-6 cursor-grab touch-none items-center justify-center text-dimmed transition-colors hover:text-toned focus-visible:text-highlighted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary @4xl:flex"
+      class="absolute inset-y-0 start-0 hidden w-6 cursor-grab touch-none items-center justify-center text-dimmed focus-ring-inset transition-colors hover:text-toned focus-visible:text-highlighted @4xl:flex"
     >
       <UIcon name="i-octicon-grabber-16" class="size-4" />
     </button>
@@ -140,7 +140,7 @@ const link = computed(() => ({
       <div class="flex min-w-0 items-center gap-2">
         <a
           :href="itemsLink(everything)"
-          class="min-w-0 truncate rounded-sm text-[15px] leading-6 font-medium text-highlighted transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"
+          class="min-w-0 truncate rounded-sm text-[15px] leading-6 font-medium text-highlighted focus-ring transition-colors hover:text-primary"
           @click="follow($event, everything)"
           ><bdi>{{ displayRepo(repo.fullName) }}</bdi></a
         >

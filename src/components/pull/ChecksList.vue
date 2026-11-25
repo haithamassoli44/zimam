@@ -1,47 +1,41 @@
 <script setup lang="ts">
-// PROTOTYPE: every check on the pull request's last commit, grouped by how it ended, the ones that need a look first.
+// Every check on the pull request's last commit, grouped by how it ended, the ones that need a look first.
 // Each opens its log on GitHub.
-import UIcon from '@nuxt/ui/components/Icon.vue'
-import USkeleton from '@nuxt/ui/components/Skeleton.vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { CHECK_LOOKS } from '@/components/looks'
+import CheckRow from '@/components/CheckRow.vue'
+import SkeletonLines from '@/components/SkeletonLines.vue'
+import { groupRuns } from '@/lib/checks'
 import { formatNumber } from '@/locale'
-import { pull, runGroups, runs, runsFailed } from '@/stores/pull'
+import { pull, runs, runsState } from '@/stores/pull'
 
 const { t } = useI18n()
+const more = computed(() => (runs.value ? runs.value.total - runs.value.runs.length : 0))
 </script>
 
 <template>
-  <div v-if="pull" class="pb-6 text-[13px]">
-    <p v-if="!pull.checks" class="p-4 text-muted">{{ t('checks.none') }}</p>
-    <div v-else-if="!runs && !runsFailed" class="space-y-3 p-4" aria-busy="true">
-      <USkeleton v-for="n in 6" :key="n" class="h-3" :style="{ width: `${40 + ((n * 17) % 45)}%` }" />
-    </div>
-    <p v-else-if="runsFailed" class="p-4 text-muted">{{ t('checks.failed') }}</p>
-    <section v-for="group in runGroups" :key="group.state" class="pt-4">
-      <h3 class="px-4 pb-1 text-[12px] font-medium text-muted">
-        {{ t(`checks.count.${group.state}`, { n: formatNumber(group.runs.length) }, group.runs.length) }}
-      </h3>
-      <ul>
-        <li v-for="(run, index) in group.runs" :key="index">
-          <a
-            :href="run.url ?? undefined"
-            target="_blank"
-            rel="noopener"
-            class="group flex min-h-8 items-center gap-2 px-4 transition-colors hover:bg-elevated pointer-coarse:min-h-11"
-          >
-            <UIcon :name="CHECK_LOOKS[run.state].icon" class="size-4 shrink-0" :class="CHECK_LOOKS[run.state].color" />
-            <bdi class="min-w-0 flex-1 truncate text-toned" dir="auto">{{
-              run.detail ? `${run.detail} / ${run.name}` : run.name
-            }}</bdi>
-            <UIcon
-              name="i-octicon-link-external-16"
-              class="size-4 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
-            />
-          </a>
-        </li>
-      </ul>
-    </section>
+  <div class="pb-6 text-[13px]">
+    <SkeletonLines
+      v-if="!pull || (pull.checks && runsState === 'loading')"
+      :lines="6"
+      :label="t('checks.loading')"
+      class="p-4"
+    />
+    <p v-else-if="!pull.checks" class="p-4 text-muted">{{ t('checks.none') }}</p>
+    <p v-else-if="runsState === 'failed'" class="p-4 text-muted">{{ t('checks.failed') }}</p>
+    <template v-else-if="runs">
+      <section v-for="group in groupRuns(runs.runs)" :key="group.state" class="pt-4">
+        <h3 class="px-4 pb-1 text-[12px] font-medium text-muted">
+          {{ t(`checks.count.${group.state}`, { n: formatNumber(group.runs.length) }, group.runs.length) }}
+        </h3>
+        <ul>
+          <li v-for="(run, index) in group.runs" :key="index"><CheckRow :run="run" class="px-4" /></li>
+        </ul>
+      </section>
+      <p v-if="more > 0" class="px-4 pt-4 text-[12px] text-muted">
+        {{ t('checks.more', { n: formatNumber(more) }, more) }}
+      </p>
+    </template>
   </div>
 </template>

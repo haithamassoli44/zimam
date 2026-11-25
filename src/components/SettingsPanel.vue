@@ -10,8 +10,8 @@ import { useToast } from '@nuxt/ui/composables'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import ChoiceGroup from '@/components/ChoiceGroup.vue'
-import { crossfade } from '@/components/motion'
+import { setLook } from '@/components/motion'
+import SettingChoice from '@/components/SettingChoice.vue'
 import { languageName, sides } from '@/locale'
 import { install, installed, installPrompt, manualInstall } from '@/pwa'
 import { deleteWorkspace, reloadWorkspace } from '@/stores/data'
@@ -26,59 +26,46 @@ import {
   LONG_LINES,
   ROW_PARTS,
   THEMES,
+  type Settings,
   type Workspace,
 } from '@/types'
 
 const { t } = useI18n()
 const toast = useToast()
 
-const groups = computed(() => [
-  {
-    key: 'language',
-    choices: LOCALES.map((value) => ({ value, label: languageName(value), lang: value })),
-    picked: (value: string) => settings.locale === value,
-    pick: (value: string) => crossfade(() => (settings.locale = value as typeof settings.locale)),
-  },
-  {
-    key: 'theme',
-    choices: THEMES.map((value) => ({ value, label: t(`settings.themes.${value}`) })),
-    picked: (value: string) => settings.theme === value,
-    pick: (value: string) => crossfade(() => (settings.theme = value as typeof settings.theme)),
-  },
-  {
-    key: 'density',
-    choices: DENSITIES.map((value) => ({ value, label: t(`settings.densities.${value}`) })),
-    picked: (value: string) => settings.density === value,
-    pick: (value: string) => crossfade(() => (settings.density = value as typeof settings.density)),
-  },
-])
+type Choosable = 'locale' | 'theme' | 'density' | 'bots' | 'longLines' | 'diffView' | 'files'
+const LOOKS = ['locale', 'theme', 'density'] as const
 
-// PROTOTYPE: how pull requests read.
-const pullGroups = computed(() => [
-  {
-    key: 'bots',
-    choices: BOT_POSTS.map((value) => ({ value, label: t(`settings.pull.bots.${value}`) })),
-    picked: (value: string) => settings.bots === value,
-    pick: (value: string) => (settings.bots = value as typeof settings.bots),
-  },
-  {
-    key: 'longLines',
-    choices: LONG_LINES.map((value) => ({ value, label: t(`settings.pull.longLines.${value}`) })),
-    picked: (value: string) => settings.longLines === value,
-    pick: (value: string) => (settings.longLines = value as typeof settings.longLines),
-  },
-  {
-    key: 'diffView',
-    choices: DIFF_VIEWS.map((value) => ({ value, label: t(`pull.views.${value}`) })),
-    picked: (value: string) => settings.diffView === value,
-    pick: (value: string) => (settings.diffView = value as typeof settings.diffView),
-  },
-  {
-    key: 'files',
-    choices: FILE_MODES.map((value) => ({ value, label: t(`pull.modes.${value}`) })),
-    picked: (value: string) => settings.files === value,
-    pick: (value: string) => (settings.files = value as typeof settings.files),
-  },
+/** A setting picked from a few choices: where Settings keep it, its values, and how it and each value read. */
+function choice<K extends Choosable>(
+  key: K,
+  values: readonly Settings[K][],
+  title: string,
+  label: (value: Settings[K]) => string,
+) {
+  return {
+    key,
+    title,
+    choices: values.map((value) => ({ value, label: label(value), lang: key === 'locale' ? value : undefined })),
+    picked: (value: string) => settings[key] === value,
+    // How the whole page looks changes with a crossfade.
+    pick: (value: string) =>
+      (LOOKS as readonly string[]).includes(key)
+        ? setLook(key as (typeof LOOKS)[number], value as never)
+        : (settings[key] = value as Settings[K]),
+  }
+}
+
+const display = computed(() => [
+  choice('locale', LOCALES, t('settings.language'), languageName),
+  choice('theme', THEMES, t('settings.theme'), (value) => t(`settings.themes.${value}`)),
+  choice('density', DENSITIES, t('settings.density'), (value) => t(`settings.densities.${value}`)),
+])
+const reading = computed(() => [
+  choice('bots', BOT_POSTS, t('settings.pull.bots.title'), (value) => t(`settings.pull.bots.${value}`)),
+  choice('longLines', LONG_LINES, t('settings.pull.longLines.title'), (value) => t(`settings.pull.longLines.${value}`)),
+  choice('diffView', DIFF_VIEWS, t('settings.pull.diffView.title'), (value) => t(`pull.views.${value}`)),
+  choice('files', FILE_MODES, t('settings.pull.files.title'), (value) => t(`pull.modes.${value}`)),
 ])
 const generatedText = computed({
   get: () => settings.generated.join('\n'),
@@ -125,20 +112,17 @@ async function upload(event: Event) {
 <template>
   <USlideover v-model:open="ui.settingsOpen" :title="t('settings.title')" :side="sides.end">
     <template #body>
-      <!-- Each section has a heading, and each setting in it a quieter name of its own. -->
       <div class="space-y-6">
         <section class="space-y-4">
           <h3 class="font-medium text-highlighted">{{ t('settings.display') }}</h3>
-          <div v-for="group in groups" :key="group.key" class="space-y-2">
-            <p class="text-sm text-toned" aria-hidden="true">{{ t(`settings.${group.key}`) }}</p>
-            <ChoiceGroup
-              :label="t(`settings.${group.key}`)"
-              :choices="group.choices"
-              :picked="group.picked"
-              class="w-full *:flex-1 *:justify-center"
-              @pick="group.pick"
-            />
-          </div>
+          <SettingChoice
+            v-for="group in display"
+            :key="group.key"
+            :title="group.title"
+            :choices="group.choices"
+            :picked="group.picked"
+            @pick="group.pick"
+          />
           <fieldset class="space-y-2 pointer-coarse:space-y-0">
             <legend class="mb-2 text-sm text-toned">{{ t('settings.rows') }}</legend>
             <USwitch
@@ -154,16 +138,14 @@ async function upload(event: Event) {
         <USeparator />
         <section class="space-y-4">
           <h3 class="font-medium text-highlighted">{{ t('settings.pull.title') }}</h3>
-          <div v-for="group in pullGroups" :key="group.key" class="space-y-2">
-            <p class="text-sm text-toned" aria-hidden="true">{{ t(`settings.pull.${group.key}.title`) }}</p>
-            <ChoiceGroup
-              :label="t(`settings.pull.${group.key}.title`)"
-              :choices="group.choices"
-              :picked="group.picked"
-              class="w-full *:flex-1 *:justify-center"
-              @pick="group.pick"
-            />
-          </div>
+          <SettingChoice
+            v-for="group in reading"
+            :key="group.key"
+            :title="group.title"
+            :choices="group.choices"
+            :picked="group.picked"
+            @pick="group.pick"
+          />
           <UFormField :label="t('settings.pull.generated.title')" :help="t('settings.pull.generated.help')">
             <UTextarea
               v-model.lazy="generatedText"

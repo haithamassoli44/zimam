@@ -14,13 +14,22 @@ import { computed, onBeforeUnmount, onMounted, useTemplateRef, watch } from 'vue
 import { useI18n } from 'vue-i18n'
 
 import ItemRow, { ROW_HEIGHT } from '@/components/ItemRow.vue'
-import { useKeys } from '@/components/keys'
-import { EASE_OUT, still } from '@/components/motion'
+import { nothingFocused, useKeys, useMain } from '@/components/keys'
 import SyncFailed from '@/components/SyncFailed.vue'
 import { sameRef } from '@/lib/refs'
 import { displayRepo, gathered, highlighted, issueRef, itemRef, items, repos } from '@/stores/data'
 import { activeWorkspace, settings } from '@/stores/settings'
-import { activeView, isDefault, leftPull, openIssue, query, resetFilters, result, viewName } from '@/stores/view'
+import {
+  activeView,
+  closedLast,
+  isDefault,
+  lastView,
+  openIssue,
+  query,
+  resetFilters,
+  result,
+  viewName,
+} from '@/stores/view'
 import type { Item } from '@/types'
 
 const { t } = useI18n()
@@ -68,14 +77,6 @@ function measure(element: unknown) {
 
 watch(query, () => scroller.value?.scrollTo({ top: 0 }))
 
-// Another saved view fades in, rather than its rows taking the last one's places at once.
-watch(
-  () => activeView.value?.id,
-  (view) => {
-    if (view && !still()) scroller.value?.animate({ opacity: [0, 1] }, { duration: 160, easing: EASE_OUT })
-  },
-)
-
 // The issue that ↑ and ↓ in its panel move to stays in sight.
 watch(openIssue, (issue) => {
   if (!issue) return
@@ -89,19 +90,34 @@ watch(
 
 const { gathering, failed } = gathered(() => items.value.size)
 
-// --- The keyboard: j and k, or ↓ and ↑ from a row, move the focus from row to row. Enter on a row opens it. ---
+// --- The focus, from row to row: j and k, or ↓ and ↑ from a row ---
 
-/** Gives a row's title the focus, once the list has drawn it. */
-function focusRow(index: number, tries = 3) {
+// The rows drawn, by index, and the one to focus once it's drawn: the list draws a row only once it's in sight.
+const drawn = new Map<number, { focus(): void }>()
+let wanted: number | null = null
+function takeFocus() {
+  const row = wanted === null ? undefined : drawn.get(wanted)
+  if (!row) return
+  wanted = null
+  row.focus()
+}
+// The rows the scroll to it draws are its one more chance: a row that never came in sight doesn't take the focus later.
+watch(
+  virtualRows,
+  () => {
+    takeFocus()
+    wanted = null
+  },
+  { flush: 'post' },
+)
+
+/** Gives a row's title the focus, scrolling it into sight first. */
+function focusRow(index: number) {
   const count = rows.value.length
   if (!count) return
-  const at = Math.max(0, Math.min(count - 1, index))
-  virtualizer.value.scrollToIndex(at, { align: 'auto' })
-  requestAnimationFrame(() => {
-    const link = scroller.value?.querySelector<HTMLElement>(`li[data-index="${at}"] a[data-row]`)
-    if (link) link.focus({ preventScroll: true })
-    else if (tries) focusRow(at, tries - 1)
-  })
+  wanted = Math.max(0, Math.min(count - 1, index))
+  virtualizer.value.scrollToIndex(wanted, { align: 'auto' })
+  takeFocus()
 }
 /** The row that has the focus, or the first in sight. */
 function rowAt(): { index: number; focused: boolean } {
@@ -114,27 +130,24 @@ function moveFocus(by: -1 | 1) {
   const { index, focused } = rowAt()
   focusRow(focused ? index + by : index)
 }
-// An open issue takes j and k for itself, to go to the next one.
-useKeys({ j: () => moveFocus(1), k: () => moveFocus(-1) })
-function onArrow(event: KeyboardEvent) {
-  const by = ({ ArrowDown: 1, ArrowUp: -1 } as const)[event.key as 'ArrowDown' | 'ArrowUp']
-  if (!by || event.altKey || event.ctrlKey || event.metaKey || !(event.target as Element).matches('a[data-row]')) return
-  event.preventDefault()
-  moveFocus(by)
-}
+useKeys({ rows: [() => moveFocus(1), () => moveFocus(-1)] })
+useMain(scroller)
 
-// Back from a pull request, its row has the focus again, as an issue's has once its panel closes.
-onMounted(() => {
-  const from = leftPull.value
-  leftPull.value = null
-  if (!from || (document.activeElement && document.activeElement !== document.body)) return
-  const index = rows.value.findIndex((item) => sameRef(itemRef(item), from))
+// The row of what was just closed takes the focus back, unless something else has it: an issue's panel beside the list,
+// or, as the list comes back, a pull request's page. Over the list, the issue's dialog gives it back itself.
+function takeBack() {
+  const closed = closedLast.value
+  closedLast.value = null
+  if (!closed || !nothingFocused()) return
+  const index = rows.value.findIndex((item) => sameRef(itemRef(item), closed))
   if (index >= 0) focusRow(index)
-})
+}
+watch(closedLast, takeBack, { flush: 'post' })
+onMounted(takeBack)
 </script>
 
 <template>
-  <div ref="scroller" class="overflow-y-auto focus:outline-none" tabindex="-1" data-main>
+  <div ref="scroller" class="overflow-y-auto focus:outline-none" tabindex="-1">
     <div v-if="gathering" aria-busy="true">
       <p class="px-4 py-3 text-sm text-muted sm:px-6">{{ t('results.gathering') }}</p>
       <div
@@ -166,12 +179,13 @@ onMounted(() => {
       />
     </div>
 
+    <!-- Another saved view fades in, rather than its rows taking the last one's places at once. -->
     <ul
       v-else
+      :key="lastView?.id"
       class="enter relative"
       :style="{ height: `${virtualizer.getTotalSize()}px` }"
       :aria-label="activeView ? viewName(activeView) : t('results.custom')"
-      @keydown="onArrow"
     >
       <li
         v-for="row in virtualRows"
@@ -181,7 +195,11 @@ onMounted(() => {
         class="absolute inset-x-0 top-0"
         :style="{ transform: `translateY(${row.start}px)` }"
       >
-        <ItemRow v-bind="rowProps(rows[row.index]!)" />
+        <ItemRow
+          :ref="(found) => (found ? drawn.set(row.index, found as never) : drawn.delete(row.index))"
+          v-bind="rowProps(rows[row.index]!)"
+          @move="(by) => focusRow(row.index + by)"
+        />
       </li>
     </ul>
   </div>

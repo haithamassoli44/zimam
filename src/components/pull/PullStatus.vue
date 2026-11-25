@@ -1,31 +1,23 @@
 <script setup lang="ts">
-// PROTOTYPE: where the pull request stands, above its conversation: the reviews, the checks in a line that opens them,
+// Where the pull request stands, above its conversation: the reviews, the checks in a line that opens them,
 // what's in the way of merging, and its labels and assignees.
-import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import { runsSummary } from '@/components/checks'
 import LabelTag from '@/components/LabelTag.vue'
-import { VERDICT_LOOKS } from '@/components/looks'
 import PersonLink from '@/components/PersonLink.vue'
+import { VERDICT_LOOKS } from '@/components/pull/looks'
 import { showPart } from '@/components/pull/parts'
 import { useStanding } from '@/components/pull/standing'
-import { reviewerWho } from '@/lib/pull'
-import { formatList, formatNumber } from '@/locale'
-import { pull, runGroups, runs, runsFailed } from '@/stores/pull'
+import { pull, runs, runsState } from '@/stores/pull'
 const { t } = useI18n()
 const { review, checks, merge } = useStanding()
 
-const summary = computed(() =>
-  formatList(
-    runGroups.value.map(({ state, runs: list }) =>
-      t(`checks.count.${state}`, { n: formatNumber(list.length) }, list.length),
-    ),
-  ),
-)
+const summary = computed(() => (runs.value ? runsSummary(runs.value.runs) : null))
 </script>
 
 <template>
@@ -35,12 +27,9 @@ const summary = computed(() =>
         <UIcon :name="review.icon" class="size-4" :class="review.color" />{{ review.text }}
       </h3>
       <ul v-if="pull.verdicts.length || pull.requested.length" class="space-y-2">
-        <li v-for="verdict in pull.verdicts" :key="verdict.author?.login" class="flex items-center gap-2">
+        <li v-for="(verdict, index) in pull.verdicts" :key="index" class="flex items-center gap-2">
           <span class="min-w-0 flex-1">
-            <PersonLink :who="verdict.author" class="inline-flex max-w-full items-center gap-2 text-toned">
-              <UAvatar v-if="verdict.author" :src="verdict.author.avatarUrl" alt="" size="3xs" />
-              <bdi class="truncate">{{ verdict.author?.login ?? t('issue.ghost') }}</bdi>
-            </PersonLink>
+            <PersonLink :who="verdict.author" class="max-w-full text-toned" />
           </span>
           <UTooltip :text="t(`pull.verdicts.${verdict.verdict}`)">
             <UIcon
@@ -52,10 +41,7 @@ const summary = computed(() =>
         </li>
         <li v-for="(reviewer, index) in pull.requested" :key="index" class="flex items-center gap-2">
           <span class="min-w-0 flex-1">
-            <PersonLink :who="reviewerWho(reviewer)" class="inline-flex max-w-full items-center gap-2 text-toned">
-              <UAvatar :src="reviewer.avatarUrl" alt="" size="3xs" />
-              <bdi class="truncate">{{ reviewer.kind === 'team' ? reviewer.name : reviewer.login }}</bdi>
-            </PersonLink>
+            <PersonLink :who="reviewer" class="max-w-full text-toned" />
           </span>
           <UTooltip :text="t('pull.awaiting')">
             <UIcon :name="VERDICT_LOOKS.pending.icon" class="size-4" :class="VERDICT_LOOKS.pending.color" />
@@ -78,8 +64,8 @@ const summary = computed(() =>
       />
       <span class="min-w-0 flex-1">
         <span class="block font-medium text-highlighted">{{ checks?.text ?? t('checks.none') }}</span>
-        <USkeleton v-if="checks && !runs && !runsFailed" class="mt-2 h-3 w-2/3" />
-        <span v-else-if="runs" class="mt-0.5 block text-muted">{{ summary }}</span>
+        <USkeleton v-if="checks && runsState === 'loading'" class="mt-2 h-3 w-2/3" />
+        <span v-else-if="summary" class="mt-0.5 block text-muted">{{ summary }}</span>
       </span>
       <UIcon
         v-if="checks"
@@ -99,14 +85,7 @@ const summary = computed(() =>
       </div>
       <div v-if="pull.assignees.length" class="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span class="text-muted">{{ t('issue.assignees') }}</span>
-        <PersonLink
-          v-for="person in pull.assignees"
-          :key="person.login"
-          :who="person"
-          class="inline-flex items-center gap-1.5 text-toned"
-        >
-          <UAvatar :src="person.avatarUrl" alt="" size="3xs" /><bdi>{{ person.login }}</bdi>
-        </PersonLink>
+        <PersonLink v-for="person in pull.assignees" :key="person.login" :who="person" class="text-toned" />
       </div>
     </section>
   </div>

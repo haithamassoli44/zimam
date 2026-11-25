@@ -1,14 +1,28 @@
-import { mount } from '@vue/test-utils'
+import { enableAutoUnmount, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, ref } from 'vue'
 
-import { roving, useKeys } from '@/components/keys'
+import { focusMain, kbds, roving, useKeys, useMain } from '@/components/keys'
 
-function answering(keys: Record<string, (event: KeyboardEvent) => unknown>, rank?: number) {
+enableAutoUnmount(afterEach)
+afterEach(() => {
+  document.body.innerHTML = ''
+})
+
+type Bindings = Parameters<typeof useKeys>[0]
+
+/** A part that answers these shortcuts, at a level, holding a text box and a menu. In a dialog, it's the dialog. */
+function answering(bindings: Bindings, options: { level?: 'panel' | 'page' | 'app'; dialog?: boolean } = {}) {
   return mount(
     defineComponent(() => {
-      useKeys(keys, rank)
-      return () => h('div', [h('input'), h('div', { role: 'menu' }, [h('button')])])
+      const root = ref<HTMLElement | null>(null)
+      useKeys(bindings, { level: options.level, root })
+      return () =>
+        h('div', { ref: root, role: options.dialog ? 'dialog' : undefined }, [
+          h('input'),
+          h('div', { role: 'menu' }, [h('button')]),
+          h('button', { class: 'plain' }),
+        ])
     }),
     { attachTo: document.body },
   )
@@ -18,61 +32,134 @@ const press = (init: KeyboardEventInit, target: EventTarget = document.body) => 
   target.dispatchEvent(event)
   return event
 }
-
-afterEach(() => {
-  document.body.innerHTML = ''
-})
+const j = { key: 'j', code: 'KeyJ' }
 
 describe('useKeys', () => {
-  it('answers a key by its name, and Shift makes it a capital', () => {
-    const j = vi.fn()
-    const J = vi.fn()
-    const wrapper = answering({ j, J })
-    expect(press({ key: 'j', code: 'KeyJ' }).defaultPrevented).toBe(true)
+  it('answers a shortcut by its keys, each key with its own handler, and Shift makes a capital', () => {
+    const calls: string[] = []
+    answering({ rows: [() => calls.push('j'), () => calls.push('k')], pulls: [() => calls.push('J'), () => {}] })
+    expect(press(j).defaultPrevented).toBe(true)
+    press({ key: 'k', code: 'KeyK' })
     press({ key: 'J', code: 'KeyJ', shiftKey: true })
-    expect([j.mock.calls.length, J.mock.calls.length]).toEqual([1, 1])
-    wrapper.unmount()
+    expect(calls).toEqual(['j', 'k', 'J'])
+  })
+
+  it('gives a range one handler, with the key’s place in it', () => {
+    const views = vi.fn()
+    answering({ views })
+    press({ key: '1', code: 'Digit1' })
+    press({ key: '9', code: 'Digit9' })
+    expect(views.mock.calls.map((call) => call[1])).toEqual([0, 8])
   })
 
   it('takes a key from another layout by where it is: ت is j, ؟ is ?', () => {
-    const j = vi.fn()
+    const rows = vi.fn()
     const help = vi.fn()
-    const wrapper = answering({ j, '?': help })
+    answering({ rows, help })
     press({ key: 'ت', code: 'KeyJ' })
     press({ key: '؟', code: 'Slash', shiftKey: true })
-    expect([j.mock.calls.length, help.mock.calls.length]).toEqual([1, 1])
-    wrapper.unmount()
+    expect([rows.mock.calls.length, help.mock.calls.length]).toEqual([1, 1])
   })
 
   it('leaves keys alone while typing, in a menu, or with Ctrl', () => {
-    const j = vi.fn()
-    const wrapper = answering({ j })
-    press({ key: 'j', code: 'KeyJ' }, wrapper.get('input').element)
-    press({ key: 'j', code: 'KeyJ' }, wrapper.get('button').element)
-    press({ key: 'j', code: 'KeyJ', ctrlKey: true })
-    expect(j).not.toHaveBeenCalled()
-    wrapper.unmount()
+    const rows = vi.fn()
+    const wrapper = answering({ rows })
+    press(j, wrapper.get('input').element)
+    press(j, wrapper.get('[role="menu"] button').element)
+    press({ ...j, ctrlKey: true })
+    expect(rows).not.toHaveBeenCalled()
   })
 
-  it('asks the latest part first, then the next when it declines, and everywhere last', () => {
+  it('asks an open panel first, then the page, then what works everywhere, whatever came first', () => {
     const calls: string[] = []
-    const everywhere = answering({ j: () => calls.push('everywhere') }, 0)
-    const list = answering({ j: () => calls.push('list') })
-    const issue = answering({ j: () => (calls.push('issue declines'), false) })
-    press({ key: 'j', code: 'KeyJ' })
-    expect(calls).toEqual(['issue declines', 'list'])
+    const panel = answering({ rows: () => (calls.push('panel declines'), false) }, { level: 'panel' })
+    const list = answering({ rows: () => calls.push('page') })
+    answering({ rows: () => calls.push('app') }, { level: 'app' })
+    press(j)
+    expect(calls).toEqual(['panel declines', 'page'])
     list.unmount()
-    press({ key: 'j', code: 'KeyJ' })
-    expect(calls.slice(2)).toEqual(['issue declines', 'everywhere'])
-    issue.unmount()
-    everywhere.unmount()
+    panel.unmount()
+    press(j)
+    expect(calls.slice(2)).toEqual(['app'])
+  })
+
+  it('in a dialog, lets only the part with the focus answer', () => {
+    const behind = vi.fn()
+    const issue = vi.fn()
+    answering({ search: behind, rows: behind })
+    const dialog = answering({ rows: issue }, { level: 'panel', dialog: true })
+    const inside = dialog.get('.plain').element
+    press({ key: '/', code: 'Slash' }, inside)
+    press(j, inside)
+    expect(behind).not.toHaveBeenCalled()
+    expect(issue).toHaveBeenCalledOnce()
+  })
+
+  it('over a part in a dialog, still answers what works everywhere, but not in a menu', () => {
+    const help = vi.fn()
+    answering({ help }, { level: 'app' })
+    const dialog = answering({ rows: () => {} }, { level: 'panel', dialog: true })
+    press({ key: '?', code: 'Slash', shiftKey: true }, dialog.get('.plain').element)
+    press({ key: '?', code: 'Slash', shiftKey: true }, dialog.get('[role="menu"] button').element)
+    expect(help).toHaveBeenCalledOnce()
   })
 
   it('stops answering once the part is gone', () => {
-    const j = vi.fn()
-    answering({ j }).unmount()
-    expect(press({ key: 'j', code: 'KeyJ' }).defaultPrevented).toBe(false)
-    expect(j).not.toHaveBeenCalled()
+    const rows = vi.fn()
+    answering({ rows }).unmount()
+    expect(press(j).defaultPrevented).toBe(false)
+    expect(rows).not.toHaveBeenCalled()
+  })
+})
+
+describe('kbds', () => {
+  it('spells a capital as Shift and the letter, and a range by its place', () => {
+    expect(kbds('pulls', 1)).toEqual(['Shift', 'K'])
+    expect(kbds('views', 2)).toEqual(['3'])
+  })
+})
+
+/** A page whose main part is its root. */
+function page() {
+  return mount(
+    defineComponent(() => {
+      const main = ref<HTMLElement | null>(null)
+      useMain(main)
+      return () => h('div', { ref: main, tabindex: -1 })
+    }),
+    { attachTo: document.body },
+  )
+}
+
+describe('the main part', () => {
+  it('is where the skip link goes: of one inside another, the inner one, whichever came first', () => {
+    const inner = ref<HTMLElement | null>(null)
+    const outer = ref<HTMLElement | null>(null)
+    mount(
+      defineComponent(() => {
+        useMain(outer)
+        return () =>
+          h('div', { ref: outer, tabindex: -1 }, [
+            h(
+              defineComponent(() => {
+                useMain(inner)
+                return () => h('div', { ref: inner, tabindex: -1 })
+              }),
+            ),
+          ])
+      }),
+      { attachTo: document.body },
+    )
+    focusMain()
+    expect(document.activeElement).toBe(inner.value)
+  })
+
+  it('takes the focus for the keys that scroll, when nothing has it', () => {
+    const wrapper = page()
+    const event = press({ key: 'PageDown' })
+    expect(document.activeElement).toBe(wrapper.element)
+    // The browser scrolls it.
+    expect(event.defaultPrevented).toBe(false)
   })
 })
 
@@ -99,6 +186,5 @@ describe('roving', () => {
     expect(document.activeElement).toBe(buttons[2])
     press({ key: 'Home' }, buttons[2])
     expect(document.activeElement).toBe(buttons[0])
-    wrapper.unmount()
   })
 })

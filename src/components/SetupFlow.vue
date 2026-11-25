@@ -380,7 +380,7 @@ function finish() {
           :href="CODE"
           target="_blank"
           rel="noopener"
-          class="inline-flex items-center gap-1.5 rounded-sm text-toned transition-colors hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary"
+          class="inline-flex items-center gap-1.5 rounded-sm text-toned focus-ring transition-colors hover:text-highlighted"
         >
           <UIcon name="i-octicon-mark-github-16" class="size-3.5" />
           {{ t('setup.openSource') }}

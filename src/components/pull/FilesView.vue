@@ -1,42 +1,52 @@
 <script setup lang="ts">
-// PROTOTYPE: the changed files: a toolbar, and every file in one scroll or one at a time.
+// The changed files: a toolbar, and every file in one scroll or one at a time.
 import UButton from '@nuxt/ui/components/Button.vue'
 import UFieldGroup from '@nuxt/ui/components/FieldGroup.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from 'vue'
+import { computed, onBeforeUnmount, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { useKeys } from '@/components/keys'
+import { kbds, useKeys, useMain } from '@/components/keys'
 import { shown } from '@/components/pressed'
 import FileDiff from '@/components/pull/FileDiff.vue'
+import {
+  activeFile,
+  currentFile,
+  inView,
+  onBring,
+  reveal,
+  scroller as diffScroller,
+  showFile,
+} from '@/components/pull/navigation'
 import { showPart } from '@/components/pull/parts'
 import ScopeCard from '@/components/pull/ScopeCard.vue'
 import SinceVisit from '@/components/pull/SinceVisit.vue'
 import { formatNumber } from '@/locale'
 import {
-  activeFile,
-  currentFile,
-  fileAsked,
+  commitSteps,
   fileMode,
   filesState,
   freshFile,
-  pull,
-  reveal,
   scope,
   setFileMode,
   shownFiles,
   stepCommits,
+  ticking,
   toggleViewed,
   viewedState,
 } from '@/stores/pull'
 import { settings } from '@/stores/settings'
-import { openKeys } from '@/stores/ui'
+import { openKeys, phone } from '@/stores/ui'
 
-/** `scroll`: the diff's own scroller, as it scrolls, for a header that folds away. */
-const emit = defineEmits<{ scroll: [box: HTMLElement] }>()
 const { t } = useI18n()
 const scroller = useTemplateRef<HTMLElement>('scroller')
+// Lent as soon as it's there, before each file's own mount looks for it.
+watch(scroller, (box) => (diffScroller.value = box), { flush: 'sync' })
+onBeforeUnmount(() => {
+  diffScroller.value = null
+  onBring(null)
+})
 
 const one = computed(() => fileMode.value === 'one')
 const index = computed(() =>
@@ -47,18 +57,21 @@ const index = computed(() =>
 )
 const current = computed(() => shownFiles.value[index.value] ?? null)
 
-// Where a file counts as at the top: just under the sticky header over each file (`min-h-11` in FileDiff.vue).
-const UNDER_HEADER = 56
+// FileDiff's marks: each file's section, and in it its sticky header, where each change starts and its new lines.
+const sectionOf = (path: string) => scroller.value?.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`)
+/** Where the diff's lines start showing: under the sticky header of the file at the top. */
+function readingTop(box: HTMLElement) {
+  const header = box.querySelector('[data-path] > header')
+  return box.getBoundingClientRect().top + (header?.getBoundingClientRect().height ?? 0)
+}
 
-const inView = ref<string | null>(null)
 let frame = 0
 function onScroll() {
-  if (scroller.value) emit('scroll', scroller.value)
   cancelAnimationFrame(frame)
   frame = requestAnimationFrame(() => {
     const box = scroller.value
     if (!box) return
-    const top = box.getBoundingClientRect().top + UNDER_HEADER
+    const top = readingTop(box)
     let found: string | null = null
     for (const section of box.querySelectorAll<HTMLElement>('[data-path]')) {
       if (section.getBoundingClientRect().top <= top) found = section.dataset.path ?? null
@@ -67,99 +80,74 @@ function onScroll() {
     inView.value = found ?? shownFiles.value[0]?.path ?? null
   })
 }
-const active = computed(() => (one.value ? current.value?.path : inView.value) ?? null)
-watch(active, (path) => (activeFile.value = path), { immediate: true })
 
-/** Brings a file into view: to the top of the scroll, or alone. */
-async function pick(path: string) {
-  currentFile.value = path
-  await nextTick()
-  const target = one.value
-    ? scroller.value?.firstElementChild
-    : scroller.value?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+// A file asked for comes to the top of the scroll, or shows alone.
+onBring((path) => {
+  const target = one.value ? scroller.value?.firstElementChild : sectionOf(path)
   if (target) reveal(target, 'start')
-}
-watch(fileAsked, (path) => {
-  if (!path) return
-  fileAsked.value = null
-  void pick(path)
 })
 
 function step(by: -1 | 1) {
   const list = shownFiles.value
-  const at = list.findIndex((file) => file.path === active.value)
+  const at = list.findIndex((file) => file.path === activeFile.value)
   const next = list[Math.min(list.length - 1, Math.max(0, at + by))]
-  if (next) void pick(next.path)
+  if (next) void showFile(next.path)
 }
 
 function viewedAndNext() {
   const file = current.value
   if (!file) return
-  if (!scope.value && viewedState(file) !== 'viewed') toggleViewed(file)
+  if (ticking.value && viewedState(file) !== 'viewed') toggleViewed(file)
   step(1)
 }
 
 // --- The commits shown ---
-const commits = computed(() => pull.value?.commits ?? [])
 const scopeLabel = computed(() => {
-  const at = scope.value
-  if (!at) return { sha: '', text: t('pull.scope.all') }
-  if (at.from === at.to) return { sha: commits.value[at.from].short, text: commits.value[at.from].headline }
-  const n = at.to - at.from + 1
-  return { sha: '', text: t('pull.scope.commits', { n: formatNumber(n) }, n) }
+  const commits = scope.value?.commits
+  if (!commits) return { sha: '', text: t('pull.scope.all') }
+  if (commits.length === 1) return { sha: commits[0].short, text: commits[0].headline }
+  return { sha: '', text: t('pull.scope.commits', { n: formatNumber(commits.length) }, commits.length) }
 })
-const canStep = computed(() => ({
-  back: !!scope.value && scope.value.from > 0,
-  on: scope.value ? scope.value.to < commits.value.length - 1 : commits.value.length > 0,
-}))
-// Other commits start at their top.
 watch(
   () => scope.value?.key,
   () => scroller.value?.scrollTo({ top: 0 }),
 )
 const diffKey = (path: string) => `${scope.value?.key ?? ''}:${path}`
 
+// A change this close to where the lines start is the one being read.
+const HERE = 4
 function changeStep(by: -1 | 1) {
   const box = scroller.value
   if (!box) return
-  const top = box.getBoundingClientRect().top + UNDER_HEADER
+  const top = readingTop(box)
   const marks = [...box.querySelectorAll('[data-change]')]
   const positions = marks.map((mark) => mark.getBoundingClientRect().top - top)
-  const target = by === 1 ? marks[positions.findIndex((y) => y > 4)] : marks[positions.findLastIndex((y) => y < -4)]
+  const target =
+    by === 1 ? marks[positions.findIndex((y) => y > HERE)] : marks[positions.findLastIndex((y) => y < -HERE)]
   if (target) reveal(target, 'center')
 }
 
+/** Goes to the first new line of the first file changed since the last visit, or to the file while it isn't drawn. */
 function firstNew() {
   const first = shownFiles.value.find(freshFile)
   if (!first) return
-  const mark = one.value ? null : scroller.value?.querySelector('.diff-fresh')
+  const mark = one.value ? null : sectionOf(first.path)?.querySelector('[data-fresh]')
   if (mark) reveal(mark, 'center')
-  else void pick(first.path)
+  else void showFile(first.path)
 }
 
 useKeys({
-  j: () => changeStep(1),
-  k: () => changeStep(-1),
-  n: () => step(1),
-  p: () => step(-1),
-  v: () => {
-    const file = shownFiles.value.find((each) => each.path === active.value)
+  changes: [() => changeStep(1), () => changeStep(-1)],
+  files: [() => step(1), () => step(-1)],
+  viewed: () => {
+    const file = shownFiles.value.find((each) => each.path === activeFile.value)
     if (file && one.value) viewedAndNext()
     else if (file) toggleViewed(file)
   },
 })
+useMain(scroller)
 watch(shownFiles, () => onScroll())
 
-// With nothing focused, the keys that scroll scroll the diff: it takes the focus, then the browser scrolls it. Taking
-// the focus on arrival instead would draw its ring for a reader who came by the address.
-function intoDiff() {
-  if (!document.activeElement || document.activeElement === document.body)
-    scroller.value?.focus({ preventScroll: true })
-  return false
-}
-useKeys(
-  Object.fromEntries([' ', 'PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'Home', 'End'].map((key) => [key, intoDiff])),
-)
 onBeforeUnmount(() => cancelAnimationFrame(frame))
 </script>
 
@@ -183,26 +171,26 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
             </span>
           </UButton>
         </UTooltip>
-        <UTooltip :text="t('pull.scope.previous')" :kbds="['[']">
+        <UTooltip :text="t('pull.scope.previous')" :kbds="kbds('commits')">
           <UButton
             color="neutral"
             variant="ghost"
             size="sm"
             icon="i-octicon-chevron-left-16"
             :aria-label="t('pull.scope.previous')"
-            :disabled="!canStep.back"
+            :disabled="commitSteps.previous === null"
             :ui="{ leadingIcon: 'rtl:-scale-x-100' }"
             @click="stepCommits(-1)"
           />
         </UTooltip>
-        <UTooltip :text="t('pull.scope.next')" :kbds="[']']">
+        <UTooltip :text="t('pull.scope.next')" :kbds="kbds('commits', 1)">
           <UButton
             color="neutral"
             variant="ghost"
             size="sm"
             icon="i-octicon-chevron-right-16"
             :aria-label="t('pull.scope.next')"
-            :disabled="!canStep.on"
+            :disabled="commitSteps.next === null"
             :ui="{ leadingIcon: 'rtl:-scale-x-100' }"
             @click="stepCommits(1)"
           />
@@ -224,7 +212,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
           @click="setFileMode('one')"
         />
       </UFieldGroup>
-      <UFieldGroup size="sm" role="group" :aria-label="t('pull.diffView')" class="max-sm:hidden">
+      <UFieldGroup v-if="!phone" size="sm" role="group" :aria-label="t('pull.diffView')">
         <UButton
           v-bind="shown(settings.diffView === 'split')"
           size="sm"
@@ -253,7 +241,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         />
       </UTooltip>
       <span class="flex-1" />
-      <UTooltip :text="t('keys.title')" :kbds="['?']">
+      <UTooltip :text="t('keys.title')" :kbds="kbds('help')">
         <UButton
           color="neutral"
           variant="ghost"
@@ -270,7 +258,6 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
       ref="scroller"
       class="relative min-h-0 flex-1 overflow-y-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary/60"
       tabindex="0"
-      data-main
       :aria-label="t('pull.changesLabel')"
       @scroll.passive="onScroll"
     >
@@ -319,9 +306,9 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
             color="neutral"
             variant="solid"
             size="sm"
-            :label="scope ? t('pull.nextFile') : t('pull.viewedNext')"
+            :label="ticking ? t('pull.viewedNext') : t('pull.nextFile')"
             trailing-icon="i-octicon-arrow-right-16"
-            :disabled="!!scope && index >= shownFiles.length - 1"
+            :disabled="!ticking && index >= shownFiles.length - 1"
             :ui="{ trailingIcon: 'rtl:-scale-x-100' }"
             @click="viewedAndNext"
           />

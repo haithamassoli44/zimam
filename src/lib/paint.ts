@@ -1,4 +1,4 @@
-// PROTOTYPE: a diff line's text in pieces, each with its syntax color and whether it changed within the line.
+// A diff line's text in pieces, each with its syntax color and whether it changed within the line.
 import type { Span } from './diff'
 import type { Token } from './highlight'
 

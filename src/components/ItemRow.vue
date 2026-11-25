@@ -8,22 +8,24 @@ import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import CheckRuns from '@/components/CheckRuns.vue'
+import { stepOf } from '@/components/keys'
 import LabelTag from '@/components/LabelTag.vue'
 import { CHECK_LOOKS, ISSUE_LOOKS, PULL_LOOKS, REVIEW_LOOKS } from '@/components/looks'
 import PersonLink from '@/components/PersonLink.vue'
-import { stateOf } from '@/lib/queries'
+import { pullState, stateOf } from '@/lib/queries'
 import { formatList, formatNumber, fullDate, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import { FRESH_MS, itemRef } from '@/stores/data'
 import { settings } from '@/stores/settings'
-import { openIssue, showIssue, showPull } from '@/stores/view'
+import { showIssue, showPull } from '@/stores/view'
 import type { Item } from '@/types'
 
 const props = defineProps<{ item: Item; repoName: string; archived?: boolean; fresh?: boolean; opened?: boolean }>()
+const emit = defineEmits<{ move: [by: 1 | -1] }>()
 const { t } = useI18n()
 const link = useTemplateRef<HTMLElement>('link')
 
@@ -36,7 +38,7 @@ const state = computed(() => {
     const value = stateOf(item)
     return { look: ISSUE_LOOKS[value], text: t(`item.issue.${value}`) }
   }
-  const value = item.state === 'open' ? (item.review === 'draft' ? 'draft' : 'open') : item.state
+  const value = pullState(item.state, item.review === 'draft')
   return { look: PULL_LOOKS[value], text: t(`item.pr.${value}`) }
 })
 
@@ -56,7 +58,6 @@ const review = computed(() => {
 const diff = computed(() => (open.value && settings.show.size ? props.item.diff : null))
 const updated = computed(() => relativeTime(Date.parse(props.item.updatedAt), now.value))
 
-// Three faces, then a count of the rest.
 const FACES = 3
 const faces = computed(() => props.item.assignees.slice(0, FACES))
 const moreFaces = computed(() => props.item.assignees.slice(FACES).map((person) => person.login))
@@ -65,7 +66,7 @@ const LABELS = 3
 const labels = computed(() => props.item.labels.slice(0, LABELS))
 const moreLabels = computed(() => props.item.labels.slice(LABELS).map((label) => label.name))
 
-// An issue opens in Zimam's issue panel, and a pull request on its own page (PROTOTYPE), at its files. Clicked with a
+// An issue opens in Zimam's issue panel, and a pull request on its own page, at its files. Clicked with a
 // key held or the middle button, either opens on GitHub in a new tab.
 function read(event: MouseEvent): boolean {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false
@@ -88,17 +89,14 @@ function clickTitle(event: MouseEvent) {
   if (read(event)) event.preventDefault()
 }
 
-// The panel beside the list takes the focus it had with it when it closes, and the focus comes back to the issue's row.
-// Over the list, the dialog gives it back itself.
-watch(
-  () => props.opened,
-  (opened, was) => {
-    if (was && !opened && !openIssue.value && document.activeElement === document.body) {
-      link.value?.focus({ preventScroll: true })
-    }
-  },
-  { flush: 'post' },
-)
+/** ↓ and ↑ from the title go to the next or previous row. */
+function onKey(event: KeyboardEvent) {
+  const step = stepOf(event)
+  if (step !== 1 && step !== -1) return
+  event.preventDefault()
+  emit('move', step)
+}
+defineExpose({ focus: () => link.value?.focus({ preventScroll: true }) })
 </script>
 
 <template>
@@ -150,6 +148,7 @@ watch(
           :class="compact && 'truncate'"
           :dir="compact ? 'auto' : undefined"
           @click="clickTitle"
+          @keydown="onKey"
           ><span class="sr-only" dir="auto">{{ stateText }}: </span><template v-if="compact">{{ item.title }}</template
           ><bdi v-else>{{ item.title }}</bdi></a
         >
@@ -169,13 +168,10 @@ watch(
           >{{ repoName }}<span class="text-muted">#{{ item.number }}</span></span
         >
         <span v-if="archived">{{ t('item.archived') }}</span>
-        <!-- Out of the Tab order, like the row's other parts: the title is the row's one stop. -->
+        <!-- Out of the Tab order, like the faces: the row's stops are its title and its checks. -->
         <i18n-t v-if="settings.show.author && item.author" keypath="item.by" tag="span" scope="global">
           <template #login>
-            <PersonLink :who="item.author" tabindex="-1" class="inline-flex items-center gap-1.5 align-bottom">
-              <UAvatar :src="item.author.avatarUrl" alt="" size="3xs" />
-              <bdi>{{ item.author.login }}</bdi>
-            </PersonLink>
+            <PersonLink :who="item.author" tabindex="-1" class="align-bottom" />
           </template>
         </i18n-t>
         <UTooltip :text="t('item.opened', { time: fullDate(item.createdAt) })">
@@ -203,7 +199,7 @@ watch(
           <UTooltip :text="t(`filters.checks.${item.checks}`)">
             <button
               type="button"
-              class="tap flex rounded-sm transition-colors hover:text-highlighted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              class="tap flex rounded-sm focus-ring transition-colors hover:text-highlighted focus-visible:outline-offset-2"
               :aria-label="t('checks.show', { state: t(`filters.checks.${item.checks}`) })"
             >
               <UIcon :name="CHECK_LOOKS[item.checks].icon" class="size-4" :class="CHECK_LOOKS[item.checks].color" />
@@ -230,7 +226,7 @@ watch(
             v-for="person in faces.toReversed()"
             :key="person.login"
             :who="person"
-            :label="person.login"
+            :name="false"
             tabindex="-1"
             aria-hidden="true"
             class="relative -ms-1.5 flex rounded-full last:ms-0 hover:z-1"

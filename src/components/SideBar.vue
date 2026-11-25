@@ -33,17 +33,15 @@ const toast = useToast()
 // The phone's menu draws a second sidebar, so the heading's id can't be fixed.
 const viewsHeading = useId()
 
-// The sync's progress along the footer's edge fills up, and fades once full. The next sync starts it from empty.
+// The sync's progress along the footer's edge fills up, and fades once full. Faded, it empties for the next sync.
 const edge = ref(progress.value ?? 0)
-let emptying = 0
 watch(progress, (now, before) => {
-  clearTimeout(emptying)
   if (now !== null) edge.value = now
-  else if (before !== null) {
-    edge.value = 100
-    emptying = window.setTimeout(() => (edge.value = 0), 600)
-  }
+  else if (before !== null) edge.value = 100
 })
+function faded(event: TransitionEvent) {
+  if (event.propertyName === 'opacity' && progress.value === null) edge.value = 0
+}
 
 const workspaceItems = computed<DropdownMenuItem[][]>(() => [
   settings.workspaces.map((ws) => ({
@@ -160,6 +158,7 @@ function viewMenu(view: View): DropdownMenuItem[][] {
         :class="progress === null && 'opacity-0'"
         :style="{ transform: `scaleX(${edge / 100})` }"
         aria-hidden="true"
+        @transitionend="faded"
       />
       <div class="px-2">
         <SyncStatus />

@@ -39,16 +39,13 @@ const LANGUAGES: Record<Locale, { name: string; dir: 'rtl' | 'ltr'; intl: string
 const language = computed(() => LANGUAGES[settings.locale])
 export const languageName = (locale: Locale) => LANGUAGES[locale].name
 export const otherLocale = computed(() => LOCALES.find((locale) => locale !== settings.locale) ?? settings.locale)
-const rtl = computed(() => language.value.dir === 'rtl')
+/** Whether the page reads from right to left. */
+export const rtl = computed(() => language.value.dir === 'rtl')
 // Nuxt UI places panels by physical side, so the reading start and end swap with the language.
 export const sides = computed(() =>
   rtl.value ? ({ start: 'right', end: 'left' } as const) : ({ start: 'left', end: 'right' } as const),
 )
 export const uiLocale = computed(() => language.value.ui)
-
-export function switchLanguage() {
-  settings.locale = otherLocale.value
-}
 
 watchEffect(() => {
   i18n.global.locale.value = settings.locale

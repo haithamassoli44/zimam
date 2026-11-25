@@ -1,8 +1,9 @@
 import { computed, reactive, watch } from 'vue'
 
 import { defaultFilters, fromQuery, toQuery, type Filters } from '@/lib/filters'
-import type { Post } from '@/lib/issue'
+import { parsePullPath } from '@/lib/refs'
 import { COUNTS } from '@/lib/repos'
+import { belongsTo } from '@/lib/sources'
 import { randomId } from '@/lib/text'
 import {
   BOT_POSTS,
@@ -146,9 +147,8 @@ export const settings = reactive<Settings>(loaded ?? defaults())
 /** How a post shows, by its author: a bot's as Settings say, anyone else's in full. */
 export const postLook = (author: { bot: boolean } | null | undefined): BotPosts =>
   author?.bot ? settings.bots : 'show'
-/** Whether a post shows folded to a line: hidden on GitHub, or a bot's that Settings fold. */
-export const postFolds = (post: Pick<Post, 'author' | 'hidden'>, look = postLook(post.author)) =>
-  post.hidden !== null || look === 'collapse'
+/** Whether a post shows at all: Settings may hide the bots'. */
+export const postShown = (author: { bot: boolean } | null | undefined) => postLook(author) !== 'hide'
 
 // What this tab last wrote or took from another tab. Writing that back would bounce between tabs that have
 // different workspaces open.
@@ -169,8 +169,14 @@ function save() {
 // couldn't be read are left alone.
 if (loaded) save()
 
+// The address picks the workspace: the one it names, or, for a pull request's page alone, one that brings its
+// repository.
 const requested = new URLSearchParams(globalThis.location?.search).get(WORKSPACE_PARAM)
-if (requested && settings.workspaces.some((ws) => ws.id === requested)) settings.activeWorkspaceId = requested
+const pullRepo = parsePullPath(globalThis.location?.pathname ?? '')?.ref.repo
+const picked = requested
+  ? settings.workspaces.find((ws) => ws.id === requested)
+  : pullRepo && settings.workspaces.find((ws) => ws.sources.some((source) => belongsTo(pullRepo, source)))
+if (picked) settings.activeWorkspaceId = picked.id
 
 watch(settings, save, { deep: true })
 

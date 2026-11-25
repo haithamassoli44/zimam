@@ -1,10 +1,10 @@
-// PROTOTYPE: the pull request page's reads. Not reviewed for production.
-import type { Checks, Label, Merge, Person, Review } from '@/types'
+// A pull request, read whole for its own page: its conversation, reviews and threads, commits and changed files.
+import type { Checks, Label, Merge, Person, PullState, Review, ReviewStanding } from '@/types'
 
 import type { GitHub } from './github'
-import { AUTHOR_FIELDS, POST_FIELDS, toAuthor, toPost, type Author, type Post } from './issue'
 import type { Who } from './people'
-import { ASSIGNEES, LABELS, toChecks, toMerge, toReview } from './queries'
+import { AUTHOR_FIELDS, DESCRIPTION_FIELDS, POST_FIELDS, toAuthor, toPost, type Author, type Post } from './posts'
+import { ASSIGNEES, LABELS, pullState, toChecks, toMerge, toReview, toState } from './queries'
 import type { IssueRef } from './refs'
 
 const AUTHOR = `author { ${AUTHOR_FIELDS} }`
@@ -12,59 +12,101 @@ const REVIEWER = `requestedReviewer { kind: __typename ... on User { login avata
 const COMMIT =
   'oid abbreviatedOid messageHeadline committedDate author { name avatarUrl(size: 64) user { login } } statusCheckRollup { state }'
 
-const TIMELINE_TYPES = [
-  'ISSUE_COMMENT',
-  'PULL_REQUEST_REVIEW',
-  'PULL_REQUEST_COMMIT',
-  'HEAD_REF_FORCE_PUSHED_EVENT',
-  'READY_FOR_REVIEW_EVENT',
-  'CONVERT_TO_DRAFT_EVENT',
-  'REVIEW_REQUESTED_EVENT',
-  'REVIEW_REQUEST_REMOVED_EVENT',
-  'REVIEW_DISMISSED_EVENT',
-  'RENAMED_TITLE_EVENT',
-  'BASE_REF_CHANGED_EVENT',
-  'MERGED_EVENT',
-  'CLOSED_EVENT',
-  'REOPENED_EVENT',
-  'AUTO_MERGE_ENABLED_EVENT',
-]
+/** How an event in the conversation became an entry, with who did it and when. */
+type Base = { id: string; at: string; actor: Author | null }
 
-const TIMELINE_NODES = `
-  kind: __typename
-  ... on IssueComment { ${POST_FIELDS} }
-  ... on PullRequestReview { ${POST_FIELDS} state submittedAt }
-  ... on PullRequestCommit { id commit { ${COMMIT} } }
-  ... on HeadRefForcePushedEvent { id createdAt actor { ${AUTHOR_FIELDS} } beforeCommit { abbreviatedOid oid } afterCommit { abbreviatedOid oid } }
-  ... on ReadyForReviewEvent { id createdAt actor { ${AUTHOR_FIELDS} } }
-  ... on ConvertToDraftEvent { id createdAt actor { ${AUTHOR_FIELDS} } }
-  ... on ReviewRequestedEvent { id createdAt actor { ${AUTHOR_FIELDS} } ${REVIEWER} }
-  ... on ReviewRequestRemovedEvent { id createdAt actor { ${AUTHOR_FIELDS} } ${REVIEWER} }
-  ... on ReviewDismissedEvent { id createdAt actor { ${AUTHOR_FIELDS} } dismissalMessage review { author { login } } }
-  ... on RenamedTitleEvent { id createdAt actor { ${AUTHOR_FIELDS} } previousTitle currentTitle }
-  ... on BaseRefChangedEvent { id createdAt actor { ${AUTHOR_FIELDS} } previousRefName currentRefName }
-  ... on MergedEvent { id createdAt actor { ${AUTHOR_FIELDS} } mergeRefName commit { abbreviatedOid } }
-  ... on ClosedEvent { id createdAt actor { ${AUTHOR_FIELDS} } }
-  ... on ReopenedEvent { id createdAt actor { ${AUTHOR_FIELDS} } }
-  ... on AutoMergeEnabledEvent { id createdAt actor { ${AUTHOR_FIELDS} } }`
+// The events the conversation shows, by GitHub's type: what to read of each, and the entry it makes.
+const EVENTS: Record<string, { fields?: string; entry: (node: Raw, base: Base) => Entry }> = {
+  HeadRefForcePushedEvent: {
+    fields: 'beforeCommit { abbreviatedOid } afterCommit { abbreviatedOid }',
+    entry: (node, base) => ({
+      kind: 'forcePushed',
+      ...base,
+      before: node.beforeCommit?.abbreviatedOid ?? null,
+      after: node.afterCommit?.abbreviatedOid ?? null,
+    }),
+  },
+  ReadyForReviewEvent: { entry: (_, base) => ({ kind: 'ready', ...base }) },
+  ConvertToDraftEvent: { entry: (_, base) => ({ kind: 'draft', ...base }) },
+  ClosedEvent: { entry: (_, base) => ({ kind: 'closed', ...base }) },
+  ReopenedEvent: { entry: (_, base) => ({ kind: 'reopened', ...base }) },
+  AutoMergeEnabledEvent: { entry: (_, base) => ({ kind: 'autoMerge', ...base }) },
+  ReviewRequestedEvent: {
+    fields: REVIEWER,
+    entry: (node, base) => ({ kind: 'requested', ...base, reviewer: toReviewer(node) }),
+  },
+  ReviewRequestRemovedEvent: {
+    fields: REVIEWER,
+    entry: (node, base) => ({ kind: 'unrequested', ...base, reviewer: toReviewer(node) }),
+  },
+  ReviewDismissedEvent: {
+    fields: 'dismissalMessage review { author { login } }',
+    entry: (node, base) => ({
+      kind: 'dismissed',
+      ...base,
+      whose: node.review?.author?.login ?? null,
+      message: node.dismissalMessage ?? null,
+    }),
+  },
+  RenamedTitleEvent: {
+    fields: 'previousTitle currentTitle',
+    entry: (node, base) => ({ kind: 'renamed', ...base, from: node.previousTitle, to: node.currentTitle }),
+  },
+  BaseRefChangedEvent: {
+    fields: 'previousRefName currentRefName',
+    entry: (node, base) => ({ kind: 'rebased', ...base, from: node.previousRefName, to: node.currentRefName }),
+  },
+  MergedEvent: {
+    fields: 'mergeRefName commit { abbreviatedOid }',
+    entry: (node, base) => ({
+      kind: 'merged',
+      ...base,
+      into: node.mergeRefName,
+      commit: node.commit?.abbreviatedOid ?? null,
+    }),
+  },
+}
 
-const THREADS = `
-  pageInfo { hasNextPage endCursor }
-  nodes {
-    id path line originalLine diffSide isResolved isOutdated subjectType
-    resolvedBy { login }
-    comments(first: 50) {
-      totalCount
-      nodes { ${POST_FIELDS} diffHunk outdated pullRequestReview { id } }
-    }
+// The conversation's entries: posts and pushes, then the events. GitHub names the types to ask for in capitals.
+const TIMELINE = {
+  IssueComment: POST_FIELDS,
+  PullRequestReview: `${POST_FIELDS} state submittedAt`,
+  PullRequestCommit: `id commit { ${COMMIT} }`,
+  ...Object.fromEntries(
+    Object.entries(EVENTS).map(([type, event]) => [
+      type,
+      `id createdAt actor { ${AUTHOR_FIELDS} } ${event.fields ?? ''}`,
+    ]),
+  ),
+}
+const TIMELINE_TYPES = Object.keys(TIMELINE).map((type) => type.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase())
+const TIMELINE_NODES = `kind: __typename ${Object.entries(TIMELINE)
+  .map(([type, fields]) => `... on ${type} { ${fields} }`)
+  .join(' ')}`
+
+// What the pull request lists 100 to a page, and how many pages past the first each reads. The rest is left out.
+const LISTS = {
+  timelineItems: { args: `itemTypes: [${TIMELINE_TYPES.join(', ')}]`, nodes: TIMELINE_NODES, more: 8 },
+  reviewThreads: {
+    args: '',
+    nodes: `id path line originalLine diffSide isResolved isOutdated subjectType resolvedBy { login }
+      comments(first: 50) { totalCount nodes { ${POST_FIELDS} diffHunk outdated pullRequestReview { id } } }`,
+    more: 5,
+  },
+  files: { args: '', nodes: 'path viewerViewedState', more: 9 },
+}
+type List = keyof typeof LISTS
+const page = (list: List, after: boolean) =>
+  `${list}(first: 100${after ? ', after: $after' : ''}${LISTS[list].args && `, ${LISTS[list].args}`}) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ${LISTS[list].nodes} }
   }`
 
 const PULL = `
   query($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
       pullRequest(number: $number) {
-        id url title number state isDraft merged mergedAt createdAt lastEditedAt updatedAt bodyHTML authorAssociation
-        ${AUTHOR}
+        ${DESCRIPTION_FIELDS} title number state isDraft mergedAt updatedAt
         mergedBy { ${AUTHOR_FIELDS} }
         baseRefName headRefName baseRefOid headRefOid isCrossRepository
         headRepositoryOwner { login }
@@ -76,44 +118,25 @@ const PULL = `
         latestOpinionatedReviews(first: 20) { nodes { state submittedAt ${AUTHOR} } }
         commits(first: 100) { totalCount nodes { commit { ${COMMIT} messageBody parents(first: 1) { nodes { oid } } } } }
         lastCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-        files(first: 100) { nodes { path viewerViewedState } }
-        timelineItems(first: 100, itemTypes: [${TIMELINE_TYPES.join(', ')}]) {
-          pageInfo { hasNextPage endCursor }
-          nodes { ${TIMELINE_NODES} }
-        }
-        reviewThreads(first: 100) { ${THREADS} }
+        ${page('files', false)}
+        ${page('timelineItems', false)}
+        ${page('reviewThreads', false)}
       }
     }
   }`
 
-const MORE_TIMELINE = `
-  query($id: ID!, $after: String!) {
-    node(id: $id) {
-      ... on PullRequest {
-        timelineItems(first: 100, after: $after, itemTypes: [${TIMELINE_TYPES.join(', ')}]) {
-          pageInfo { hasNextPage endCursor }
-          nodes { ${TIMELINE_NODES} }
-        }
-      }
-    }
-  }`
-
-const MORE_THREADS = `
-  query($id: ID!, $after: String!) {
-    node(id: $id) { ... on PullRequest { reviewThreads(first: 100, after: $after) { ${THREADS} } } }
-  }`
-
-export type Reviewer =
-  | { kind: 'user' | 'bot'; login: string; avatarUrl: string }
-  | { kind: 'team'; name: string; avatarUrl: string; team: string }
-
-/** A reviewer as a person link takes them: a team by its name, with where it lives. */
-export const reviewerWho = (reviewer: Reviewer | null): Who | null =>
-  !reviewer
-    ? null
-    : reviewer.kind === 'team'
-      ? { login: reviewer.name, avatarUrl: reviewer.avatarUrl, team: reviewer.team }
-      : { login: reviewer.login, avatarUrl: reviewer.avatarUrl, bot: reviewer.kind === 'bot' }
+/** The rest of one of the pull request's lists, a page at a time, as far as its limit. */
+async function restOf(gh: GitHub, id: string, list: List, first: Raw): Promise<Raw[]> {
+  const query = `query($id: ID!, $after: String!) { node(id: $id) { ... on PullRequest { ${page(list, true)} } } }`
+  const nodes: Raw[] = [...first.nodes]
+  let at = first.pageInfo
+  for (let more = 0; at.hasNextPage && more < LISTS[list].more; more++) {
+    const next = (await gh.query<Raw>(query, { id, after: at.endCursor })).node[list]
+    nodes.push(...next.nodes)
+    at = next.pageInfo
+  }
+  return nodes.filter(Boolean)
+}
 
 export interface Commit {
   oid: string
@@ -156,20 +179,15 @@ export type Entry =
   | { kind: 'commits'; id: string; at: string; commits: Commit[] }
   | { kind: 'forcePushed'; id: string; at: string; actor: Author | null; before: string | null; after: string | null }
   | { kind: 'ready' | 'draft' | 'closed' | 'reopened' | 'autoMerge'; id: string; at: string; actor: Author | null }
-  | { kind: 'requested' | 'unrequested'; id: string; at: string; actor: Author | null; reviewer: Reviewer | null }
+  | { kind: 'requested' | 'unrequested'; id: string; at: string; actor: Author | null; reviewer: Who | null }
   | { kind: 'dismissed'; id: string; at: string; actor: Author | null; whose: string | null; message: string | null }
   | { kind: 'renamed'; id: string; at: string; actor: Author | null; from: string; to: string }
   | { kind: 'rebased'; id: string; at: string; actor: Author | null; from: string; to: string }
   | { kind: 'merged'; id: string; at: string; actor: Author | null; into: string; commit: string | null }
 
-export type PullState = 'open' | 'draft' | 'merged' | 'closed'
-
 /** Whether an entry is someone's post, a comment or a review, and not an event. */
 export const isPost = (entry: Entry): entry is Extract<Entry, { kind: 'comment' | 'review' }> =>
   entry.kind === 'comment' || entry.kind === 'review'
-
-/** Where a pull request stands on review: a verdict, someone still asked to review, or what its branch's rules ask. */
-export type ReviewStanding = 'approved' | 'changes' | 'awaiting' | Review
 
 export function reviewStanding(pull: Pull): ReviewStanding {
   if (pull.review === 'approved' || pull.review === 'changes' || pull.review === 'draft') return pull.review
@@ -218,7 +236,7 @@ export interface Pull {
   checks: Checks | null
   labels: Label[]
   assignees: Person[]
-  requested: Reviewer[]
+  requested: Who[]
   verdicts: { verdict: Verdict; at: string; author: Author | null }[]
   commits: Commit[]
   commitCount: number
@@ -227,17 +245,18 @@ export interface Pull {
   threads: ReviewThread[]
 }
 
-type Raw = any // PROTOTYPE: the raw answer isn't typed field by field.
+type Raw = any // The raw answer isn't typed field by field.
 
-// A review is a post dated when it was submitted, not when its writer started it.
-const toReviewPost = (raw: Raw): Post => toPost({ ...raw, createdAt: raw.submittedAt ?? raw.createdAt })
+// A review is dated when it was submitted, not when its writer started it.
+const reviewedAt = (raw: Raw): string => raw.submittedAt ?? raw.createdAt
+const verdictOf = (raw: Raw): Verdict => VERDICTS[raw.state] ?? 'commented'
 
-function toReviewer(raw: Raw): Reviewer | null {
+function toReviewer(raw: Raw): Who | null {
   const who = raw?.requestedReviewer
   if (!who) return null
   if (who.kind === 'Team')
-    return { kind: 'team', name: who.name, avatarUrl: who.avatarUrl, team: `${who.organization?.login}/${who.slug}` }
-  return { kind: who.kind === 'Bot' ? 'bot' : 'user', login: who.login, avatarUrl: who.avatarUrl }
+    return { login: null, name: who.name, avatarUrl: who.avatarUrl, team: `${who.organization?.login}/${who.slug}` }
+  return { login: who.login, avatarUrl: who.avatarUrl, bot: who.kind === 'Bot' }
 }
 
 const VERDICTS: Record<string, Verdict> = {
@@ -311,14 +330,14 @@ function toEntries(nodes: Raw[], threads: ReviewThread[]): Entry[] {
         break
       case 'PullRequestReview': {
         const threadsOf = byReview.get(node.id) ?? []
-        const verdict = VERDICTS[node.state] ?? 'commented'
+        const verdict = verdictOf(node)
         // A review that only answered inside threads shows as those answers, under the review that started each.
         if (verdict === 'commented' && !node.bodyHTML && !threadsOf.length) break
         entries.push({
           kind: 'review',
           id: node.id,
-          at: node.submittedAt ?? node.createdAt,
-          post: toReviewPost(node),
+          at: reviewedAt(node),
+          post: toPost({ ...node, createdAt: reviewedAt(node) }),
           verdict,
           threads: threadsOf,
         })
@@ -333,60 +352,10 @@ function toEntries(nodes: Raw[], threads: ReviewThread[]): Entry[] {
         } else entries.push({ kind: 'commits', id: node.id, at: commit.at, commits: [commit] })
         break
       }
-      case 'HeadRefForcePushedEvent':
-        entries.push({
-          kind: 'forcePushed',
-          ...base,
-          actor,
-          before: node.beforeCommit?.abbreviatedOid ?? null,
-          after: node.afterCommit?.abbreviatedOid ?? null,
-        })
-        break
-      case 'ReadyForReviewEvent':
-        entries.push({ kind: 'ready', ...base, actor })
-        break
-      case 'ConvertToDraftEvent':
-        entries.push({ kind: 'draft', ...base, actor })
-        break
-      case 'ClosedEvent':
-        entries.push({ kind: 'closed', ...base, actor })
-        break
-      case 'ReopenedEvent':
-        entries.push({ kind: 'reopened', ...base, actor })
-        break
-      case 'AutoMergeEnabledEvent':
-        entries.push({ kind: 'autoMerge', ...base, actor })
-        break
-      case 'ReviewRequestedEvent':
-        entries.push({ kind: 'requested', ...base, actor, reviewer: toReviewer(node) })
-        break
-      case 'ReviewRequestRemovedEvent':
-        entries.push({ kind: 'unrequested', ...base, actor, reviewer: toReviewer(node) })
-        break
-      case 'ReviewDismissedEvent':
-        entries.push({
-          kind: 'dismissed',
-          ...base,
-          actor,
-          whose: node.review?.author?.login ?? null,
-          message: node.dismissalMessage ?? null,
-        })
-        break
-      case 'RenamedTitleEvent':
-        entries.push({ kind: 'renamed', ...base, actor, from: node.previousTitle, to: node.currentTitle })
-        break
-      case 'BaseRefChangedEvent':
-        entries.push({ kind: 'rebased', ...base, actor, from: node.previousRefName, to: node.currentRefName })
-        break
-      case 'MergedEvent':
-        entries.push({
-          kind: 'merged',
-          ...base,
-          actor,
-          into: node.mergeRefName,
-          commit: node.commit?.abbreviatedOid ?? null,
-        })
-        break
+      default: {
+        const event = EVENTS[node.kind]
+        if (event) entries.push(event.entry(node, { ...base, actor }))
+      }
     }
   }
   return entries
@@ -399,29 +368,17 @@ export async function readPull(gh: GitHub, ref: IssueRef): Promise<Pull> {
   const raw = data.repository?.pullRequest
   if (!raw) throw new Error(errors[0]?.message ?? 'No pull request in the answer')
 
-  const timeline: Raw[] = [...raw.timelineItems.nodes]
-  let page = raw.timelineItems.pageInfo
-  for (let more = 0; page.hasNextPage && more < 8; more++) {
-    const next = await gh.query<Raw>(MORE_TIMELINE, { id: raw.id, after: page.endCursor })
-    timeline.push(...next.node.timelineItems.nodes)
-    page = next.node.timelineItems.pageInfo
-  }
-  const threadNodes: Raw[] = [...raw.reviewThreads.nodes]
-  let threadPage = raw.reviewThreads.pageInfo
-  for (let more = 0; threadPage.hasNextPage && more < 5; more++) {
-    const next = await gh.query<Raw>(MORE_THREADS, { id: raw.id, after: threadPage.endCursor })
-    threadNodes.push(...next.node.reviewThreads.nodes)
-    threadPage = next.node.reviewThreads.pageInfo
-  }
-  const threads = threadNodes.filter(Boolean).map(toThread)
-  const state: PullState = raw.merged ? 'merged' : raw.state === 'CLOSED' ? 'closed' : raw.isDraft ? 'draft' : 'open'
+  const [timeline, threadNodes, files] = await Promise.all(
+    (['timelineItems', 'reviewThreads', 'files'] as const).map((list) => restOf(gh, raw.id, list, raw[list])),
+  )
+  const threads = threadNodes.map(toThread)
 
   return {
     id: raw.id,
     ref,
     url: raw.url,
     title: raw.title,
-    state,
+    state: pullState(toState(raw.state), raw.isDraft),
     post: toPost(raw),
     mergedBy: toAuthor(raw.mergedBy),
     mergedAt: raw.mergedAt,
@@ -441,18 +398,15 @@ export async function readPull(gh: GitHub, ref: IssueRef): Promise<Pull> {
     checks: toChecks(raw.lastCommit.nodes[0]?.commit.statusCheckRollup?.state),
     labels: raw.labels?.nodes.filter(Boolean) ?? [],
     assignees: raw.assignees?.nodes.filter(Boolean) ?? [],
-    requested: (raw.reviewRequests.nodes as Raw[]).map(toReviewer).filter((r): r is Reviewer => !!r),
+    requested: (raw.reviewRequests.nodes as Raw[]).map(toReviewer).filter((who) => who !== null),
     verdicts: (raw.latestOpinionatedReviews.nodes as Raw[]).filter(Boolean).map((review) => ({
-      verdict: VERDICTS[review.state] ?? 'commented',
-      at: review.submittedAt,
+      verdict: verdictOf(review),
+      at: reviewedAt(review),
       author: toAuthor(review.author),
     })),
     commits: (raw.commits.nodes as Raw[]).map((node) => toCommit(node.commit)),
     commitCount: raw.commits.totalCount,
-    files: (raw.files.nodes as Raw[]).map((file) => ({
-      path: file.path,
-      viewedOnGitHub: file.viewerViewedState,
-    })),
+    files: files.map((file) => ({ path: file.path, viewedOnGitHub: file.viewerViewedState })),
     entries: toEntries(timeline, threads),
     threads,
   }

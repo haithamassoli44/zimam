@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// PROTOTYPE: the end of the hunk a review comment was written on, as GitHub sends it with the comment.
+// The end of the hunk a review comment was written on, as GitHub sends it with the comment.
 import { computed } from 'vue'
 
 const props = defineProps<{ hunk: string }>()
@@ -19,13 +19,11 @@ const lines = computed(() =>
     <div
       v-for="(line, index) in lines"
       :key="index"
-      class="flex px-3 whitespace-pre"
-      :class="line.kind === 'add' ? 'bg-(--diff-add)' : line.kind === 'del' ? 'bg-(--diff-del)' : ''"
+      class="px-3 whitespace-pre"
+      :class="line.kind === 'add' ? 'diff-add' : line.kind === 'del' ? 'diff-del' : ''"
     >
-      <span class="w-4 shrink-0 text-muted select-none">{{
-        line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' '
-      }}</span>
-      <span>{{ line.text }}</span>
+      <span class="diff-sign">{{ line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' ' }}</span
+      >{{ line.text }}
     </div>
   </div>
 </template>

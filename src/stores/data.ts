@@ -1,13 +1,10 @@
 import { computed, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 
-import { deleteCache } from '@/lib/cache'
-import { readChanges, readRange, readTexts, type Changes, type Content } from '@/lib/changes'
-import { readCheckRuns, type CheckRuns } from '@/lib/checks'
+import { deleteCache, seenKey } from '@/lib/cache'
+import { readCheckRuns, type CheckRuns, type CheckSubject } from '@/lib/checks'
 import type { Context } from '@/lib/filters'
 import { createGitHub, type GitHub } from '@/lib/github'
 import { readIssue, readMoreComments, type Thread } from '@/lib/issue'
-import { readProfile, type Profile } from '@/lib/people'
-import { readPull, type Pull } from '@/lib/pull'
 import type { IssueRef } from '@/lib/refs'
 import { idleStatus, syncKey, Syncer, TICK, type SyncStatus, type SyncStore } from '@/lib/sync'
 import { noOne, type Item, type Me, type Repo, type Workspace } from '@/types'
@@ -88,8 +85,15 @@ export function gathered(size: () => number) {
 }
 
 let syncer: Syncer | null = null
-let github: GitHub | null = null
 let opening = 0
+
+/** The open workspace's GitHub client, from the moment it's chosen. */
+export const client = shallowRef<GitHub | null>(null)
+/** The open workspace's GitHub client. Throws without one. */
+export function gitHub(): GitHub {
+  if (!client.value) throw new Error('No workspace')
+  return client.value
+}
 
 function session(): SyncStore {
   const store: SyncStore = {
@@ -115,15 +119,13 @@ async function open(ws: Workspace | null) {
   const ticket = ++opening
   syncer?.stop()
   syncer = null
-  github = null
   loaded.value = false
   const store = session()
-  if (!ws) return
-  const gh = createGitHub(ws.token)
-  const next = await Syncer.open(ws, gh, store, status.value)
+  client.value = ws && createGitHub(ws.token)
+  if (!ws || !client.value) return
+  const next = await Syncer.open(ws, client.value, store, status.value)
   if (ticket !== opening) return
   syncer = next
-  github = gh
   loaded.value = true
   void next.start()
 }
@@ -140,62 +142,17 @@ export function syncNow(manual = false) {
   return syncer ? syncer.sync(manual) : Promise.resolve()
 }
 
+/** A read with the open workspace's client, which fails, rather than throws, without one. */
+const asking = <T>(read: () => Promise<T>): Promise<T> => Promise.resolve().then(read)
+
 /** The checks on an open pull request's last commit, read from GitHub when asked for. */
-export function checkRuns(item: Pick<Item, 'id' | 'updatedAt' | 'checks'>): Promise<CheckRuns> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readCheckRuns(github, item)
-}
+export const checkRuns = (item: CheckSubject): Promise<CheckRuns> => asking(() => readCheckRuns(gitHub(), item))
 
 /** An issue and its first comments, read from GitHub with the open workspace's token when it's opened. */
-export function issueThread(issue: IssueRef, version?: string): Promise<Thread> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readIssue(github, issue, version)
-}
+export const issueThread = (issue: IssueRef, version?: string): Promise<Thread> =>
+  asking(() => readIssue(gitHub(), issue, version))
 
-export function moreComments(thread: Thread): Promise<Thread> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readMoreComments(github, thread)
-}
-
-// Read once a session for each account. A read that fails is tried again the next time.
-const profiles = new Map<string, Promise<Profile | null>>()
-
-/** Someone's GitHub profile, for the card on their name. */
-export function profile(login: string): Promise<Profile | null> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  const key = login.toLowerCase()
-  let found = profiles.get(key)
-  if (!found) {
-    found = readProfile(github, login)
-    profiles.set(key, found)
-    found.catch(() => profiles.delete(key))
-  }
-  return found
-}
-
-/** PROTOTYPE: a pull request with its conversation, read with the open workspace's token. */
-export function pullRequest(pull: IssueRef): Promise<Pull> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readPull(github, pull)
-}
-
-/** PROTOTYPE: a pull request's changed files and where its diff starts. */
-export function pullChanges(repo: string, pull: Parameters<typeof readChanges>[2]): Promise<Changes> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readChanges(github, repo, pull)
-}
-
-/** PROTOTYPE: what a run of a pull request's commits changed. */
-export function pullRange(repo: string, base: string, head: string): Promise<Changes> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readRange(github, repo, base, head)
-}
-
-/** PROTOTYPE: files' texts at commits, by `commit:path` expressions. */
-export function pullTexts(repo: string, expressions: string[]): Promise<Content[]> {
-  if (!github) return Promise.reject(new Error('No workspace'))
-  return readTexts(github, repo, expressions)
-}
+export const moreComments = (thread: Thread): Promise<Thread> => asking(() => readMoreComments(gitHub(), thread))
 
 /** Drops what this browser saved for the open workspace and fetches it again. */
 export async function reloadWorkspace() {
@@ -211,6 +168,11 @@ export async function deleteWorkspace() {
   if (!ws) return
   syncer?.stop()
   await deleteCache(ws.id)
+  try {
+    localStorage.removeItem(seenKey(ws.id))
+  } catch {
+    // Without storage, nothing was kept.
+  }
   removeWorkspace(ws.id)
 }
 

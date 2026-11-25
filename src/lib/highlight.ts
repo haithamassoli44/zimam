@@ -1,4 +1,4 @@
-// PROTOTYPE: syntax colors for the diff, with Shiki. The colors are CSS variables, set in style.css for each theme.
+// Syntax colors for the diff, with Shiki. The colors are CSS variables, set in style.css for each theme.
 import type { HighlighterCore, ThemedToken } from 'shiki/core'
 
 export type Token = Pick<ThemedToken, 'content' | 'color' | 'fontStyle'>
@@ -65,6 +65,7 @@ export function languageOf(path: string): string | null {
 
 let core: Promise<HighlighterCore> | null = null
 
+// A load that fails, say for a chunk a deploy renamed, is tried again the next time.
 function highlighter(): Promise<HighlighterCore> {
   core ??= (async () => {
     const [{ createHighlighterCore, createCssVariablesTheme }, { createJavaScriptRegexEngine }] = await Promise.all([
@@ -77,6 +78,7 @@ function highlighter(): Promise<HighlighterCore> {
       engine: createJavaScriptRegexEngine({ forgiving: true }),
     })
   })()
+  core.catch(() => (core = null))
   return core
 }
 
@@ -92,6 +94,7 @@ async function ensure(lang: string): Promise<HighlighterCore> {
         if (load) await h.loadLanguage(load)
       })
       loading.set(lang, wait)
+      wait.catch(() => loading.delete(lang))
     }
     await wait
   }
@@ -100,16 +103,15 @@ async function ensure(lang: string): Promise<HighlighterCore> {
 
 // Highlighting a long file holds up the page, so files past this many lines stay plain.
 const MAX_LINES = 6000
-const cache = new Map<string, Promise<Token[][] | null>>()
+// Tokens last as long as their text does.
+const cache = new WeakMap<{ text: string }, Promise<Token[][] | null>>()
 
-/** Lets go of every text's tokens, when the page moves to another pull request. */
-export const forgetTokens = () => cache.clear()
-
-/** The tokens of each line of a text, or null when it isn't highlighted. `key` names the text for the cache. */
-export function tokenize(key: string, text: string, lang: string | null): Promise<Token[][] | null> {
+/** The tokens of each line of a text, or null when it isn't highlighted. */
+export function tokenize(content: { text: string }, lang: string | null): Promise<Token[][] | null> {
   if (!lang) return Promise.resolve(null)
-  const cached = cache.get(key)
+  const cached = cache.get(content)
   if (cached) return cached
+  const { text } = content
   const answer = (async () => {
     if (text.split('\n', MAX_LINES + 1).length > MAX_LINES) return null
     const h = await ensure(lang)
@@ -117,8 +119,13 @@ export function tokenize(key: string, text: string, lang: string | null): Promis
     // Let the page paint between files.
     await new Promise((resolve) => setTimeout(resolve, 0))
     const lines = h.codeToTokensBase(text, { lang, theme: 'zimam' })
-    return lines.map((line) => line.map(({ content, color, fontStyle }) => ({ content, color, fontStyle })))
-  })().catch(() => null)
-  cache.set(key, answer)
+    return lines.map((line) =>
+      line.map((token) => ({ content: token.content, color: token.color, fontStyle: token.fontStyle })),
+    )
+  })().catch(() => {
+    cache.delete(content)
+    return null
+  })
+  cache.set(content, answer)
   return answer
 }

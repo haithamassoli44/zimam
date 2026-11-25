@@ -445,7 +445,6 @@
     "resolvedBy": "resolved by {login}",
     "threadComments": "No comments | 1 comment | {n} comments",
     "moreOnGitHub": "{n} more on GitHub",
-    "botThreads": "No threads | 1 thread from a bot, folded | {n} threads from a bot, folded",
     "changedSince": "Changed since your visit",
     "generatedTag": "Generated",
     "onGitHub": "Open on GitHub",
@@ -458,8 +457,8 @@
     "expandUp": "Show {n} line above | Show {n} lines above",
     "expandDown": "Show {n} line below | Show {n} lines below",
     "hiddenLines": "No unchanged lines | 1 unchanged line | {n} unchanged lines",
-    "showThreads": "Show the threads on this line",
     "fold": "Fold this file",
+    "foldPost": "Fold this comment",
     "unfold": "Unfold this file",
     "rewritten": "Too many changes to pair line by line in time, so the file shows as removed, then added.",
     "status": {
@@ -521,7 +520,6 @@
       "nothing": "Nothing new",
       "legend": "What you saw before is faded; new lines have a blue bar.",
       "first": "First new change",
-      "pretend": "Pretend visit",
       "firstVisit": "Your first visit. Next time, what you've already seen will be faded.",
       "line": "New since your last visit",
       "newCommits": "Show the new commits"

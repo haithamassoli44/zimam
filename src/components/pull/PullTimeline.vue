@@ -1,54 +1,29 @@
 <script setup lang="ts">
-// PROTOTYPE: the conversation: the description, comments, reviews with their threads, and the events that matter to a
+// The conversation: the description, comments, reviews with their threads, and the events that matter to a
 // reviewer, with a line where what's new since the last visit starts.
-import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { CHECK_LOOKS, VERDICT_LOOKS } from '@/components/looks'
+import { CHECK_LOOKS } from '@/components/looks'
 import PersonLink from '@/components/PersonLink.vue'
-import PostBlock from '@/components/pull/PostBlock.vue'
+import PostBlock from '@/components/PostBlock.vue'
+import { EVENT_LOOKS, VERDICT_LOOKS, type Happening } from '@/components/pull/looks'
 import ThreadCard from '@/components/pull/ThreadCard.vue'
+import TimeAgo from '@/components/TimeAgo.vue'
 import type { Entry } from '@/lib/pull'
-import { isPost, reviewerWho } from '@/lib/pull'
-import { formatNumber, fullDate, relativeTime } from '@/locale'
-import { now } from '@/stores/clock'
+import { formatNumber } from '@/locale'
 import { isFresh, markTime, pull, shownEntries } from '@/stores/pull'
-import { postLook } from '@/stores/settings'
 
 const { t } = useI18n()
 
-/** The entries that are things that happened, not posts or pushes. */
-type Happening = Exclude<Entry, { kind: 'comment' | 'review' | 'commits' }>
-
-const EVENT_ICON: Record<Happening['kind'], string> = {
-  forcePushed: 'i-octicon-repo-push-16',
-  ready: 'i-octicon-eye-16',
-  draft: 'i-octicon-git-pull-request-draft-16',
-  closed: 'i-octicon-git-pull-request-closed-16',
-  reopened: 'i-octicon-git-pull-request-16',
-  autoMerge: 'i-octicon-git-merge-queue-16',
-  requested: 'i-octicon-person-add-16',
-  unrequested: 'i-octicon-person-16',
-  dismissed: 'i-octicon-x-circle-16',
-  renamed: 'i-octicon-pencil-16',
-  rebased: 'i-octicon-git-branch-16',
-  merged: 'i-octicon-git-merge-16',
-}
-
-const lookOf = (entry: Entry) => (isPost(entry) ? postLook(entry.post.author) : 'show')
 /** A push lists this many of its commits; the commits part has them all. */
 const PUSHED = 3
 
-// The first entry newer than the last visit gets the line above it.
 const firstFresh = computed(() => {
   if (markTime.value === null) return null
   return shownEntries.value.find((entry) => isFresh(entry.at))?.id ?? null
 })
-
-const ago = (time: string) => relativeTime(Date.parse(time), now.value)
 
 /** The words an event's sentence puts beside the people in it, who are links. */
 function wordsOf(entry: Happening): { from: string; to: string; into: string; commit: string } {
@@ -59,7 +34,7 @@ function wordsOf(entry: Happening): { from: string; to: string; into: string; co
   return none
 }
 const whomOf = (entry: Happening) =>
-  entry.kind === 'requested' || entry.kind === 'unrequested' ? reviewerWho(entry.reviewer) : null
+  entry.kind === 'requested' || entry.kind === 'unrequested' ? entry.reviewer : null
 const whoseOf = (entry: Happening) => (entry.kind === 'dismissed' && entry.whose ? { login: entry.whose } : null)
 
 const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdicts.${entry.verdict}`)
@@ -68,7 +43,12 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
 <template>
   <div v-if="pull" class="pb-10">
     <article class="p-4">
-      <PostBlock :post="pull.post" :action="t('pull.opened')" />
+      <PostBlock
+        :post="pull.post"
+        place="description"
+        :action="t('pull.opened')"
+        :fresh="isFresh(pull.post.createdAt)"
+      />
       <p v-if="!pull.post.html" class="mt-2 text-[13px] text-muted">{{ t('pull.noDescription') }}</p>
     </article>
 
@@ -81,32 +61,30 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
       </div>
 
       <article v-if="entry.kind === 'comment'" class="border-t border-default px-4 py-4">
-        <PostBlock :post="entry.post" :look="lookOf(entry)" />
+        <PostBlock :post="entry.post" place="conversation" :fresh="isFresh(entry.at)" />
       </article>
 
       <article v-else-if="entry.kind === 'review'" class="border-t border-default px-4 py-4">
-        <PostBlock :post="entry.post" :action="verdictText(entry)" :look="lookOf(entry)" />
-        <div v-if="!entry.post.html && lookOf(entry) === 'show'" class="mt-1 flex items-center gap-1.5 text-[13px]">
-          <UIcon :name="VERDICT_LOOKS[entry.verdict].icon" class="size-4" :class="VERDICT_LOOKS[entry.verdict].color" />
-        </div>
-        <div v-if="entry.threads.length && lookOf(entry) === 'show'" class="mt-3 space-y-3">
-          <ThreadCard v-for="thread in entry.threads" :key="thread.id" :thread="thread" snippet where />
-        </div>
-        <p v-else-if="entry.threads.length" class="mt-2 text-[12px] text-muted">
-          {{ t('pull.botThreads', { n: formatNumber(entry.threads.length) }, entry.threads.length) }}
-        </p>
+        <PostBlock :post="entry.post" place="conversation" :action="verdictText(entry)" :fresh="isFresh(entry.at)">
+          <div v-if="!entry.post.html" class="mt-1 flex items-center gap-1.5 text-[13px]">
+            <UIcon
+              :name="VERDICT_LOOKS[entry.verdict].icon"
+              class="size-4"
+              :class="VERDICT_LOOKS[entry.verdict].color"
+            />
+          </div>
+          <div v-if="entry.threads.length" class="mt-3 space-y-3">
+            <ThreadCard v-for="thread in entry.threads" :key="thread.id" :thread="thread" place="conversation" />
+          </div>
+        </PostBlock>
       </article>
 
       <div v-else-if="entry.kind === 'commits'" class="border-t border-default px-4 py-3">
         <p class="flex items-center gap-2 text-[13px] text-muted">
           <UIcon name="i-octicon-git-commit-16" class="size-4" />
-          <PersonLink :who="entry.commits[0].author" class="text-toned"
-            ><bdi>{{ entry.commits[0].author.login ?? entry.commits[0].author.name }}</bdi></PersonLink
-          >
+          <PersonLink :who="entry.commits[0].author" :picture="false" class="text-toned" />
           {{ t('pull.events.pushed', { n: formatNumber(entry.commits.length) }, entry.commits.length) }}
-          <UTooltip :text="fullDate(entry.at)"
-            ><span>{{ ago(entry.at) }}</span></UTooltip
-          >
+          <TimeAgo :at="entry.at" />
           <span v-if="isFresh(entry.at)" class="text-[12px] font-medium text-primary">{{ t('pull.new') }}</span>
         </p>
         <ul class="mt-2 space-y-1 ps-6">
@@ -133,32 +111,20 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
 
       <p v-else class="flex items-start gap-2 border-t border-default px-4 py-3 text-[13px] text-muted">
         <UIcon
-          :name="EVENT_ICON[entry.kind]"
+          :name="EVENT_LOOKS[entry.kind].icon"
           class="mt-0.5 size-4 shrink-0"
-          :class="entry.kind === 'merged' && 'text-merged'"
+          :class="EVENT_LOOKS[entry.kind].color"
         />
         <span class="min-w-0 flex-1">
           <i18n-t :keypath="`pull.events.${entry.kind}`" tag="bdi" scope="global">
             <template #who>
-              <PersonLink :who="entry.actor" class="text-toned">
-                <UAvatar
-                  v-if="entry.actor"
-                  :src="entry.actor.avatarUrl"
-                  alt=""
-                  size="3xs"
-                  class="me-1.5 align-[-3px]"
-                /><bdi>{{ entry.actor?.login ?? t('issue.ghost') }}</bdi>
-              </PersonLink>
+              <PersonLink :who="entry.actor" class="align-bottom text-toned" />
             </template>
             <template #whom>
-              <PersonLink :who="whomOf(entry)" class="text-toned"
-                ><bdi>{{ whomOf(entry)?.login ?? t('issue.ghost') }}</bdi></PersonLink
-              >
+              <PersonLink :who="whomOf(entry)" :picture="false" class="text-toned" />
             </template>
             <template #whose>
-              <PersonLink :who="whoseOf(entry)" class="text-toned"
-                ><bdi>{{ whoseOf(entry)?.login ?? t('issue.ghost') }}</bdi></PersonLink
-              >
+              <PersonLink :who="whoseOf(entry)" :picture="false" class="text-toned" />
             </template>
             <template #from>{{ wordsOf(entry).from }}</template>
             <template #to>{{ wordsOf(entry).to }}</template>
@@ -166,9 +132,7 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
             <template #commit>{{ wordsOf(entry).commit }}</template>
           </i18n-t>
           ·
-          <UTooltip :text="fullDate(entry.at)"
-            ><span>{{ ago(entry.at) }}</span></UTooltip
-          >
+          <TimeAgo :at="entry.at" />
           <span v-if="isFresh(entry.at)" class="ms-1 text-[12px] font-medium text-primary">{{ t('pull.new') }}</span>
         </span>
       </p>
@@ -181,7 +145,7 @@ const verdictText = (entry: Extract<Entry, { kind: 'review' }>) => t(`pull.verdi
         :href="pull.url"
         target="_blank"
         rel="noopener"
-        class="inline-flex items-center gap-1 rounded-sm font-medium text-toned transition-colors hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+        class="inline-flex items-center gap-1 rounded-sm font-medium text-toned focus-ring transition-colors hover:text-highlighted hover:underline"
       >
         {{ t('pull.reviewOnGitHub') }}<UIcon name="i-octicon-link-external-16" class="size-4" />
       </a>

@@ -3,10 +3,13 @@ import type { GitHub } from './github'
 
 /** Someone who wrote, reviewed or did something: a person, a bot, or a team asked to review. */
 export interface Who {
+  /** Null for a deleted account, a commit's author with no account, and a team. */
   login: string | null
+  /** What to call them without a login: a commit author's name, a team's. */
+  name?: string | null
   avatarUrl?: string
   bot?: boolean
-  /** A team, as `owner/slug`, with its name in `login`. */
+  /** A team, as `owner/slug`. */
   team?: string
 }
 
@@ -33,13 +36,40 @@ const PROFILE = `
     }
   }`
 
-type Raw = any // A few fields, read as they come.
+interface RawOwner {
+  kind: 'User' | 'Organization'
+  name: string | null
+  bio?: string | null
+  description?: string | null
+  company?: string | null
+  location: string | null
+  pronouns?: string | null
+  createdAt: string
+  followers?: { totalCount: number }
+  status?: { message: string | null } | null
+}
 
 const blank = (text: string | null | undefined) => text?.trim() || null
 
-/** One point for each account, once a session: a card shown again reads from memory. Null for no such account. */
-export async function readProfile(gh: GitHub, login: string): Promise<Profile | null> {
-  const { repositoryOwner: raw } = await gh.query<Raw>(PROFILE, { login })
+// Read once for each account, by each client. A read that fails is tried again the next time.
+const readFor = new WeakMap<GitHub, Map<string, Promise<Profile | null>>>()
+
+/** Someone's profile, for one point the first time. Null for no such account. */
+export function readProfile(gh: GitHub, login: string): Promise<Profile | null> {
+  const read = readFor.get(gh) ?? new Map()
+  readFor.set(gh, read)
+  const key = login.toLowerCase()
+  let found = read.get(key)
+  if (!found) {
+    found = fetchProfile(gh, login)
+    read.set(key, found)
+    found.catch(() => read.delete(key))
+  }
+  return found
+}
+
+async function fetchProfile(gh: GitHub, login: string): Promise<Profile | null> {
+  const { repositoryOwner: raw } = await gh.query<{ repositoryOwner: RawOwner | null }>(PROFILE, { login })
   if (!raw) return null
   const org = raw.kind === 'Organization'
   return {
@@ -57,11 +87,11 @@ export async function readProfile(gh: GitHub, login: string): Promise<Profile | 
 
 /** Where someone's page is on GitHub. Bots have theirs under apps, teams under their organization. */
 export function profileUrl(who: Who): string | null {
-  if (!who.login) return null
   if (who.team) {
     const [owner, slug] = who.team.split('/')
     return `https://github.com/orgs/${owner}/teams/${slug}`
   }
+  if (!who.login) return null
   const login = who.login.replace(/\[bot\]$/, '')
   return who.bot ? `https://github.com/apps/${login}` : `https://github.com/${login}`
 }

@@ -1,18 +1,20 @@
 import { nextTick, onBeforeUnmount, ref } from 'vue'
 
-import { EASE_OUT, still } from '@/components/motion'
+import { animate } from '@/components/motion'
 
 // Holding a dragged row this close to the top or bottom of the list scrolls it, this many pixels a frame.
 const EDGE = 48
 const SPEED = 10
-// Rows that change places glide to their new ones, unless motion is turned down.
-const GLIDE = { duration: 160, easing: EASE_OUT }
+/** How far down the page an element's place is, by its offsets. */
+function fromPage(element: HTMLElement) {
+  let top = 0
+  for (let at: HTMLElement | null = element; at; at = at.offsetParent as HTMLElement | null) top += at.offsetTop
+  return top
+}
 
 /** Draws a row this many pixels from its place, then lets it glide in. */
 function settle(row: HTMLElement, from: number) {
-  if (from && typeof row.animate === 'function' && !still()) {
-    row.animate([{ transform: `translateY(${from}px)` }, { transform: 'none' }], GLIDE)
-  }
+  if (from) animate(row, [{ transform: `translateY(${from}px)` }, { transform: 'none' }])
 }
 
 /**
@@ -33,16 +35,17 @@ export function useReorder(list: () => HTMLElement | null, order: () => string[]
   const rows = () => [...(list()?.querySelectorAll<HTMLElement>('[data-reorder]') ?? [])]
   const rowOf = (id: string) => rows().find((row) => row.dataset.reorder === id) ?? null
 
-  // Where a row's place is on the screen. That's not where a row is drawn while it's dragged or gliding.
+  // Where a row's place is on the screen. That's not where a row is drawn while it's dragged or gliding: offsets leave
+  // out the moves it's drawn with, as boxes on the screen don't.
   function place(id: string) {
     const row = rowOf(id)
     const scroller = list()
     if (!row || !scroller) return null
-    const top = scroller.getBoundingClientRect().top - scroller.scrollTop + row.offsetTop
+    const within = fromPage(row) - fromPage(scroller) - scroller.clientTop
+    const top = scroller.getBoundingClientRect().top - scroller.scrollTop + within
     return { top, bottom: top + row.offsetHeight }
   }
 
-  // Makes a change that moves rows, and lets each that moved, but the dragged one, glide from where it was.
   async function glide(change: () => void) {
     const before = new Map(rows().map((row) => [row.dataset.reorder, row.offsetTop]))
     change()
@@ -109,7 +112,6 @@ export function useReorder(list: () => HTMLElement | null, order: () => string[]
     frame = requestAnimationFrame(scroll)
   }
 
-  // The row settles into its place from where it was let go.
   function drop() {
     const ids = draft.value
     const row = dragged.value && rowOf(dragged.value)

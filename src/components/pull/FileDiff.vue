@@ -1,50 +1,46 @@
 <script setup lang="ts">
-// PROTOTYPE: one changed file, diffed by Zimam from its two whole texts, with its review threads in one of three looks.
-import UAvatar from '@nuxt/ui/components/Avatar.vue'
+// One changed file, diffed by Zimam from its two whole texts, with its review threads under their lines.
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { FILE_LOOKS } from '@/components/looks'
+import LineCounts from '@/components/LineCounts.vue'
+import { FILE_LOOKS } from '@/components/pull/looks'
+import { asked, reveal, scroller } from '@/components/pull/navigation'
 import ThreadCard from '@/components/pull/ThreadCard.vue'
+import SkeletonLines from '@/components/SkeletonLines.vue'
 import { splitRows, visibleBlocks, type FileDiff, type Line } from '@/lib/diff'
 import { languageOf, tokenize, type Token } from '@/lib/highlight'
 import { paint } from '@/lib/paint'
 import type { ReviewThread } from '@/lib/pull'
+import { blobUrl } from '@/lib/refs'
 import { formatNumber } from '@/locale'
 import {
   contentOf,
   diffOf,
   freshFile,
-  jumpTo,
   pull,
-  reveal,
-  scope,
   threadsByPath,
+  ticking,
   toggleViewed,
   viewedState,
   type PullFile,
-  proto,
 } from '@/stores/pull'
 import { settings } from '@/stores/settings'
 import { phone } from '@/stores/ui'
 
 const props = defineProps<{ file: PullFile; single?: boolean }>()
-/** How threads show in the diff: a prototype switch. */
-const looks = computed(() => proto.threads)
 const { t } = useI18n()
 const root = useTemplateRef<HTMLElement>('root')
 const grid = useTemplateRef<HTMLElement>('grid')
-const column = useTemplateRef<HTMLElement>('column')
 
 const diff = computed(() => diffOf(props.file))
 const ready = computed<FileDiff | null>(() => (typeof diff.value === 'object' ? diff.value : null))
 
 // A new or deleted file has one side, so it takes the full width even in a split view.
-const oneSided = computed(() => props.file.status === 'added' || props.file.status === 'removed')
+const oneSided = computed(() => !props.file.oldAt || !props.file.newAt)
 const mode = computed(() => (settings.diffView === 'split' && !oneSided.value && !phone.value ? 'split' : 'unified'))
 const wrap = computed(() => settings.longLines === 'wrap')
 
@@ -54,7 +50,8 @@ watch(viewed, (state) => {
   if (!props.single) folded.value = state === 'viewed'
 })
 
-// Rendered once near the screen, and kept.
+// Rendered once near the screen, and kept. Near is within the diff's scroller: a page's margin stops at the scroller,
+// which clips what's past its edge first.
 const near = ref(!!props.single)
 let observer: IntersectionObserver | null = null
 onMounted(() => {
@@ -65,12 +62,11 @@ onMounted(() => {
       near.value = true
       observer?.disconnect()
     },
-    { rootMargin: '1200px 0px' },
+    { root: scroller.value, rootMargin: '1200px 0px' },
   )
   observer.observe(root.value)
 })
 
-// Syntax colors for each side, once the file is near.
 const lang = computed(() => languageOf(props.file.path))
 const oldTokens = shallowRef<Token[][] | null>(null)
 const newTokens = shallowRef<Token[][] | null>(null)
@@ -81,8 +77,8 @@ watch(
     const old = contentOf(props.file.oldAt)
     const next = contentOf(props.file.newAt)
     const [a, b] = await Promise.all([
-      old && 'text' in old && props.file.oldAt ? tokenize(props.file.oldAt, old.text, lang.value) : null,
-      next && 'text' in next && props.file.newAt ? tokenize(props.file.newAt, next.text, lang.value) : null,
+      old && 'text' in old ? tokenize(old, lang.value) : null,
+      next && 'text' in next ? tokenize(next, lang.value) : null,
     ])
     oldTokens.value = a
     newTokens.value = b
@@ -117,30 +113,15 @@ const threadsAt = computed(() => {
   return map
 })
 
-// Folded in the margin until opened, in that look.
-const openThreads = reactive(new Set<string>())
-const threadShown = (thread: ReviewThread) => looks.value === 'inline' || openThreads.has(thread.id)
-function toggleThreads(list: ReviewThread[]) {
-  const open = list.every((thread) => openThreads.has(thread.id))
-  for (const thread of list) {
-    if (open) openThreads.delete(thread.id)
-    else openThreads.add(thread.id)
-  }
-}
-
 // --- Folding unchanged lines ---
 const CONTEXT = 3
 // Unfolded by hand, by line index. Another diff of the file (whitespace on or off) numbers its lines anew.
 const opened = reactive(new Set<number>())
 watch(ready, () => opened.clear())
-/** The lines shown besides the changes: those unfolded by hand, and a few around each thread's line. */
-const shown = computed(() => {
-  const lines = new Set(opened)
-  for (const index of threadsAt.value.keys())
-    for (let n = index - CONTEXT; n <= index + CONTEXT; n++) if (n >= 0) lines.add(n)
-  return lines
-})
-const blocks = computed(() => (ready.value ? visibleBlocks(ready.value, CONTEXT, shown.value) : []))
+// A thread's line shows with the lines around it, as a change does.
+const blocks = computed(() =>
+  ready.value ? visibleBlocks(ready.value, CONTEXT, { anchors: threadsAt.value.keys(), open: opened }) : [],
+)
 const STEP = 20
 function expand(block: { from: number; to: number }, how: 'up' | 'down' | 'all') {
   const from = how === 'down' ? Math.max(block.from, block.to - STEP) : block.from
@@ -152,7 +133,7 @@ function expand(block: { from: number; to: number }, how: 'up' | 'down' | 'all')
 // A line row is its cells across the grid: a split view's two numbers and two texts, or a unified view's numbers and
 // its text. Each text cell carries the threads on its side, for the margin's markers.
 type Cell =
-  | { kind: 'num'; key: string; text: string | number; css: (string | false)[]; change: boolean }
+  | { kind: 'num'; key: string; text: string | number; css: (string | false)[]; change: boolean; fresh: boolean }
   | { kind: 'text'; key: string; line: Line | null; side?: 'old' | 'new'; css: string; threads: ReviewThread[] }
 type Row =
   | { kind: 'line'; key: string; at: number; cells: Cell[]; threads: ReviewThread[] }
@@ -168,6 +149,7 @@ function splitCells(left: Line | null, right: Line | null, at: number, here: Rev
       text: left?.old ?? '',
       css: [tone(left), freshBar(left) && 'diff-fresh'],
       change: changeStarts.value.has(at),
+      fresh: freshBar(left),
     },
     {
       kind: 'text',
@@ -183,6 +165,7 @@ function splitCells(left: Line | null, right: Line | null, at: number, here: Rev
       text: right?.new ?? '',
       css: [tone(right), freshBar(right) && 'diff-fresh'],
       change: false,
+      fresh: freshBar(right),
     },
     {
       kind: 'text',
@@ -200,7 +183,7 @@ function unifiedCells(line: Line, at: number, here: ReviewThread[]): Cell[] {
   const own: Cell = {
     kind: 'num',
     key: 'b',
-    text: (props.file.status === 'removed' ? line.old : line.new) ?? '',
+    text: (props.file.newAt ? line.new : line.old) ?? '',
     css: [
       tone(line),
       freshBar(line) && 'diff-fresh',
@@ -208,6 +191,7 @@ function unifiedCells(line: Line, at: number, here: ReviewThread[]): Cell[] {
       stick && (oneSided.value ? 'start-0' : 'start-(--num-w)'),
     ],
     change: oneSided.value && changeStarts.value.has(at),
+    fresh: freshBar(line),
   }
   const text: Cell = { kind: 'text', key: 'c', line, css: tone(line), threads: here }
   if (oneSided.value) return [own, text]
@@ -217,6 +201,7 @@ function unifiedCells(line: Line, at: number, here: ReviewThread[]): Cell[] {
     text: line.old ?? '',
     css: [tone(line), stick && 'sticky start-0 z-1'],
     change: changeStarts.value.has(at),
+    fresh: false,
   }
   return [old, own, text]
 }
@@ -240,10 +225,8 @@ const rows = computed<Row[]>(() => {
     }
     if (mode.value === 'split') {
       for (const row of splitRows(value.lines, block.from, block.to)) {
-        const indexes = new Set<number>()
-        if (row.left) indexes.add(value.lines.indexOf(row.left))
-        if (row.right) indexes.add(value.lines.indexOf(row.right))
-        const here = [...indexes].flatMap((index) => threadsAt.value.get(index) ?? [])
+        const indexes = new Set([row.leftAt, row.rightAt])
+        const here = [...indexes].flatMap((index) => (index === null ? [] : (threadsAt.value.get(index) ?? [])))
         out.push({
           kind: 'line',
           key: `l${row.at}`,
@@ -267,14 +250,11 @@ const rows = computed<Row[]>(() => {
   })
   return out
 })
-const digits = computed(() => String(Math.max(ready.value?.lines.length ?? 0, 10)).length)
-const gridStyle = computed(() => {
-  const num = `calc(${digits.value}ch + 1.25rem)`
-  if (mode.value === 'split')
-    return { gridTemplateColumns: `${num} minmax(0,1fr) ${num} minmax(0,1fr)`, '--num-w': num }
-  if (oneSided.value) return { gridTemplateColumns: `${num} minmax(0,1fr)`, '--num-w': num }
-  return { gridTemplateColumns: `${num} ${num} minmax(0,1fr)`, '--num-w': num }
-})
+// The grid's columns, by the layout and the line numbers' width: the stylesheet sizes them.
+const layout = computed(() =>
+  mode.value === 'split' ? 'diff-split' : oneSided.value ? 'diff-one-sided' : 'diff-unified',
+)
+const digits = computed(() => ({ '--digits': String(Math.max(ready.value?.lines.length ?? 0, 10)).length }))
 
 function tone(line: Line | null): string {
   if (!line) return 'diff-empty'
@@ -311,63 +291,27 @@ function onWheel(event: WheelEvent) {
   event.preventDefault()
 }
 
-// Threads beside the code line up with their lines again when the file's width changes.
-let sizer: ResizeObserver | null = null
-watch(
-  [looks, root],
-  ([look, element]) => {
-    sizer?.disconnect()
-    sizer = null
-    if (look !== 'column' || !element) return
-    sizer = new ResizeObserver(() => void place())
-    sizer.observe(element)
-  },
-  { immediate: true },
-)
-
-// --- Threads beside the code, lined up with their lines ---
-const placed = reactive(new Map<string, number>())
-async function place() {
-  if (looks.value !== 'column' || !grid.value || !column.value) return
-  await nextTick()
-  const top = grid.value.getBoundingClientRect().top
-  const cards = [...column.value.querySelectorAll<HTMLElement>('[data-thread]')]
-  // A card that opens or folds moves the ones under it.
-  for (const card of cards) sizer?.observe(card)
-  const wanted = cards
-    .map((card) => {
-      const anchor = grid.value!.querySelector<HTMLElement>(`[data-row="${card.dataset.at}"]`)
-      return { card, y: anchor ? anchor.getBoundingClientRect().top - top : -1 }
-    })
-    .filter((each) => each.y >= 0)
-    .toSorted((a, b) => a.y - b.y)
-  let bottom = 0
-  for (const { card, y } of wanted) {
-    const at = Math.max(y, bottom)
-    placed.set(card.dataset.thread!, at)
-    bottom = at + card.offsetHeight + 8
-  }
-  if (column.value) column.value.style.minHeight = `${bottom}px`
-}
-watch([rows, looks, near, folded], () => void place(), { flush: 'post' })
-
 const rowOf = (thread: ReviewThread) =>
   rows.value.find((row): row is Extract<Row, { kind: 'line' }> => row.kind === 'line' && row.threads.includes(thread))
 
-function hot(at: number | null) {
-  for (const element of grid.value?.querySelectorAll('.diff-hot') ?? []) element.classList.remove('diff-hot')
-  if (at !== null)
-    for (const element of grid.value?.querySelectorAll(`[data-row="${at}"]`) ?? []) element.classList.add('diff-hot')
+/** Lights up a row once, as the line a thread was asked for. */
+function hot(at: number) {
+  for (const element of grid.value?.querySelectorAll<HTMLElement>(`[data-row="${at}"]`) ?? []) {
+    // Off, a layout, and on again: a row lit a moment ago lights up from the start.
+    element.classList.remove('diff-hot')
+    void element.offsetWidth
+    element.classList.add('diff-hot')
+    element.addEventListener('animationend', () => element.classList.remove('diff-hot'), { once: true })
+  }
 }
 
 // Asked for from the conversation: open the file and the thread, and once the line is drawn, bring it into view.
 watch(
-  [jumpTo, rows, diff],
+  [asked, rows, diff],
   async ([thread]) => {
     if (!thread || thread.path !== props.file.path) return
     folded.value = false
     near.value = true
-    openThreads.add(thread.id)
     if (loose.value.includes(thread)) showLoose.value = true
     // The texts are still on their way: this runs again once they're in.
     if (diff.value === null) return
@@ -376,19 +320,16 @@ watch(
     const target = row
       ? grid.value?.querySelector(`[data-row="${row.at}"]`)
       : (root.value?.querySelector(`[data-loose="${thread.id}"]`) ?? root.value)
-    if (!target || jumpTo.value !== thread) return
-    jumpTo.value = null
+    if (!target || asked.value !== thread) return
+    asked.value = null
     reveal(target, 'center')
-    if (!row) return
-    hot(row.at)
-    setTimeout(() => hot(null), 1600)
+    if (row) hot(row.at)
   },
   { immediate: true, flush: 'post' },
 )
 
 onBeforeUnmount(() => {
   observer?.disconnect()
-  sizer?.disconnect()
 })
 
 // --- Header ---
@@ -398,12 +339,9 @@ const dir = computed(() =>
 const base = computed(() => props.file.path.slice(dir.value.length))
 const fresh = computed(() => freshFile(props.file))
 // The file as the commits shown leave it.
-const onGitHub = computed(() =>
-  pull.value
-    ? `https://github.com/${pull.value.ref.repo}/blob/${scope.value?.head ?? pull.value.headOid}/${props.file.path}`
-    : '#',
-)
-const estimate = computed(() => Math.min(4000, Math.max(3, props.file.additions + props.file.deletions + 6) * 20))
+const onGitHub = computed(() => (pull.value ? blobUrl(pull.value.ref.repo, props.file.at, props.file.path) : '#'))
+// What a file likely shows before it's drawn: its changes and some lines around them.
+const unread = computed(() => ({ '--lines': Math.max(3, props.file.additions + props.file.deletions + 6) }))
 const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), line.words) : [])
 </script>
 
@@ -437,18 +375,15 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
       <span v-if="fresh" class="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-primary">
         <span class="size-1.5 rounded-full bg-primary" /><span class="max-sm:hidden">{{ t('pull.changedSince') }}</span>
       </span>
-      <span
-        v-if="file.generated"
-        class="shrink-0 rounded-sm px-1.5 text-[11px] text-muted ring-1 ring-accented ring-inset"
-        >{{ t('pull.generatedTag') }}</span
-      >
+      <span v-if="file.generated" class="tag">{{ t('pull.generatedTag') }}</span>
       <span v-if="threads.length" class="inline-flex shrink-0 items-center gap-1 text-[12px] text-muted">
         <UIcon name="i-octicon-comment-discussion-16" class="size-4" />{{ formatNumber(threads.length) }}
       </span>
-      <span class="shrink-0 font-mono text-[12px] tabular-nums max-sm:hidden" dir="ltr">
-        <span class="text-success">+{{ formatNumber(ready?.additions ?? file.additions) }}</span>
-        <span class="ms-1 text-error">−{{ formatNumber(ready?.deletions ?? file.deletions) }}</span>
-      </span>
+      <LineCounts
+        :additions="ready?.additions ?? file.additions"
+        :deletions="ready?.deletions ?? file.deletions"
+        class="shrink-0 text-[12px] max-sm:hidden"
+      />
       <UTooltip :text="t('pull.onGitHub')">
         <UButton
           :to="onGitHub"
@@ -462,7 +397,7 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
         />
       </UTooltip>
       <button
-        v-if="!scope"
+        v-if="ticking"
         type="button"
         class="tap inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] ring-1 transition-colors ring-inset"
         :class="
@@ -503,14 +438,12 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
           {{ t('pull.looseThreads', { n: formatNumber(loose.length) }, loose.length) }}
         </button>
         <div v-if="showLoose" class="mt-2 max-w-3xl space-y-2 pb-2">
-          <ThreadCard v-for="thread in loose" :key="thread.id" :thread="thread" :data-loose="thread.id" snippet />
+          <ThreadCard v-for="thread in loose" :key="thread.id" :thread="thread" :data-loose="thread.id" place="file" />
         </div>
       </div>
 
-      <div v-if="!near" :style="{ height: `${estimate}px` }" />
-      <div v-else-if="diff === null" class="space-y-2 px-4 py-4" aria-busy="true">
-        <USkeleton v-for="index in 5" :key="index" class="h-3.5" :style="{ width: `${30 + ((index * 29) % 55)}%` }" />
-      </div>
+      <div v-if="!near" class="diff-unread" :style="unread" />
+      <SkeletonLines v-else-if="diff === null" :lines="5" class="p-4" />
       <p v-else-if="diff === 'binary'" class="px-4 py-6 text-center text-[13px] text-muted">{{ t('pull.binary') }}</p>
       <p v-else-if="diff === 'tooBig' || diff === 'failed'" class="px-4 py-6 text-center text-[13px] text-muted">
         {{ diff === 'failed' ? t('pull.readFailed') : t('pull.tooBig') }}
@@ -521,137 +454,105 @@ const pieces = (line: Line | null) => (line ? paint(line.text, tokensOf(line), l
       <p v-else-if="ready && !ready.lines.length" class="px-4 py-6 text-center text-[13px] text-muted">
         {{ t('pull.empty') }}
       </p>
-      <div v-else-if="ready" class="flex">
-        <!-- A container: rows that keep to the visible width size by `cqw`, so a resize restyles them alone, not every line. -->
+      <!-- A container: rows that keep to the visible width size by `cqw`, so a resize restyles them alone, not every line. -->
+      <div
+        v-else-if="ready"
+        class="@container"
+        :class="!wrap && mode === 'unified' && 'overflow-x-auto overscroll-x-contain'"
+        @wheel="onWheel"
+      >
         <div
-          class="@container min-w-0 flex-1"
-          :class="!wrap && mode === 'unified' && 'overflow-x-auto overscroll-x-contain'"
-          @wheel="onWheel"
+          ref="grid"
+          class="diff-code relative grid"
+          :class="[layout, wrap ? 'diff-wrap' : 'diff-scroll', !wrap && mode === 'unified' && 'w-max min-w-full']"
+          :style="digits"
+          dir="ltr"
         >
-          <div
-            ref="grid"
-            class="diff-code relative grid"
-            :class="[wrap ? 'diff-wrap' : 'diff-scroll', !wrap && mode === 'unified' && 'w-max min-w-full']"
-            :style="gridStyle"
-            dir="ltr"
-          >
-            <template v-for="row in rows" :key="row.key">
-              <div
-                v-if="row.kind === 'gap'"
-                class="col-span-full flex h-8 items-center gap-1 bg-muted text-[12px] text-muted"
-                :class="!wrap && mode === 'unified' && 'sticky start-0 w-[100cqw]'"
+          <template v-for="row in rows" :key="row.key">
+            <div
+              v-if="row.kind === 'gap'"
+              class="col-span-full flex h-8 items-center gap-1 bg-muted text-[12px] text-muted"
+              :class="!wrap && mode === 'unified' && 'sticky start-0 w-[100cqw]'"
+            >
+              <UButton
+                v-if="!row.first && row.to - row.from > STEP"
+                icon="i-octicon-fold-down-16"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                :aria-label="t('pull.expandDown', { n: formatNumber(STEP) }, STEP)"
+                @click="expand(row, 'up')"
+              />
+              <UButton
+                v-if="!row.last && row.to - row.from > STEP"
+                icon="i-octicon-fold-up-16"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                :aria-label="t('pull.expandUp', { n: formatNumber(STEP) }, STEP)"
+                @click="expand(row, 'down')"
+              />
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 px-2 transition-colors hover:text-highlighted"
+                @click="expand(row, 'all')"
               >
-                <UButton
-                  v-if="!row.first && row.to - row.from > STEP"
-                  icon="i-octicon-fold-down-16"
-                  color="neutral"
-                  variant="ghost"
-                  size="xs"
-                  :aria-label="t('pull.expandDown', { n: formatNumber(STEP) }, STEP)"
-                  @click="expand(row, 'up')"
-                />
-                <UButton
-                  v-if="!row.last && row.to - row.from > STEP"
-                  icon="i-octicon-fold-up-16"
-                  color="neutral"
-                  variant="ghost"
-                  size="xs"
-                  :aria-label="t('pull.expandUp', { n: formatNumber(STEP) }, STEP)"
-                  @click="expand(row, 'down')"
-                />
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1.5 px-2 transition-colors hover:text-highlighted"
-                  @click="expand(row, 'all')"
+                <UIcon name="i-octicon-unfold-16" class="size-4" />
+                {{ t('pull.hiddenLines', { n: formatNumber(row.to - row.from) }, row.to - row.from) }}
+              </button>
+            </div>
+
+            <template v-else>
+              <template v-for="cell in row.cells" :key="cell.key">
+                <div
+                  v-if="cell.kind === 'num'"
+                  class="diff-num"
+                  :class="cell.css"
+                  :data-row="row.at"
+                  :data-change="cell.change || undefined"
+                  :data-fresh="cell.fresh || undefined"
                 >
-                  <UIcon name="i-octicon-unfold-16" class="size-4" />
-                  {{ t('pull.hiddenLines', { n: formatNumber(row.to - row.from) }, row.to - row.from) }}
-                </button>
-              </div>
-
-              <template v-else>
-                <template v-for="cell in row.cells" :key="cell.key">
-                  <div
-                    v-if="cell.kind === 'num'"
-                    class="diff-num"
-                    :class="cell.css"
-                    :data-row="row.at"
-                    :data-change="cell.change || undefined"
+                  {{ cell.text }}
+                </div>
+                <div v-else class="diff-cell relative" :class="cell.css" :data-side="cell.side" :data-row="row.at">
+                  <span class="diff-text" :style="cell.side && { '--sx': `var(--sx-${cell.side}, 0px)` }"
+                    ><span class="diff-sign">{{ sign(cell.line) }}</span
+                    ><span
+                      v-for="(piece, index) in pieces(cell.line)"
+                      :key="index"
+                      :class="[piece.changed && 'diff-word', piece.italic && 'italic', piece.bold && 'font-medium']"
+                      :style="piece.color ? { color: piece.color } : undefined"
+                      >{{ piece.text }}</span
+                    ></span
                   >
-                    {{ cell.text }}
-                  </div>
-                  <div v-else class="diff-cell relative" :class="cell.css" :data-side="cell.side" :data-row="row.at">
-                    <span class="diff-text" :style="cell.side && { '--sx': `var(--sx-${cell.side}, 0px)` }"
-                      ><span class="diff-sign">{{ sign(cell.line) }}</span
-                      ><span
-                        v-for="(piece, index) in pieces(cell.line)"
-                        :key="index"
-                        :class="[piece.changed && 'diff-word', piece.italic && 'italic', piece.bold && 'font-medium']"
-                        :style="piece.color ? { color: piece.color } : undefined"
-                        >{{ piece.text }}</span
-                      ></span
-                    >
-                    <button
-                      v-if="looks === 'margin' && cell.threads.length"
-                      type="button"
-                      class="diff-marker"
-                      :aria-label="t('pull.showThreads')"
-                      @click="toggleThreads(cell.threads)"
-                    >
-                      <UAvatar :src="cell.threads[0].comments[0]?.author?.avatarUrl" alt="" size="3xs" />
-                      <span v-if="cell.threads.length > 1" class="diff-marker-count">{{ cell.threads.length }}</span>
-                    </button>
-                  </div>
-                </template>
-                <template v-if="looks !== 'column'">
-                  <template v-for="thread in row.threads" :key="thread.id">
-                    <div
-                      v-if="threadShown(thread)"
-                      class="diff-thread px-3 py-3"
-                      :class="mode === 'unified' && ['col-span-full', !wrap && 'sticky start-0 w-[100cqw]']"
-                      :style="mode === 'split' && { gridColumn: thread.side === 'old' ? '1 / 3' : '3 / 5' }"
-                    >
-                      <ThreadCard :thread="thread" :class="mode === 'unified' && 'max-w-3xl'" />
-                    </div>
-                  </template>
-                </template>
+                </div>
               </template>
+              <div
+                v-for="thread in row.threads"
+                :key="thread.id"
+                class="diff-thread px-3 py-3"
+                :class="mode === 'unified' && ['col-span-full', !wrap && 'sticky start-0 w-[100cqw]']"
+                :style="mode === 'split' && { gridColumn: thread.side === 'old' ? '1 / 3' : '3 / 5' }"
+              >
+                <ThreadCard :thread="thread" place="line" :class="mode === 'unified' && 'max-w-3xl'" />
+              </div>
             </template>
-          </div>
-
-          <div
-            v-if="!wrap && mode === 'split'"
-            class="diff-bars sticky bottom-0 z-1 grid h-3"
-            :style="gridStyle"
-            dir="ltr"
-          >
-            <span />
-            <div ref="barOld" class="overflow-x-auto" @scroll="shift('old', $event)">
-              <div class="h-px" :style="{ width: `calc(${longest.old + 2}ch + 1.5rem)` }" />
-            </div>
-            <span />
-            <div ref="barNew" class="overflow-x-auto" @scroll="shift('new', $event)">
-              <div class="h-px" :style="{ width: `calc(${longest.new + 2}ch + 1.5rem)` }" />
-            </div>
-          </div>
+          </template>
         </div>
 
         <div
-          v-if="looks === 'column' && anchored.length"
-          ref="column"
-          class="relative w-84 shrink-0 border-s border-default bg-muted/60"
+          v-if="!wrap && mode === 'split'"
+          class="diff-bars diff-split sticky bottom-0 z-1 grid h-3"
+          :style="digits"
+          dir="ltr"
         >
-          <div
-            v-for="thread in anchored"
-            :key="thread.id"
-            :data-thread="thread.id"
-            :data-at="rowOf(thread)?.at ?? -1"
-            class="absolute inset-x-2 transition-[top] duration-200"
-            :style="{ top: `${placed.get(thread.id) ?? 0}px` }"
-            @mouseenter="hot(Number(($event.currentTarget as HTMLElement).dataset.at))"
-            @mouseleave="hot(null)"
-          >
-            <ThreadCard :thread="thread" />
+          <span />
+          <div ref="barOld" class="overflow-x-auto" @scroll="shift('old', $event)">
+            <div class="diff-span h-px" :style="{ '--longest': longest.old }" />
+          </div>
+          <span />
+          <div ref="barNew" class="overflow-x-auto" @scroll="shift('new', $event)">
+            <div class="diff-span h-px" :style="{ '--longest': longest.new }" />
           </div>
         </div>
       </div>

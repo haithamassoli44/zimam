@@ -1,25 +1,25 @@
 <script setup lang="ts">
-import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
-import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import IssueText from '@/components/IssueText.vue'
-import { useKeys } from '@/components/keys'
+import { kbds, useKeys } from '@/components/keys'
 import LabelTag from '@/components/LabelTag.vue'
 import { ISSUE_LOOKS } from '@/components/looks'
 import PersonLink from '@/components/PersonLink.vue'
-import { expiring, IssueMissing, nextPage, type Post, type Thread } from '@/lib/issue'
+import PostBlock from '@/components/PostBlock.vue'
+import TimeAgo from '@/components/TimeAgo.vue'
+import { expiring, IssueMissing, nextPage, type Thread } from '@/lib/issue'
+import type { Post } from '@/lib/posts'
 import { stateOf } from '@/lib/queries'
 import { issueUrl, refKey, sameRef, type IssueRef } from '@/lib/refs'
-import { formatNumber, fullDate, relativeTime } from '@/locale'
-import { now } from '@/stores/clock'
+import { formatNumber } from '@/locale'
 import { displayRepo, issueRef, issueThread, items, loaded, moreComments } from '@/stores/data'
-import { postFolds, postLook } from '@/stores/settings'
-import { closeIssue, openIssue, result, showIssue } from '@/stores/view'
+import { postShown } from '@/stores/settings'
+import { closeIssue, neighborsIn, openIssue, showIssue } from '@/stores/view'
 
 /**
  * An issue, read-only: its description and comments, with a way to the next one in the list. `opener` is what had the
@@ -36,21 +36,19 @@ const listed = computed(() => [...items.value.values()].find((item) => sameRef(i
 const version = computed(() => listed.value?.updatedAt ?? '')
 
 // ↑ and ↓ go through the issues the list shows, in its order, past its pull requests.
-const issues = computed(() => result.value.items.flatMap((item) => issueRef(item) ?? []))
-const position = computed(() => issues.value.findIndex((issue) => sameRef(issue, props.issue)))
-const neighbor = (by: -1 | 1) => (position.value < 0 ? null : (issues.value[position.value + by] ?? null))
-const previous = computed(() => neighbor(-1))
-const next = computed(() => neighbor(1))
+const around = neighborsIn('issue', () => props.issue)
+const previous = computed(() => around.value.previous)
+const next = computed(() => around.value.next)
 
 function move(by: -1 | 1) {
-  const issue = neighbor(by)
+  const issue = by === 1 ? next.value : previous.value
   if (issue) showIssue(issue)
 }
-// While it's open, j and k go from issue to issue, as the arrows above do.
-useKeys({
-  j: () => (openIssue.value ? move(1) : false),
-  k: () => (openIssue.value ? move(-1) : false),
-})
+// While the panel slides away, the keys go to the list again.
+useKeys(
+  { issues: [() => (openIssue.value ? move(1) : false), () => (openIssue.value ? move(-1) : false)] },
+  { level: 'panel', root },
+)
 
 const thread = shallowRef<Thread | null>(null)
 // Going to another issue leaves the last one in sight, dimmed, while the next is read, so a quick read goes straight
@@ -66,7 +64,6 @@ function fresh(answer: Thread | null) {
 const problem = ref<'missing' | 'failed' | null>(null)
 const loadingMore = ref(false)
 const moreFailed = ref(false)
-const unhidden = reactive(new Set<string>())
 let ticket = 0
 let moreTicket = 0
 let loadingMoreNow: Promise<void> | null = null
@@ -88,7 +85,6 @@ async function load(refresh: boolean, settle = 0) {
     loadingMore.value = false
     loadingMoreNow = null
     moreFailed.value = false
-    unhidden.clear()
   }
   if (!loaded.value) return
   // Going through issues with ↑ and ↓ reads only the one stopped at.
@@ -167,8 +163,7 @@ const more = computed(() => (thread.value ? nextPage(thread.value) : 0))
 
 // A hidden comment's images are placed only when it's shown. Should its links be about to expire, the issue is read
 // again for fresh ones.
-function unhide(post: Post) {
-  unhidden.add(post.id)
+function readAgainIfExpiring() {
   if (thread.value && expiring(thread.value)) void load(true)
 }
 
@@ -188,20 +183,14 @@ onBeforeUnmount(() => {
 
 const state = computed(() => thread.value?.state ?? (listed.value ? stateOf(listed.value) : 'open'))
 
-// PROTOTYPE: bots' comments show, fold or hide, as Settings say.
 const posts = computed<Post[]>(() =>
-  thread.value ? [thread.value.post, ...thread.value.comments.filter((post) => postLook(post.author) !== 'hide')] : [],
+  thread.value ? [thread.value.post, ...thread.value.comments.filter((post) => postShown(post.author))] : [],
 )
-// The description is the issue itself, not a comment, so a bot's never folds as one.
-const folded = (post: Post) =>
-  postFolds(post, post === thread.value?.post ? 'show' : undefined) && !unhidden.has(post.id)
 const url = computed(() => thread.value?.url ?? issueUrl(props.issue))
-const ago = (time: string) => relativeTime(Date.parse(time), now.value)
-const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text-toned ring-1 ring-accented ring-inset'
 </script>
 
 <template>
-  <div ref="root" class="flex h-full min-h-0 flex-col bg-default" data-keys>
+  <div ref="root" class="flex h-full min-h-0 flex-col bg-default">
     <header
       class="flex shrink-0 items-center gap-1 border-b border-default"
       :class="docked ? 'h-16 ps-6 pe-3' : 'h-14 px-2'"
@@ -220,7 +209,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
         <span class="truncate" dir="ltr">{{ displayRepo(issue.repo) }}#{{ issue.number }}</span>
       </span>
       <span class="flex-1" />
-      <UTooltip :text="t('issue.previous')" :kbds="['k']">
+      <UTooltip :text="t('issue.previous')" :kbds="kbds('issues', 1)">
         <UButton
           icon="i-octicon-chevron-up-16"
           color="neutral"
@@ -230,7 +219,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           @click="move(-1)"
         />
       </UTooltip>
-      <UTooltip :text="t('issue.next')" :kbds="['j']">
+      <UTooltip :text="t('issue.next')" :kbds="kbds('issues')">
         <UButton
           icon="i-octicon-chevron-down-16"
           color="neutral"
@@ -338,14 +327,10 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
             </span>
             <i18n-t keypath="issue.opened" tag="span" scope="global">
               <template #login>
-                <PersonLink :who="thread.post.author" class="font-medium text-toned"
-                  ><bdi>{{ thread.post.author?.login ?? t('issue.ghost') }}</bdi></PersonLink
-                >
+                <PersonLink :who="thread.post.author" :picture="false" class="font-medium text-toned" />
               </template>
               <template #time>
-                <UTooltip :text="fullDate(thread.post.createdAt)">
-                  <span>{{ ago(thread.post.createdAt) }}</span>
-                </UTooltip>
+                <TimeAgo :at="thread.post.createdAt" />
               </template>
             </i18n-t>
             <span v-if="thread.total" class="inline-flex items-center gap-1 font-mono tabular-nums">
@@ -359,59 +344,20 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
           </div>
           <div v-if="thread.assignees.length" class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px]">
             <span class="text-muted">{{ t('issue.assignees') }}</span>
-            <PersonLink
-              v-for="person in thread.assignees"
-              :key="person.login"
-              :who="person"
-              class="inline-flex items-center gap-1.5 text-toned"
-            >
-              <UAvatar :src="person.avatarUrl" alt="" size="3xs" />
-              <bdi>{{ person.login }}</bdi>
-            </PersonLink>
+            <PersonLink v-for="person in thread.assignees" :key="person.login" :who="person" class="text-toned" />
           </div>
         </div>
 
         <article
           v-for="post in posts"
           :key="post.id"
-          class="border-t border-default px-4 sm:px-6"
-          :class="folded(post) ? 'py-2' : 'py-4'"
+          class="border-t border-default px-4 py-4 has-[[data-folded]]:py-2 sm:px-6"
         >
-          <div v-if="folded(post)" class="flex min-h-8 items-center gap-2 text-[13px] text-muted">
-            <UIcon name="i-octicon-eye-closed-16" class="size-4 shrink-0" />
-            <span class="min-w-0 flex-1">
-              <PersonLink :who="post.author"
-                ><bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi></PersonLink
-              >
-              ·
-              {{ post.hidden ? t(`issue.hidden.${post.hidden}`) : t('issue.bot') }}
-            </span>
-            <UButton color="neutral" variant="ghost" size="sm" :label="t('issue.show')" @click="unhide(post)" />
-          </div>
-          <template v-else>
-            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted">
-              <PersonLink :who="post.author" class="inline-flex items-center gap-2 font-medium text-highlighted">
-                <UAvatar v-if="post.author" :src="post.author.avatarUrl" alt="" size="2xs" />
-                <bdi>{{ post.author?.login ?? t('issue.ghost') }}</bdi>
-              </PersonLink>
-              <span v-if="post.author?.bot" :class="BADGE">{{ t('issue.bot') }}</span>
-              <span v-else-if="post.role" :class="BADGE">{{ t(`issue.roles.${post.role}`) }}</span>
-              <UTooltip :text="fullDate(post.createdAt)">
-                <a
-                  :href="post.url"
-                  target="_blank"
-                  rel="noopener"
-                  class="rounded-sm transition-colors hover:text-toned hover:underline focus-visible:outline-2 focus-visible:outline-primary"
-                  >{{ ago(post.createdAt) }}</a
-                >
-              </UTooltip>
-              <template v-if="post.edited">
-                <span aria-hidden="true">·</span>
-                <span>{{ t('issue.edited') }}</span>
-              </template>
-            </div>
-            <IssueText class="mt-2" :html="post.html" :link="post.url" />
-          </template>
+          <PostBlock
+            :post="post"
+            :place="post === thread.post ? 'description' : 'conversation'"
+            @unfold="readAgainIfExpiring"
+          />
         </article>
 
         <div v-if="thread.after" class="flex flex-col items-center gap-2 border-t border-default px-4 py-4 sm:px-6">
@@ -434,7 +380,7 @@ const BADGE = 'inline-flex h-4.5 items-center rounded-sm px-1.5 text-[11px] text
             :href="thread.url"
             target="_blank"
             rel="noopener"
-            class="inline-flex items-center gap-1 rounded-sm font-medium text-toned transition-colors hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+            class="inline-flex items-center gap-1 rounded-sm font-medium text-toned focus-ring transition-colors hover:text-highlighted hover:underline"
           >
             {{ t('issue.reply') }}
             <UIcon name="i-octicon-link-external-16" class="size-4" />

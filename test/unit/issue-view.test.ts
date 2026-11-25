@@ -2,7 +2,8 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import IssueView from '@/components/IssueView.vue'
-import type { Post, Thread } from '@/lib/issue'
+import type { Thread } from '@/lib/issue'
+import type { Post } from '@/lib/posts'
 import { i18n } from '@/locale'
 import { issueThread, items, loaded, moreComments, repos } from '@/stores/data'
 import { openIssue } from '@/stores/view'
@@ -231,12 +232,30 @@ describe('Show more while the issue is read again', () => {
   it('drops what it brings once another issue is open', async () => {
     await openRead()
     await showMore()?.trigger('click')
+    // The clock stands still: the next issue isn't slow to come, however slow the test runs.
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
     await wrapper?.setProps({ issue: { repo: 'acme/web', number: 13 } })
     pages[0]?.answer()
     await flushPromises()
     // The last issue stays in sight while the next is read, but out of reach, and without what Show more brought.
     expect(wrapper?.find('[inert]').exists()).toBe(true)
     expect(comments()).toBe(PAGE)
+  })
+})
+
+describe('moving to another issue', () => {
+  it('keeps the last one in sight while the next is read, and shows the placeholder only once that is slow', async () => {
+    await openRead()
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    await wrapper?.setProps({ issue: { repo: 'acme/web', number: 13 } })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(wrapper?.find('[inert]').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(wrapper?.find('[inert]').exists()).toBe(false)
+    expect(wrapper?.find('[aria-busy="true"]').exists()).toBe(true)
+    reads[1]?.answer(thread('next', PAGE))
+    await flushPromises()
+    expect(title()).toBe('The issue, next')
   })
 })
 

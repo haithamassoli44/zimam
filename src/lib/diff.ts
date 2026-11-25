@@ -1,4 +1,4 @@
-// PROTOTYPE: Zimam's own diff of two whole files, with what the reader saw at their last visit marked.
+// Zimam's own diff of two whole files, with what the reader saw at their last visit marked.
 import { diffArrays, diffWordsWithSpace } from 'diff'
 
 export type LineKind = 'same' | 'add' | 'del'
@@ -32,11 +32,14 @@ export interface FileDiff {
   rewritten: boolean
 }
 
+// Lines keep a Windows line end for the comparison, so a file that only changed its line ends shows as changed, but a
+// line's text leaves it out, as the syntax highlighter's lines do.
 const splitLines = (text: string) => {
   const lines = text.split('\n')
   if (lines.at(-1) === '') lines.pop()
   return lines
 }
+const textOf = (line: string) => (line.endsWith('\r') ? line.slice(0, -1) : line)
 
 const normalize = (line: string) => line.trim().replace(/\s+/g, ' ')
 
@@ -147,11 +150,10 @@ export function diffFiles({ old, new: next, ignoreSpace = false, visited }: Diff
   let ib = 0
   let additions = 0
   let deletions = 0
-  // A changed line is seen when the last visit had it already. Without a visit to count from, seen says nothing.
   const pushDel = () => {
     const number = ++ia
     const seen = visited === undefined ? null : goneAtVisit ? goneAtVisit.has(number) : false
-    const line: Line = { kind: 'del', old: number, new: null, text: a[number - 1], words: null, seen }
+    const line: Line = { kind: 'del', old: number, new: null, text: textOf(a[number - 1]), words: null, seen }
     lines.push(line)
     deletions++
     return line
@@ -159,7 +161,7 @@ export function diffFiles({ old, new: next, ignoreSpace = false, visited }: Diff
   const pushAdd = () => {
     const number = ++ib
     const seen = visited === undefined ? null : sinceVisit ? !sinceVisit.added.has(number) : false
-    const line: Line = { kind: 'add', old: null, new: number, text: b[number - 1], words: null, seen }
+    const line: Line = { kind: 'add', old: null, new: number, text: textOf(b[number - 1]), words: null, seen }
     lines.push(line)
     additions++
     return line
@@ -168,7 +170,7 @@ export function diffFiles({ old, new: next, ignoreSpace = false, visited }: Diff
     const op = ops[index]
     if (op.kind === 'same') {
       for (let n = 0; n < op.count; n++) {
-        lines.push({ kind: 'same', old: ia + 1, new: ib + 1, text: b[ib], words: null, seen: null })
+        lines.push({ kind: 'same', old: ia + 1, new: ib + 1, text: textOf(b[ib]), words: null, seen: null })
         ia++
         ib++
       }
@@ -176,7 +178,6 @@ export function diffFiles({ old, new: next, ignoreSpace = false, visited }: Diff
     }
     if (lines.at(-1)?.kind !== 'del' || op.kind === 'del') changes.push(lines.length)
     const made = Array.from({ length: op.count }, op.kind === 'del' ? pushDel : pushAdd)
-    // A removal followed by an addition: pair the lines for word highlights.
     const nextOp = ops[index + 1]
     if (op.kind === 'del' && nextOp?.kind === 'add') {
       const dels = made
@@ -197,17 +198,21 @@ export function diffFiles({ old, new: next, ignoreSpace = false, visited }: Diff
 export type Block = { kind: 'lines'; from: number; to: number } | { kind: 'gap'; from: number; to: number }
 
 /**
- * Which lines show: every change with `context` lines around it, and whatever the reader opened. `open` holds the
- * indexes of lines unfolded by hand.
+ * Which lines show: every change and every anchor, like a thread's line, with `context` lines around it, and the lines
+ * unfolded by hand. Both by index into the diff's lines.
  */
-export function visibleBlocks(diff: FileDiff, context: number, open: Set<number>): Block[] {
+export function visibleBlocks(
+  diff: FileDiff,
+  context: number,
+  { anchors = [], open = [] }: { anchors?: Iterable<number>; open?: Iterable<number> },
+): Block[] {
   const total = diff.lines.length
   const shown = new Uint8Array(total)
-  for (let index = 0; index < total; index++) {
-    if (diff.lines[index].kind !== 'same') {
-      for (let n = Math.max(0, index - context); n <= Math.min(total - 1, index + context); n++) shown[n] = 1
-    }
+  const around = (index: number) => {
+    for (let n = Math.max(0, index - context); n <= Math.min(total - 1, index + context); n++) shown[n] = 1
   }
+  for (let index = 0; index < total; index++) if (diff.lines[index].kind !== 'same') around(index)
+  for (const index of anchors) around(index)
   for (const index of open) if (index < total) shown[index] = 1
   const blocks: Block[] = []
   let index = 0
@@ -220,11 +225,13 @@ export function visibleBlocks(diff: FileDiff, context: number, open: Set<number>
   return blocks
 }
 
-/** One row of a split view: the old line on the left, the new on the right. */
+/** One row of a split view: the old line on the left, the new on the right, each with its index in `lines`. */
 export interface SplitRow {
   left: Line | null
   right: Line | null
-  /** The index in `lines` of the row's first line, for keys and folding. */
+  leftAt: number | null
+  rightAt: number | null
+  /** The index of the row's first line, for keys and folding. */
   at: number
 }
 
@@ -234,7 +241,7 @@ export function splitRows(lines: Line[], from: number, to: number): SplitRow[] {
   while (index < to) {
     const line = lines[index]
     if (line.kind === 'same') {
-      rows.push({ left: line, right: line, at: index })
+      rows.push({ left: line, right: line, leftAt: index, rightAt: index, at: index })
       index++
       continue
     }
@@ -243,10 +250,14 @@ export function splitRows(lines: Line[], from: number, to: number): SplitRow[] {
     while (index < to && lines[index].kind === 'del') dels.push(index++)
     while (index < to && lines[index].kind === 'add') adds.push(index++)
     for (let n = 0; n < Math.max(dels.length, adds.length); n++) {
+      const leftAt = dels[n] ?? null
+      const rightAt = adds[n] ?? null
       rows.push({
-        left: dels[n] !== undefined ? lines[dels[n]] : null,
-        right: adds[n] !== undefined ? lines[adds[n]] : null,
-        at: dels[n] ?? adds[n],
+        left: leftAt === null ? null : lines[leftAt],
+        right: rightAt === null ? null : lines[rightAt],
+        leftAt,
+        rightAt,
+        at: leftAt ?? rightAt,
       })
     }
   }

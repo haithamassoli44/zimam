@@ -1,23 +1,21 @@
 <script setup lang="ts">
-// PROTOTYPE: the commits the diff shows, above it: one commit's message, who made it and when, or a run of commits by
+// The commits the diff shows, above it: one commit's message, who made it and when, or a run of commits by
 // their first lines. A way back to all the changes stays in sight beside it.
-import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import LineCounts from '@/components/LineCounts.vue'
 import PersonLink from '@/components/PersonLink.vue'
-import { formatNumber, fullDate, relativeTime } from '@/locale'
-import { now } from '@/stores/clock'
+import TimeAgo from '@/components/TimeAgo.vue'
+import { commitUrl } from '@/lib/refs'
+import { formatNumber } from '@/locale'
 import { filesCapped, filesState, pull, scope, showAllChanges, shownTotals } from '@/stores/pull'
 
 const { t } = useI18n()
 
-const shown = computed(() =>
-  scope.value && pull.value ? pull.value.commits.slice(scope.value.from, scope.value.to + 1) : [],
-)
+const shown = computed(() => scope.value?.commits ?? [])
 const single = computed(() => (shown.value.length === 1 ? shown.value[0] : null))
 const place = computed(() => {
   const at = scope.value
@@ -28,16 +26,15 @@ const place = computed(() => {
     : t('pull.scope.range', { from: formatNumber(at.from + 1), to: formatNumber(at.to + 1), of })
 })
 
-// A long message shows its first lines until asked for the rest.
+// A long message shows its first lines until asked for the rest: long by its lines, or by a long paragraph's length.
 const LINES = 4
+const LONG = 320
 const whole = ref(false)
 watch(single, () => (whole.value = false))
 const long = computed(() => {
   const body = single.value?.body ?? ''
-  return body.split('\n').length > LINES || body.length > 320
+  return body.split('\n').length > LINES || body.length > LONG
 })
-const commitUrl = (oid: string) =>
-  pull.value ? `https://github.com/${pull.value.ref.repo}/pull/${pull.value.ref.number}/commits/${oid}` : '#'
 </script>
 
 <template>
@@ -46,10 +43,7 @@ const commitUrl = (oid: string) =>
       <span class="inline-flex items-center gap-1.5 font-medium text-toned">
         <UIcon name="i-octicon-git-commit-16" class="size-4" />{{ place }}
       </span>
-      <span v-if="filesState === 'ready'" class="font-mono tabular-nums" dir="ltr">
-        <span class="text-success">+{{ formatNumber(shownTotals.additions) }}</span>
-        <span class="ms-1 text-error">−{{ formatNumber(shownTotals.deletions) }}</span>
-      </span>
+      <LineCounts v-if="filesState === 'ready'" :additions="shownTotals.additions" :deletions="shownTotals.deletions" />
       <span class="flex-1" />
       <UButton
         size="xs"
@@ -66,7 +60,8 @@ const commitUrl = (oid: string) =>
       <p
         v-if="single.body"
         class="mt-1 font-mono text-[12px] leading-5 break-words whitespace-pre-wrap text-toned"
-        :class="!whole && 'line-clamp-4'"
+        :class="!whole && 'line-clamp-(--lines)'"
+        :style="{ '--lines': LINES }"
         dir="auto"
       >
         {{ single.body }}
@@ -74,29 +69,21 @@ const commitUrl = (oid: string) =>
       <button
         v-if="long"
         type="button"
-        class="mt-1 rounded-sm text-[12px] font-medium text-toned transition-colors hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+        class="mt-1 rounded-sm text-[12px] font-medium text-toned focus-ring transition-colors hover:text-highlighted hover:underline"
         :aria-expanded="whole"
         @click="whole = !whole"
       >
         {{ whole ? t('pull.scope.less') : t('pull.scope.more') }}
       </button>
       <p class="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-muted">
-        <PersonLink
-          :who="single.author.login ? single.author : null"
-          class="inline-flex items-center gap-1.5 font-medium text-toned"
-        >
-          <UAvatar :src="single.author.avatarUrl" alt="" size="3xs" />
-          <bdi>{{ single.author.login ?? single.author.name }}</bdi>
-        </PersonLink>
-        <UTooltip :text="fullDate(single.at)"
-          ><span>{{ t('pull.scope.committed', { when: relativeTime(Date.parse(single.at), now) }) }}</span></UTooltip
-        >
+        <PersonLink :who="single.author" class="font-medium text-toned" />
+        <TimeAgo v-slot="{ ago }" :at="single.at">{{ t('pull.scope.committed', { when: ago }) }}</TimeAgo>
         <span aria-hidden="true">·</span>
         <a
-          :href="commitUrl(single.oid)"
+          :href="pull && commitUrl(pull.ref, single.oid)"
           target="_blank"
           rel="noopener"
-          class="inline-flex items-center gap-1 rounded-sm font-mono transition-colors hover:text-highlighted hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+          class="inline-flex items-center gap-1 rounded-sm font-mono focus-ring transition-colors hover:text-highlighted hover:underline"
           >{{ single.short }}<UIcon name="i-octicon-link-external-16" class="size-3.5"
         /></a>
       </p>

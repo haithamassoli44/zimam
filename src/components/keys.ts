@@ -1,24 +1,105 @@
-// The keyboard. What's on screen answers the keys it has a use for, the latest first: an open issue's j and k before
-// the list's. Every shortcut is also listed below, by where it works, for the sheet that `?` opens.
-import { onBeforeUnmount, onMounted } from 'vue'
+// The keyboard. Every shortcut is named once, in SHORTCUTS: what's on screen binds handlers to the shortcuts it has a
+// use for, the help lists them all, and tooltips show their keys.
+import { onBeforeUnmount, onMounted, type Ref } from 'vue'
+
+import { PULL_PARTS } from '@/lib/refs'
+
+/** Where shortcuts work, in the help's order. */
+const GROUPS = ['everywhere', 'list', 'issue', 'pull', 'diff'] as const
+type Group = (typeof GROUPS)[number]
 
 /**
- * A key as the help writes it and handlers name it: `j`, `J` for Shift and j, `[`, `?`, `1`, `Enter`. Return false
- * from a handler to leave the key to the next one.
+ * Where a shortcut works and its keys, as the help writes them: `j`, `J` for Shift and j, `[`, `?`, `Enter`. Each key
+ * does its own thing, like `j` and `k`, or with `range` every key from the first to the last does, like `1` to `9`.
+ * `native`: the browser or the focused element answers, and the help only lists it.
  */
-type Handler = (event: KeyboardEvent) => unknown
+interface Shortcut {
+  group: Group
+  keys: readonly string[]
+  range?: true
+  native?: true
+}
+
+export const SHORTCUTS = {
+  help: { group: 'everywhere', keys: ['?'] },
+  search: { group: 'everywhere', keys: ['/'] },
+  views: { group: 'everywhere', keys: ['1', '9'], range: true },
+  refresh: { group: 'everywhere', keys: ['r'] },
+  settings: { group: 'everywhere', keys: [','] },
+  rows: { group: 'list', keys: ['j', 'k'] },
+  rowsArrows: { group: 'list', keys: ['↓', '↑'], native: true },
+  open: { group: 'list', keys: ['Enter'], native: true },
+  openOnGitHub: { group: 'list', keys: ['meta', 'Enter'], native: true },
+  issues: { group: 'issue', keys: ['j', 'k'] },
+  close: { group: 'issue', keys: ['Esc'], native: true },
+  parts: { group: 'pull', keys: ['1', String(PULL_PARTS.length)], range: true },
+  back: { group: 'pull', keys: ['u'] },
+  pulls: { group: 'pull', keys: ['J', 'K'] },
+  commits: { group: 'pull', keys: ['[', ']'] },
+  allChanges: { group: 'pull', keys: ['a'] },
+  changes: { group: 'diff', keys: ['j', 'k'] },
+  files: { group: 'diff', keys: ['n', 'p'] },
+  viewed: { group: 'diff', keys: ['v'] },
+} as const satisfies Record<string, Shortcut>
+
+type Id = keyof typeof SHORTCUTS
+/** The shortcuts a handler can take: all but those the browser answers. */
+type Bindable = { [K in Id]: (typeof SHORTCUTS)[K] extends { native: true } ? never : K }[Id]
+
+/** The shortcuts by where they work, in the help's order. */
+export const SHORTCUT_GROUPS = GROUPS.map((group) => ({
+  group,
+  shortcuts: (Object.keys(SHORTCUTS) as Id[]).filter((id) => SHORTCUTS[id].group === group),
+}))
+
+/** The keys a shortcut answers, from the first to the last of a range. */
+function keysOf(id: Id): string[] {
+  const shortcut: Shortcut = SHORTCUTS[id]
+  if (!shortcut.range) return [...shortcut.keys]
+  const [first, last] = shortcut.keys.map((key) => key.charCodeAt(0))
+  return Array.from({ length: last - first + 1 }, (_, index) => String.fromCharCode(first + index))
+}
+
+/** A key as keycaps show it: a capital is Shift and the letter. */
+export const keycaps = (key: string) => (/^[A-Z]$/.test(key) ? ['Shift', key] : [key])
+
+/** The keycaps of a shortcut's key, the first by default, for a tooltip. */
+export const kbds = (id: Id, index = 0) => keycaps(keysOf(id)[index])
+
+/**
+ * What a shortcut does. Given the key's place among the shortcut's keys: `0` for `j`, `1` for `k`, `3` for `4`. Return
+ * false to leave the key to the next part asked.
+ */
+type Handler = (event: KeyboardEvent, index: number) => unknown
+
+/**
+ * How what's on screen ranks: an open issue's panel before the page under it, and the page before what works
+ * everywhere. Within a level, the latest shown is asked first.
+ */
+const LEVELS = ['panel', 'page', 'app'] as const
+type Level = (typeof LEVELS)[number]
 
 interface Layer {
-  keys: Map<string, Handler>
-  /** Above 0 for a part of a page; 0 for the shortcuts that work everywhere, asked last. */
-  rank: number
+  keys: Map<string, (event: KeyboardEvent) => unknown>
+  level: Level
+  /** Where the part is: in a dialog, only the parts inside it answer. */
+  root?: Readonly<Ref<HTMLElement | null>>
 }
 
 const layers: Layer[] = []
 
-/** Answers these keys while the component is on screen. */
-export function useKeys(keys: Record<string, Handler>, rank = 1) {
-  const layer: Layer = { keys: new Map(Object.entries(keys)), rank }
+/** Answers these shortcuts while the component is on screen: one handler for each key, or one for them all. */
+export function useKeys(
+  bindings: Partial<Record<Bindable, Handler | Handler[]>>,
+  options: { level?: Level; root?: Readonly<Ref<HTMLElement | null>> } = {},
+) {
+  const keys = new Map<string, (event: KeyboardEvent) => unknown>()
+  for (const [id, binding] of Object.entries(bindings) as [Bindable, Handler | Handler[]][])
+    keysOf(id).forEach((key, index) => {
+      const handler = Array.isArray(binding) ? binding[index] : binding
+      if (handler) keys.set(key, (event) => handler(event, index))
+    })
+  const layer: Layer = { keys, level: options.level ?? 'page', root: options.root }
   onMounted(() => layers.push(layer))
   onBeforeUnmount(() => layers.splice(layers.indexOf(layer), 1))
 }
@@ -45,84 +126,72 @@ function nameOf(event: KeyboardEvent): string {
   return key
 }
 
-// Typing, or a menu, list or dialog that has the focus, keeps the keys. A dialog holding an element marked `data-keys`,
-// like the issue laid over the list, passes them on.
+/** Whether the page has no focus of its own: nothing, or the body. */
+export const nothingFocused = () => !document.activeElement || document.activeElement === document.body
+
+// --- The page's main part: where the skip link goes, and what the keys that scroll scroll when nothing has the focus.
+
+const mains: Readonly<Ref<HTMLElement | null>>[] = []
+
+/**
+ * Makes this element a main part of the page while the component is on screen. It needs `tabindex`. Of main parts one
+ * inside another, like the diff inside the pull request's page, the inner one is the page's.
+ */
+export function useMain(element: Readonly<Ref<HTMLElement | null>>) {
+  onMounted(() => mains.push(element))
+  onBeforeUnmount(() => mains.splice(mains.indexOf(element), 1))
+}
+
+/** Gives the page's main part the focus, without scrolling to it. */
+export function focusMain() {
+  const shown = mains.flatMap((each) => each.value ?? [])
+  shown.find((main) => !shown.some((other) => other !== main && main.contains(other)))?.focus({ preventScroll: true })
+}
+
+// The keys that scroll. With nothing focused, they'd scroll nothing: the main part takes the focus, then the browser
+// scrolls it. Taking the focus on arrival instead would draw its ring for a reader who came by the address.
+const SCROLLING = new Set([' ', 'PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'Home', 'End'])
+
+// Typing keeps the keys. So does a menu, a list or a dialog, but for the parts inside it, like the issue laid over the
+// list; over a part like that, what works everywhere works too.
 const TYPING = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
-const HOLDING = '[role="dialog"]:not(:has([data-keys])), [role="alertdialog"], [role="menu"], [role="listbox"]'
+const HOLDING = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]'
 
 addEventListener('keydown', (event) => {
   if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
+  if (nothingFocused() && SCROLLING.has(event.key)) return focusMain()
   const target = event.target instanceof Element ? event.target : null
-  if (target?.closest(TYPING) || target?.closest(HOLDING)) return
+  if (target?.closest(TYPING)) return
+  const holder = target?.closest(HOLDING)
+  const inside = (layer: Layer) => !!holder?.contains(layer.root?.value ?? null)
+  const hostsPart = layers.some(inside)
+  const answers = (layer: Layer) => !holder || inside(layer) || (layer.level === 'app' && hostsPart)
   const name = nameOf(event)
-  const ordered = layers.toReversed().toSorted((a, b) => b.rank - a.rank)
-  for (const layer of ordered) {
+  const asked = LEVELS.flatMap((level) => layers.filter((layer) => layer.level === level).toReversed())
+  for (const layer of asked) {
     const handler = layer.keys.get(name)
-    if (!handler || handler(event) === false) continue
+    if (!handler || !answers(layer) || handler(event) === false) continue
     event.preventDefault()
     return
   }
 })
 
+/** The step an arrow key takes through a list: one down or up, or to its start or end. Null for any other key. */
+const STEPS: Record<string, 1 | -1 | 'start' | 'end'> = { ArrowDown: 1, ArrowUp: -1, Home: 'start', End: 'end' }
+export function stepOf(event: KeyboardEvent) {
+  return event.altKey || event.ctrlKey || event.metaKey ? null : (STEPS[event.key] ?? null)
+}
+
 /** ↓ and ↑ move the focus through a list's items, matched by `selector`, and Home and End to its ends. */
 export function roving(selector: string) {
   return (event: KeyboardEvent) => {
-    if (event.altKey || event.ctrlKey || event.metaKey) return
+    const step = stepOf(event)
     const items = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(selector)]
     const at = items.indexOf(event.target as HTMLElement)
-    const next = ({ ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: items.length - 1 } as Record<string, number>)[
-      event.key
-    ]
-    if (at < 0 || next === undefined || !items[next]) return
+    if (step === null || at < 0) return
+    const next = items[step === 'start' ? 0 : step === 'end' ? items.length - 1 : at + step]
+    if (!next) return
     event.preventDefault()
-    items[next].focus()
+    next.focus()
   }
 }
-
-/** The shortcuts, by where they work, as the help lists them: keys pressed together or one after another, and what they do. */
-export const KEY_GROUPS = [
-  {
-    id: 'everywhere',
-    keys: [
-      { keys: ['?'], does: 'help' },
-      { keys: ['/'], does: 'search' },
-      { keys: ['1', '9'], range: true, does: 'views' },
-      { keys: ['r'], does: 'refresh' },
-      { keys: [','], does: 'settings' },
-    ],
-  },
-  {
-    id: 'list',
-    keys: [
-      { keys: ['j', 'k'], does: 'rows' },
-      { keys: ['↓', '↑'], does: 'rowsArrows' },
-      { keys: ['Enter'], does: 'open' },
-      { keys: ['meta', 'Enter'], does: 'openOnGitHub' },
-    ],
-  },
-  {
-    id: 'issue',
-    keys: [
-      { keys: ['j', 'k'], does: 'issues' },
-      { keys: ['Esc'], does: 'close' },
-    ],
-  },
-  {
-    id: 'pull',
-    keys: [
-      { keys: ['1', '4'], range: true, does: 'parts' },
-      { keys: ['u'], does: 'back' },
-      { keys: ['J', 'K'], shift: true, does: 'pulls' },
-      { keys: ['[', ']'], does: 'commits' },
-      { keys: ['a'], does: 'allChanges' },
-    ],
-  },
-  {
-    id: 'diff',
-    keys: [
-      { keys: ['j', 'k'], does: 'changes' },
-      { keys: ['n', 'p'], does: 'files' },
-      { keys: ['v'], does: 'viewed' },
-    ],
-  },
-] as const

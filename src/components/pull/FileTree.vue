@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// PROTOTYPE: the changed files as a tree, with what's viewed, what's new since the last visit, and generated files left out.
+// The changed files as a tree, with what's viewed, what's new since the last visit, and generated files left out.
 // It follows the diff: the file being read stays in sight, or the folded folder it's in.
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
@@ -7,9 +7,11 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, useTemplateRef, wa
 import { useI18n } from 'vue-i18n'
 
 import { roving } from '@/components/keys'
-import { FILE_LOOKS } from '@/components/looks'
 import { still } from '@/components/motion'
-import { formatNumber } from '@/locale'
+import { FILE_LOOKS } from '@/components/pull/looks'
+import { activeFile, showFile } from '@/components/pull/navigation'
+import { fileFilter } from '@/components/pull/parts'
+import { formatNumber, rtl } from '@/locale'
 import {
   freshFile,
   generatedFiles,
@@ -22,8 +24,6 @@ import {
   type PullFile,
 } from '@/stores/pull'
 
-const props = defineProps<{ active?: string | null }>()
-const emit = defineEmits<{ pick: [path: string] }>()
 const { t } = useI18n()
 
 const filter = ref('')
@@ -77,7 +77,7 @@ const rows = computed<Row[]>(() => {
 
 /** The row that stands for the active file: its own, or the folded folder it's in. */
 const holder = computed(() => {
-  const path = props.active
+  const path = activeFile.value
   if (!path) return null
   let found: string | null = null
   for (const row of rows.value) {
@@ -89,6 +89,9 @@ const holder = computed(() => {
 
 // Keeps the holder in sight with a row or two around it, gliding there when it's near and jumping when it's far.
 const list = useTemplateRef<HTMLElement>('list')
+const filterBox = useTemplateRef<{ inputRef: HTMLInputElement | null }>('filterBox')
+watch(filterBox, (box) => (fileFilter.value = box?.inputRef ?? null), { immediate: true, flush: 'post' })
+onBeforeUnmount(() => (fileFilter.value = null))
 const ROOM = 2
 function follow(glide: boolean) {
   const box = list.value
@@ -125,9 +128,8 @@ const arrows = roving('button')
 function onKey(event: KeyboardEvent) {
   const button = event.target as HTMLElement
   const path = button.dataset.folder
-  const rtl = getComputedStyle(button).direction === 'rtl'
-  const open = event.key === (rtl ? 'ArrowLeft' : 'ArrowRight')
-  const fold = event.key === (rtl ? 'ArrowRight' : 'ArrowLeft')
+  const open = event.key === (rtl.value ? 'ArrowLeft' : 'ArrowRight')
+  const fold = event.key === (rtl.value ? 'ArrowRight' : 'ArrowLeft')
   if (path !== undefined && (open || fold)) {
     event.preventDefault()
     if (open === closed.has(path)) toggle(path)
@@ -145,8 +147,8 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
   <nav class="flex h-full min-h-0 flex-col" :aria-label="t('pull.files')">
     <div class="shrink-0 border-b border-default p-3">
       <UInput
+        ref="filterBox"
         v-model="filter"
-        data-file-filter
         size="sm"
         icon="i-octicon-filter-16"
         :placeholder="t('pull.filterFiles')"
@@ -160,7 +162,7 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
           v-if="row.kind === 'folder'"
           type="button"
           :data-folder="row.path"
-          class="relative flex h-7 w-full items-center gap-1.5 pe-2 text-start transition-colors hover:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary pointer-coarse:h-10"
+          class="relative flex h-7 w-full items-center gap-1.5 pe-2 text-start focus-ring-inset transition-colors hover:bg-elevated pointer-coarse:h-10"
           :class="
             holder === row.key
               ? 'text-highlighted before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary/60'
@@ -180,7 +182,7 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
         <button
           v-else
           type="button"
-          class="relative flex h-7 w-full items-center gap-1.5 pe-2 text-start transition-colors hover:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary pointer-coarse:h-10"
+          class="relative flex h-7 w-full items-center gap-1.5 pe-2 text-start focus-ring-inset transition-colors hover:bg-elevated pointer-coarse:h-10"
           :class="[
             holder === row.key
               ? 'bg-elevated text-highlighted before:absolute before:inset-y-0 before:start-0 before:w-0.5 before:bg-primary'
@@ -189,7 +191,7 @@ const indent = (depth: number) => ({ paddingInlineStart: `${0.5 + depth * 0.875}
           ]"
           :style="indent(row.depth + 1)"
           :aria-current="holder === row.key || undefined"
-          @click="emit('pick', row.file.path)"
+          @click="showFile(row.file.path)"
         >
           <UIcon
             :name="FILE_LOOKS[row.file.status].icon"

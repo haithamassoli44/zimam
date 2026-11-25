@@ -1,11 +1,12 @@
-// PROTOTYPE: the side column's width. One width for every part, so the diff stays put when the part changes, kept in
-// this browser.
+// The side column, on a wide screen: open or folded, and its width. One width for every part, so the diff stays put
+// when the part changes, kept in this browser.
 import { computed, ref } from 'vue'
 
-export const COLUMN = { min: 240, start: 384 }
+/** The column's widths; the strip of part icons beside it; and dragging its edge below `fold` folds it. */
+export const COLUMN = { min: 240, start: 384, strip: 48, fold: 160 }
 const KEY = 'zimam:pull-column'
-/** The strip of part icons beside the column, `w-12` in PullLayout.vue. */
-const STRIP = 48
+
+export const columnOpen = ref(true)
 
 function read() {
   try {
@@ -20,7 +21,7 @@ const windowWidth = ref(innerWidth)
 addEventListener('resize', () => (windowWidth.value = innerWidth))
 
 /** The diff keeps at least half of the room it shares with the column. */
-export const widest = computed(() => Math.max(COLUMN.min, Math.floor((windowWidth.value - STRIP) / 2)))
+export const widest = computed(() => Math.max(COLUMN.min, Math.floor((windowWidth.value - COLUMN.strip) / 2)))
 const clamp = (width: number) => Math.round(Math.min(widest.value, Math.max(COLUMN.min, width)))
 
 const wanted = ref(read())

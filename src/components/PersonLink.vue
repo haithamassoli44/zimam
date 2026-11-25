@@ -1,39 +1,59 @@
 <script setup lang="ts">
-// Someone's name or picture as a link to their page on GitHub, with a card about them when a pointer rests on it or the
-// keyboard focuses it. The card reads their profile the first time it opens. A deleted account is plain text.
+// Someone's picture and name as a link to their page on GitHub, with a card about them when a pointer rests on it or
+// the keyboard focuses it. The card reads their profile the first time it opens. A deleted account is plain text.
 import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import USkeleton from '@nuxt/ui/components/Skeleton.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { profileUrl, type Profile, type Who } from '@/lib/people'
+import { profileUrl, readProfile, type Profile, type Who } from '@/lib/people'
 import { compactNumber, monthYear } from '@/locale'
-import { profile } from '@/stores/data'
+import { gitHub } from '@/stores/data'
 
-/** `label`: the link's name, when what it shows has no words, like a picture alone. */
-const props = defineProps<{ who: Who | null; label?: string }>()
+/** `picture`: the picture's size, or none. `name`: whether the name shows, or names the link for a picture alone. */
+const props = withDefaults(defineProps<{ who: Who | null; picture?: '3xs' | '2xs' | false; name?: boolean }>(), {
+  picture: '3xs',
+  name: true,
+})
 // The link takes the attributes given, not the card around it.
 defineOptions({ inheritAttrs: false })
 const { t } = useI18n()
 
 const url = computed(() => (props.who ? profileUrl(props.who) : null))
+const named = computed(() => props.who?.login ?? props.who?.name ?? t('issue.ghost'))
+const look = computed(() => [
+  props.picture && props.name && 'inline-flex items-center',
+  props.picture === '3xs' ? 'gap-1.5' : 'gap-2',
+])
 // Bots and teams have no profile to read: their card says what they are.
 const person = computed(() => !!props.who?.login && !props.who.bot && !props.who.team)
 
 const found = ref<Profile | null>(null)
 const state = ref<'idle' | 'loading' | 'done' | 'failed'>('idle')
+// Another person in the same place, like the commit card's author after `]`, starts a card of their own.
+watch(
+  () => props.who?.login,
+  () => {
+    found.value = null
+    state.value = 'idle'
+  },
+)
 function opened(open: boolean) {
-  if (!open || !person.value || state.value === 'loading' || state.value === 'done') return
+  const login = props.who?.login
+  if (!open || !login || !person.value || state.value === 'loading' || state.value === 'done') return
   state.value = 'loading'
-  profile(props.who!.login!).then(
-    (answer) => {
-      found.value = answer
-      state.value = 'done'
-    },
-    () => (state.value = 'failed'),
-  )
+  Promise.resolve()
+    .then(() => readProfile(gitHub(), login))
+    .then(
+      (answer) => {
+        if (login !== props.who?.login) return
+        found.value = answer
+        state.value = 'done'
+      },
+      () => login === props.who?.login && (state.value = 'failed'),
+    )
 }
 
 const facts = computed(() => {
@@ -64,18 +84,23 @@ const facts = computed(() => {
       :href="url"
       target="_blank"
       rel="noopener"
-      :aria-label="label"
+      :aria-label="name ? undefined : named"
       v-bind="$attrs"
-      class="rounded-sm transition-colors hover:text-highlighted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-      ><slot
-    /></a>
+      class="rounded-sm focus-ring transition-colors hover:text-highlighted focus-visible:outline-offset-1"
+      :class="look"
+    >
+      <slot>
+        <UAvatar v-if="picture && who.avatarUrl" :src="who.avatarUrl" alt="" :size="picture" />
+        <bdi v-if="name" class="truncate">{{ named }}</bdi>
+      </slot>
+    </a>
     <template #content>
       <div class="w-72 p-4 text-[13px]">
         <div class="flex items-center gap-3">
           <UAvatar :src="who.avatarUrl" alt="" size="xl" />
           <div class="min-w-0">
             <p class="truncate font-medium text-highlighted">
-              <bdi>{{ found?.name ?? who.login }}</bdi>
+              <bdi>{{ found?.name ?? named }}</bdi>
             </p>
             <p class="truncate text-[12px] text-muted">
               <template v-if="who.team">{{ t('person.team', { owner: who.team.split('/')[0] }) }}</template>
@@ -109,5 +134,10 @@ const facts = computed(() => {
       </div>
     </template>
   </UPopover>
-  <span v-else v-bind="$attrs"><slot /></span>
+  <span v-else v-bind="$attrs" :class="look">
+    <slot>
+      <UAvatar v-if="picture && who?.avatarUrl" :src="who.avatarUrl" alt="" :size="picture" />
+      <bdi v-if="name" class="truncate">{{ named }}</bdi>
+    </slot>
+  </span>
 </template>

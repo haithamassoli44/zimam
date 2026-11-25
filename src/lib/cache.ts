@@ -48,6 +48,8 @@ export function emptyCache(ws: string, sources: string): Cache {
 }
 
 const markerKey = (ws: string) => `zimam:synced:${ws}`
+/** What the reader saw of each pull request in a workspace: visits and viewed files. Reloading keeps it. */
+export const seenKey = (ws: string) => `zimam:seen:${ws}`
 
 export function syncedMarker(ws: string): number {
   try {

@@ -1,18 +1,21 @@
 <script setup lang="ts">
-// PROTOTYPE: the pull request's title, what it merges where, its size without generated files, and who has to act next.
+// The pull request's title, what it merges where, its size without generated files, and who has to act next.
 // Once the diff scrolls past it, it folds to a thin row, and it comes back at the top of the diff.
-import UAvatar from '@nuxt/ui/components/Avatar.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
+import USkeleton from '@nuxt/ui/components/Skeleton.vue'
 import UTooltip from '@nuxt/ui/components/Tooltip.vue'
 import { computed, onBeforeUnmount, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import LineCounts from '@/components/LineCounts.vue'
 import { PULL_LOOKS } from '@/components/looks'
+import { easeOut } from '@/components/motion'
 import PersonLink from '@/components/PersonLink.vue'
+import { scroller, scrolledBySelf } from '@/components/pull/navigation'
 import StatusChips from '@/components/pull/StatusChips.vue'
-import { formatNumber, fullDate, relativeTime } from '@/locale'
-import { now } from '@/stores/clock'
-import { pull, scrolledBySelf, totals } from '@/stores/pull'
+import TimeAgo from '@/components/TimeAgo.vue'
+import { formatNumber } from '@/locale'
+import { pull, totals } from '@/stores/pull'
 
 const { t } = useI18n()
 
@@ -21,17 +24,19 @@ const head = computed(() =>
   pull.value?.cross && pull.value.headOwner ? `${pull.value.headOwner}:${pull.value.head}` : pull.value?.head,
 )
 const counted = computed(() => (totals.value.files || totals.value.left ? totals.value : null))
-// Who the line names: whoever merged it, or its author.
 const who = computed(() => (state.value === 'merged' ? pull.value?.mergedBy : pull.value?.post.author) ?? null)
 
 // --- Folding ---
 const root = useTemplateRef<HTMLElement>('root')
 const full = useTemplateRef<HTMLElement>('full')
-/** The thin row's height, `h-9`. */
-const THIN = 36
+const thinRow = useTemplateRef<HTMLElement>('thinRow')
+const thin = () => thinRow.value?.offsetHeight ?? 0
 const MOVE_MS = 300
+// It folds once the diff has scrolled this far past where the details would have gone, as if it had scrolled away with
+// them; and, asked back by hand, once the diff has moved on this far from there.
+const PAST_DETAILS = 24
+const PAST_ASKED = 48
 const folded = ref(false)
-let diff: HTMLElement | null = null
 // Where the diff was when the details were asked back by hand: they fold again a little past it.
 let held = -Infinity
 let moving = false
@@ -46,6 +51,7 @@ function move(to: number, steady: boolean, done?: () => void) {
   if (!box) return
   cancelAnimationFrame(frame)
   const from = box.offsetHeight
+  const ease = easeOut()
   // The clock starts at the first frame: a frame's time can come before this call.
   let start: number | null = null
   let last = from
@@ -53,10 +59,9 @@ function move(to: number, steady: boolean, done?: () => void) {
   const step = (time: number) => {
     start ??= time
     const progress = Math.min(1, (time - start) / MOVE_MS)
-    // The app's ease-out, cubic-bezier(0.22, 1, 0.36, 1), close enough for a height.
-    const height = Math.round(from + (to - from) * (1 - (1 - progress) ** 5))
+    const height = Math.round(from + (to - from) * ease(progress))
     box.style.height = `${height}px`
-    if (steady && diff) diff.scrollTop -= last - height
+    if (steady && scroller.value) scroller.value.scrollTop -= last - height
     last = height
     if (progress < 1) {
       frame = requestAnimationFrame(step)
@@ -71,11 +76,11 @@ function move(to: number, steady: boolean, done?: () => void) {
 function fold(steady: boolean) {
   folded.value = true
   held = -Infinity
-  move(THIN, steady)
+  move(thin(), steady)
 }
 function unfold(steady: boolean, done?: () => void) {
   folded.value = false
-  move(full.value?.offsetHeight ?? THIN, steady, () => {
+  move(full.value?.offsetHeight ?? thin(), steady, () => {
     // Unfolded, the header takes its own height again, as the window's width changes it.
     root.value?.style.removeProperty('height')
     done?.()
@@ -83,9 +88,9 @@ function unfold(steady: boolean, done?: () => void) {
 }
 
 /** Follows the diff's scrolling: folds once it has scrolled past the header, and comes back when it's at the top. */
-function follow(box: HTMLElement) {
-  diff = box
-  if (moving) return
+function follow() {
+  const box = scroller.value
+  if (!box || moving) return
   const top = box.scrollTop
   // A jump to a file or a thread moves the diff on its own: that may fold the header, never bring it back.
   const self = scrolledBySelf()
@@ -94,28 +99,26 @@ function follow(box: HTMLElement) {
     return
   }
   if (top <= 0) held = -Infinity
-  // As if the header had scrolled away with the page.
   const natural = full.value?.offsetHeight ?? 0
-  if (top > Math.max(natural - THIN + 24, held + 48)) fold(!self)
+  if (top > Math.max(natural - thin() + PAST_DETAILS, held + PAST_ASKED)) fold(!self)
 }
-defineExpose({ follow })
-
+watch(
+  scroller,
+  (box, before) => {
+    before?.removeEventListener('scroll', follow)
+    box?.addEventListener('scroll', follow, { passive: true })
+  },
+  { immediate: true },
+)
 /** The details asked back by hand, from the thin row: the code stays where it is. */
 function expand() {
-  unfold(true, () => (held = diff?.scrollTop ?? -Infinity))
+  unfold(true, () => (held = scroller.value?.scrollTop ?? -Infinity))
 }
 
-watch(
-  () => pull.value?.url,
-  () => {
-    cancelAnimationFrame(frame)
-    moving = false
-    folded.value = false
-    held = -Infinity
-    root.value?.style.removeProperty('height')
-  },
-)
-onBeforeUnmount(() => cancelAnimationFrame(frame))
+onBeforeUnmount(() => {
+  cancelAnimationFrame(frame)
+  scroller.value?.removeEventListener('scroll', follow)
+})
 </script>
 
 <template>
@@ -146,10 +149,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
               scope="global"
             >
               <template #who>
-                <PersonLink :who="who" class="inline-flex items-center gap-1.5 align-bottom font-medium text-toned">
-                  <UAvatar v-if="who" :src="who.avatarUrl" alt="" size="3xs" />
-                  <bdi>{{ who?.login ?? t('issue.ghost') }}</bdi>
-                </PersonLink>
+                <PersonLink :who="who" class="align-bottom font-medium text-toned" />
               </template>
               <template #n>{{ formatNumber(pull.commitCount) }}</template>
               <template #base
@@ -164,9 +164,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
               >
             </i18n-t>
           </span>
-          <UTooltip :text="fullDate(pull.post.createdAt)">
-            <span>{{ relativeTime(Date.parse(pull.post.createdAt), now) }}</span>
-          </UTooltip>
+          <TimeAgo :at="pull.post.createdAt" />
           <UTooltip
             v-if="counted"
             :text="
@@ -184,8 +182,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
             "
           >
             <span class="inline-flex items-center gap-2 font-mono text-[12px] tabular-nums" dir="ltr">
-              <span class="text-success">+{{ formatNumber(counted.additions) }}</span>
-              <span class="text-error">−{{ formatNumber(counted.deletions) }}</span>
+              <LineCounts :additions="counted.additions" :deletions="counted.deletions" />
               <span class="text-muted">{{
                 t('pull.filesCount', { n: formatNumber(counted.files) }, counted.files)
               }}</span>
@@ -196,6 +193,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
       </div>
 
       <div
+        ref="thinRow"
         class="absolute inset-x-0 top-0 flex h-9 items-center gap-2 px-4 transition-opacity sm:px-6"
         :class="folded ? 'delay-100 duration-300' : 'pointer-events-none opacity-0 duration-150'"
         :inert="!folded"
@@ -220,12 +218,19 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
             </button>
           </UTooltip>
         </p>
-        <span v-if="counted" class="shrink-0 font-mono text-[12px] tabular-nums max-md:hidden" dir="ltr">
-          <span class="text-success">+{{ formatNumber(counted.additions) }}</span>
-          <span class="ms-1 text-error">−{{ formatNumber(counted.deletions) }}</span>
-        </span>
+        <LineCounts
+          v-if="counted"
+          :additions="counted.additions"
+          :deletions="counted.deletions"
+          class="shrink-0 text-[12px] max-md:hidden"
+        />
         <StatusChips small />
       </div>
     </div>
+  </div>
+  <!-- While the pull request loads: its title and its line of facts. -->
+  <div v-else class="shrink-0 space-y-3 border-b border-default px-4 py-3 sm:px-6" aria-hidden="true">
+    <USkeleton class="my-1.5 h-4 w-2/3 max-w-xl" />
+    <USkeleton class="h-6 w-1/2 max-w-md" />
   </div>
 </template>

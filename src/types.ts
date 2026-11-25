@@ -25,7 +25,11 @@ export type ItemKind = (typeof ITEM_KINDS)[number]
 export type ItemState = (typeof ITEM_STATES)[number]
 /** An issue is open, or closed as done, as not planned or as a duplicate. */
 export type IssueState = 'open' | 'completed' | 'notPlanned' | 'duplicate'
+/** A pull request is open, a draft, merged, or closed without merging. */
+export type PullState = 'open' | 'draft' | 'merged' | 'closed'
 export type Review = (typeof REVIEWS)[number]
+/** Where a pull request stands on review: a verdict, someone still asked to review, or what its branch's rules ask. */
+export type ReviewStanding = 'approved' | 'changes' | 'awaiting' | Review
 export type Checks = (typeof CHECKS)[number]
 export type Merge = (typeof MERGES)[number]
 export type Involvement = (typeof INVOLVEMENTS)[number]
@@ -60,7 +64,7 @@ export interface Workspace {
   pinned: string[]
 }
 
-// PROTOTYPE: the pull request page's settings.
+// How posts and diffs read: bots' posts, in the issue panel too, then the pull request page's own.
 export const BOT_POSTS = ['show', 'collapse', 'hide'] as const
 export const LONG_LINES = ['wrap', 'scroll'] as const
 export const DIFF_VIEWS = ['split', 'unified'] as const
