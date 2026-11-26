@@ -695,6 +695,67 @@ describe('Syncer', () => {
     expect(state.searched[0]).toBe('since')
   })
 
+  it('reads the open items again of a repository that had none, when one second holds more of its changes than a search lists', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const now = Date.now() + MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in one second, in a repository that had no open issues a minute ago.
+    const once = new Date(now - 30 * 1000).toISOString()
+    const opened = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once))
+    state.issues.push(...opened)
+    state.searchResults = opened
+    await syncer.sync()
+    syncer.stop()
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('reads the repositories once in a run that reads them anyway, for a crowded second and a change outside them', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    // A run a while later, which reads the repositories first.
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    const once = new Date(now - 30 * 1000).toISOString()
+    const opened = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once))
+    state.issues.push(...opened)
+    state.searchResults = [...opened, { ...raw('X1', 'OPEN', once), repository: { id: 'elsewhere' } }]
+    state.calls = []
+    await syncer.sync()
+    syncer.stop()
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+    expect(state.calls.filter((call) => call === 'repos')).toHaveLength(1)
+  })
+
+  it('reads the closed history of a repository that had none closed, when one second holds more of its changes than a search lists', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = [raw('I1', 'OPEN', ago(24))]
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    let now = Date.now() + MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened and closed in one second.
+    const once = new Date(now - 30 * 1000).toISOString()
+    const closed = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    state.issues.push(...closed)
+    state.searchResults = closed
+    await syncer.sync()
+    now += MINUTE
+    await syncer.sync()
+    syncer.stop()
+    expect(closed.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
   it("keeps what it found and looks over the same time again when the hour's allowance runs low partway", async () => {
     const { gh, store, state, syncer } = await setup()
     await syncer.sync()

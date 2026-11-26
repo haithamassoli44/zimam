@@ -159,6 +159,9 @@ export class Syncer {
   private unprobeable = new Set<string>()
   // When the current run started. What it reads counts as read then.
   private runStartedAt = 0
+  // Which run this is, and the last one that read the repositories.
+  private runs = 0
+  private reposRun = 0
   // The review requests are asked for once per syncer, since a new one may come with a new token, and so a new person.
   private askedRequested = false
   // How many times in a row GitHub hasn't known whether a pull request conflicts.
@@ -273,6 +276,7 @@ export class Syncer {
   private async run(manual: boolean) {
     const started = Date.now()
     this.runStartedAt = started
+    this.runs++
     // A refused token stays refused until it's replaced, which opens the workspace anew.
     if (this.stopped || this.status.error === 'auth' || (this.status.pausedUntil ?? 0) > started) return
     this.status.pausedUntil = null
@@ -408,6 +412,7 @@ export class Syncer {
     for (const id of Object.keys(this.cache.history)) if (!repos.has(id)) delete this.cache.history[id]
     for (const id of Object.keys(this.cache.openHidden ?? {})) if (!repos.has(id)) delete this.cache.openHidden?.[id]
     this.cache.reposAt = Date.now()
+    this.reposRun = this.runs
     this.showProgress()
     this.changed([])
   }
@@ -464,11 +469,13 @@ export class Syncer {
         return
       }
     }
-    if (found.tooMany.length) await this.readAgain(found.tooMany)
+    // Repositories this run read are as they were when the changes the search found were made, or since.
+    const reposRead = () => this.reposRun === this.runs
+    if (found.tooMany.length) await this.readAgain(found.tooMany, reposRead())
     Object.assign(crowded, found.crowded)
     // A change in a repository the workspace doesn't hold may be in a new one, or in one it leaves out.
     const unknown = found.items.filter((item) => !this.store.repos.has(item.repoId) && !this.outside.has(item.repoId))
-    if (unknown.length) await this.loadRepos()
+    if (unknown.length && !reposRead()) await this.loadRepos()
     for (const item of unknown) if (!this.store.repos.has(item.repoId)) this.outside.add(item.repoId)
     this.busy =
       this.put(found.items.filter((item) => this.store.repos.has(item.repoId))) ||
@@ -559,9 +566,12 @@ export class Syncer {
   /**
    * Reads again, from the repositories, the parts of sources that changed more in one second than a search lists: open
    * items now, and for closed ones, the closed history too, from its latest change, as it loads, so nothing changed
-   * then is left out. Reading the open items again reads those closed then as they are now, history or not.
+   * then is left out. Reading the open items again reads those closed then as they are now, history or not. The
+   * repositories are read first, unless this run read them already, `read`: what they count, which says what there is
+   * to read, can be from before that second.
    */
-  private async readAgain(parts: Found['tooMany']) {
+  private async readAgain(parts: Found['tooMany'], read: boolean) {
+    if (!read) await this.loadRepos()
     for (const { source, kind, open } of parts)
       for (const repo of this.store.repos.values()) {
         if (!brings(source, repo)) continue
