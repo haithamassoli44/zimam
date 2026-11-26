@@ -18,6 +18,12 @@ const later = (a: Stamp, b: Stamp | undefined) => !b || a[0] > b[0] || (a[0] ===
 const isStamp = (value: unknown): value is Stamp =>
   Array.isArray(value) && typeof value[0] === 'number' && typeof value[1] === 'string'
 
+/** A copy of the record's entries, with when their fields changed. */
+interface Copy<T> {
+  entries: Record<string, T>
+  stamps: Map<string, Stamp>
+}
+
 // Each tab keeps its own copy of storage, which can be behind another tab's write for a moment, in any browser, so a
 // tab can write over a change it hasn't had yet. So the stored record keeps, under a name no entry has, when each of its
 // fields last changed, for a day: what a tab changed after storage's copy of a field is the tab's to write again.
@@ -74,14 +80,8 @@ export function sharedRecord<T extends object>(
     return text === undefined ? undefined : JSON.parse(text)
   }
 
-  // What storage has, with when its fields changed, those of the last day.
-  function read() {
-    let text: string | null = null
-    try {
-      text = localStorage.getItem(key())
-    } catch {
-      // Without storage, the record starts empty.
-    }
+  // A copy of the record, as storage has it or another tab wrote it, with when its fields changed in the last day.
+  function parse(text: string | null): Copy<T> {
     let found: unknown = {}
     try {
       found = JSON.parse(text ?? '{}')
@@ -89,13 +89,20 @@ export function sharedRecord<T extends object>(
       // What isn't a record reads as none.
     }
     const { [STAMPS]: kept, ...entries } = isPlain(found) ? found : {}
-    // A record taken away, as with its workspace, takes what this tab changed in it with it.
-    if (text === null) stamps = new Map()
     const since = Date.now() - DAY
     const when = Object.entries(isPlain(kept) ? kept : {}).filter(
       (each): each is [string, Stamp] => isStamp(each[1]) && each[1][0] >= since,
     )
     return { entries: entries as Record<string, T>, stamps: new Map(when) }
+  }
+
+  function stored(): string | null {
+    try {
+      return localStorage.getItem(key())
+    } catch {
+      // Without storage, the record starts empty.
+      return null
+    }
   }
 
   function take(entries: Record<string, T>, found: Map<string, Stamp>) {
@@ -110,45 +117,53 @@ export function sharedRecord<T extends object>(
   function load() {
     known = new Map()
     stamps = new Map()
-    const found = read()
+    const found = parse(stored())
     take(found.entries, found.stamps)
   }
 
-  // Writes over what storage has what this tab changed since it last took storage, and what it has changed later.
-  function save() {
-    const { entries: stored, stamps: theirs } = read()
+  // Writes over what storage has what this tab changed since it last took storage, and what it has changed later. So it
+  // does what another tab wrote, `heard`, that storage no longer has, as when this tab wrote over it before having it:
+  // the tab that wrote it may have closed since.
+  function save(heard?: string | null) {
+    const text = stored()
+    const storage = parse(text)
+    // A record taken away, as with its workspace, takes what the tabs changed in it with it.
+    if (text === null) stamps = new Map()
+    const others = text !== null && heard && heard !== text ? [storage, parse(heard)] : [storage]
     const changes = [...new Set([...Object.keys(record), ...known.keys()])]
       .filter(changedHere)
       .flatMap((name) => changesFrom(knownOf(name), record[name], [name]))
     if (changes.length) {
-      for (const [at] of theirs.values()) clock = Math.max(clock, at)
+      for (const copy of others) for (const [at] of copy.stamps.values()) clock = Math.max(clock, at)
       clock = Math.max(clock + 1, Date.now())
       for (const path of changes) stamps.set(JSON.stringify(path), [clock, tab])
     }
-    // Each field as the tab that changed it last has it, the shallower first. A field this tab has later, whose entry
-    // storage doesn't have, brings the entry as this tab has it.
+    // The latest change of each field, and the copy that has it: storage, when it has that one.
     const since = Date.now() - DAY
-    const next: Plain = copied(stored)
-    const all = new Map(theirs)
-    const fields: [path: string[], value: unknown][] = []
-    for (const [at, stamp] of stamps) {
-      if (stamp[0] < since || !later(stamp, theirs.get(at))) continue
-      const path = pathOf(at)
-      all.set(at, stamp)
-      if (!Object.hasOwn(next, path[0]) && Object.hasOwn(record, path[0])) next[path[0]] = copied(record[path[0]])
-      fields.push([path, valueAt(record, path)])
-    }
-    if (!fields.length) {
-      take(stored, theirs)
+    const latest = new Map<string, [Stamp, Copy<T>]>()
+    for (const copy of [...others, { entries: record, stamps }])
+      for (const [at, stamp] of copy.stamps)
+        if (stamp[0] >= since && later(stamp, latest.get(at)?.[0])) latest.set(at, [stamp, copy])
+    if ([...latest.values()].every(([, copy]) => copy === storage)) {
+      take(storage.entries, storage.stamps)
       return
     }
-    for (const [at, stamp] of theirs) if (all.get(at) === stamp) fields.push([pathOf(at), valueAt(stored, pathOf(at))])
-    for (const [path, value] of fields.toSorted(([a], [b]) => a.length - b.length)) put(next, path, value)
+    // Each field as the copy that changed it last has it, the shallower first. A field whose entry storage doesn't
+    // have brings the entry as that copy has it.
+    const next: Plain = copied(storage.entries)
+    for (const [at, [, copy]] of [...latest].toSorted(([a], [b]) => pathOf(a).length - pathOf(b).length)) {
+      const path = pathOf(at)
+      if (!Object.hasOwn(next, path[0]) && Object.hasOwn(copy.entries, path[0]))
+        next[path[0]] = copied(copy.entries[path[0]])
+      put(next, path, valueAt(copy.entries, path))
+    }
     // An entry changed in the last day stays, whatever `fit` picks: a tab that changed it would put it back.
     const picked = new Set(fit(Object.entries(next) as [string, T][]).map(([name]) => name))
-    for (const at of all.keys()) picked.add(pathOf(at)[0])
+    for (const at of latest.keys()) picked.add(pathOf(at)[0])
     const kept = Object.fromEntries(Object.entries(next).filter(([name]) => picked.has(name))) as Record<string, T>
-    const when = [...all].filter(([at]) => Object.hasOwn(kept, pathOf(at)[0]))
+    const when = [...latest]
+      .filter(([at]) => Object.hasOwn(kept, pathOf(at)[0]))
+      .map(([at, [stamp]]): [string, Stamp] => [at, stamp])
     try {
       localStorage.setItem(key(), JSON.stringify({ ...kept, [STAMPS]: Object.fromEntries(when) }))
     } catch {
@@ -160,10 +175,10 @@ export function sharedRecord<T extends object>(
 
   load()
   watch(key, load)
-  watch(record, save, { deep: true })
+  watch(record, () => save(), { deep: true })
   // Another tab wrote: what it changed shows here, and what this tab changed after, it writes again.
   globalThis.addEventListener?.('storage', (event) => {
-    if (event.key === key()) save()
+    if (event.key === key()) save(event.newValue)
   })
   return record
 }

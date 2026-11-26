@@ -170,8 +170,11 @@ describe('a record shared by tabs', () => {
     const record = sharedRecord<Entry>(keyOfTest())
     record.pr1 = { at: 1, ticked: ['a.ts'] }
     await nextTick()
+    const before = localStorage.getItem(KEY)
     localStorage.removeItem(KEY)
     told()
+    // Nor when it hears late of a write from before.
+    dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: before }))
     await nextTick()
     expect(localStorage.getItem(KEY)).toBeNull()
     expect(record).toEqual({})
@@ -271,7 +274,9 @@ function browser() {
     }
     expect(entriesOf(tabs[0].copy.text)).toEqual(tabs[0].record)
   }
-  return { newTab, inTab, deliver, hear, settle, same }
+  // A tab closing hears of no more writes, and makes none.
+  const close = (tab: Tab) => tabs.splice(tabs.indexOf(tab), 1)
+  return { newTab, inTab, deliver, hear, settle, same, close }
 }
 
 describe('a record shared by tabs that each keep their own copy of storage', () => {
@@ -286,6 +291,20 @@ describe('a record shared by tabs that each keep their own copy of storage', () 
     await tabs.settle()
     expect(first.record.pr1).toEqual({ at: 1, ticked: { 'a.ts': ['x'], 'b.ts': ['y'] } })
     tabs.same()
+  })
+
+  it('keeps what a tab wrote though it closed before the other tab, writing over it, heard of it', async () => {
+    const tabs = browser()
+    const first = tabs.newTab()
+    const second = tabs.newTab()
+    await tabs.inTab(first, () => (first.record.pr1 = { at: 1, ticked: {} }))
+    await tabs.settle()
+    await tabs.inTab(first, () => (first.record.pr1.ticked['a.ts'] = ['x']))
+    tabs.close(first)
+    await tabs.inTab(second, () => (second.record.pr1.ticked['b.ts'] = ['y']))
+    await tabs.settle()
+    expect(second.record.pr1).toEqual({ at: 1, ticked: { 'a.ts': ['x'], 'b.ts': ['y'] } })
+    expect(entriesOf(second.copy.text)).toEqual(second.record)
   })
 
   it('leaves out a change another tab took back after hearing of it', async () => {
