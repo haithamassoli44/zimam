@@ -35,7 +35,8 @@ export interface Cache {
   /**
    * The searches of a second of one part of a source that held more changes than a search lists, by query: the second,
    * and the repositories that held its changes when it was searched repository by repository, or null when even one
-   * did, so its changes were read again from it. Missing from a cache saved before it was kept.
+   * did, so its changes were read again from it. Missing from a cache saved before it was kept, and without either in
+   * one saved by a version that kept how many changes the second held: such an entry tells nothing.
    */
   crowded?: Record<string, { second: number; repos: string[] | null }>
   /** Each repository's closed history: a cursor to resume from, or `true` once complete. */

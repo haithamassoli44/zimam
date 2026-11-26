@@ -520,7 +520,7 @@ export class Syncer {
         // search indexes late too, and what changes after leaves the second.
         const crowded = !!part && from === to
         const done = crowded ? this.cache.crowded?.[q] : undefined
-        if (done && !done.repos) return count
+        if (done?.repos === null) return count
         const searches = narrower({ sources: group, from, to, part }, count, (source) => this.reposIn(source))
         if (!searches.length && part) {
           found.tooMany.push({ source: group[0], ...part })

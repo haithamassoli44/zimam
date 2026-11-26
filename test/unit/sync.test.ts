@@ -600,6 +600,36 @@ describe('Syncer', () => {
     expect(store.items.get('I5000')?.state).toBe('closed')
   })
 
+  it('finds an item of a crowded second that the search indexed late, from what an earlier version kept of it', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.more = ['api']
+    const issue = raw('I5000', 'OPEN', ago(48))
+    state.issues.push(issue)
+    await syncer.sync()
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    const once = new Date(now - 30 * 1000).toISOString()
+    const web = Array.from({ length: 600 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    const api = Array.from({ length: 401 }, (_, index) => ({
+      ...raw(`I${1000 + index}`, 'CLOSED', once),
+      repository: { id: 'api' },
+    }))
+    state.searchResults = [...web, ...api]
+    await syncer.sync()
+    // An earlier version kept how many changes the second held, not the repositories that held them.
+    const { crowded = {} } = (syncer as unknown as { cache: Cache }).cache
+    expect(Object.keys(crowded)).not.toHaveLength(0)
+    for (const [q, { second: at }] of Object.entries(crowded)) crowded[q] = { second: at, count: 1001 } as never
+    Object.assign(issue, { state: 'CLOSED', updatedAt: once })
+    state.searchResults = [...state.searchResults, issue]
+    now += MINUTE
+    await syncer.sync()
+    syncer.stop()
+    expect(store.items.get('I5000')?.state).toBe('closed')
+  })
+
   it('finds an item of a crowded second that the search indexed late, though another left it meanwhile', async () => {
     const fake = await setup()
     const { state, store, syncer } = fake
