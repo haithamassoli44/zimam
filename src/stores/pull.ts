@@ -342,14 +342,22 @@ const statusOf = (item: Item | undefined): ListStatus => (item ? { checks: item.
 /**
  * What the next copies' news counts from after the page was read again: what the list's copy had as the read started,
  * `started`, but what it counted from before, `before`, where the page came back without the list's news then, as when
- * GitHub's pull request lags behind its list. That news stays news, for the next syncs to read it again.
+ * GitHub's pull request lags behind its list. That news stays news, for the next syncs to read it again: without a
+ * copy to count from before, as for a page read before the list had one, the news is what syncs bring after the read.
+ * The page can't tell that from a list behind it then, so a copy behind the page reads it a few times too.
  */
 function listedAfter(started: ListStatus, before: ListStatus, page: Pull): ListStatus {
   const after = { ...started }
   if (!('checks' in started)) return after
   const differ = differences({ checks: started.checks ?? null, merge: started.merge ?? null }, page)
-  if (differ.checks && 'checks' in before) after.checks = before.checks
-  if (differ.merge && 'merge' in before) after.merge = before.merge
+  if (differ.checks) {
+    if ('checks' in before) after.checks = before.checks
+    else delete after.checks
+  }
+  if (differ.merge) {
+    if ('merge' in before) after.merge = before.merge
+    else delete after.merge
+  }
   return after
 }
 
