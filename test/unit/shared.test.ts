@@ -197,9 +197,18 @@ interface Tab {
   inbox: { text: string; at: number }[]
   // Writes the tab's copy has, that it hasn't heard of yet.
   unheard: string[]
+  // What its copy started from, and every write another tab made since, handed on or still to be.
+  got: (string | null)[]
   storage: Pick<Storage, 'getItem' | 'setItem'>
   listener: (event: StorageEvent) => void
 }
+
+// Whether a write has a file of a pull request ticked, or the tick taken away, and its visit.
+const seenIn = (text: string | null) => JSON.parse(text ?? '{}') as Record<string, Seen | undefined>
+const tickedIn = (text: string | null, pr: string, name: string) => Object.hasOwn(seenIn(text)[pr]?.ticked ?? {}, name)
+const untickedIn = (text: string | null, pr: string, name: string) =>
+  !tickedIn(text, pr, name) && Object.hasOwn(seenIn(text)['~changed'] ?? {}, JSON.stringify([pr, 'ticked', name]))
+const visitIn = (text: string | null, pr: string) => seenIn(text)[pr]?.at
 
 const threeLatest = (entries: [string, Seen][]) => entries.toSorted(([, a], [, b]) => b.at - a.at).slice(0, 3)
 
@@ -217,14 +226,20 @@ const entriesOf = (text: string | null) => {
 function browser() {
   let writes = 0
   const tabs: Tab[] = []
+  // What storage has: the last write, which a tab opening starts from.
+  let last: Tab['copy'] = { text: null, at: 0 }
   function newTab(fit?: (entries: [string, Seen][]) => [string, Seen][]): Tab {
-    const self = { copy: { text: null, at: 0 }, inbox: [], unheard: [] } as unknown as Tab
+    const self = { copy: last, inbox: [], unheard: [], got: [last.text] } as unknown as Tab
     self.storage = {
       getItem: (name) => (name === KEY ? self.copy.text : null),
       setItem(_key, text) {
         const write = { text, at: ++writes }
         self.copy = write
-        for (const other of tabs) if (other !== self) other.inbox.push(write)
+        last = write
+        for (const other of tabs.filter((each) => each !== self)) {
+          other.inbox.push(write)
+          other.got.push(text)
+        }
       },
     }
     vi.stubGlobal('localStorage', self.storage)
@@ -305,6 +320,34 @@ describe('a record shared by tabs that each keep their own copy of storage', () 
     await tabs.settle()
     expect(second.record.pr1).toEqual({ at: 1, ticked: { 'a.ts': ['x'], 'b.ts': ['y'] } })
     expect(entriesOf(second.copy.text)).toEqual(second.record)
+  })
+
+  it("keeps a tab's later visit, its first, over the visits another tab made before it heard of them", async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => (now += 1000))
+    const tabs = browser()
+    const first = tabs.newTab()
+    const second = tabs.newTab()
+    await tabs.inTab(first, () => (first.record.pr1 = { at: 1, ticked: {} }))
+    await tabs.inTab(first, () => (first.record.pr1 = { ...first.record.pr1, at: 2 }))
+    await tabs.inTab(second, () => (second.record.pr1 = { at: 3, ticked: {} }))
+    await tabs.settle()
+    expect(first.record.pr1.at).toBe(3)
+    tabs.same()
+  })
+
+  it("keeps a file another tab ticked, through a tab's later first visit to the pull request", async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => (now += 1000))
+    const tabs = browser()
+    const first = tabs.newTab()
+    const second = tabs.newTab()
+    await tabs.inTab(first, () => (first.record.pr1 = { at: 1, ticked: {} }))
+    await tabs.inTab(first, () => (first.record.pr1.ticked['a.ts'] = ['x']))
+    await tabs.inTab(second, () => (second.record.pr1 = { at: 3, ticked: {} }))
+    await tabs.settle()
+    expect(first.record.pr1).toEqual({ at: 3, ticked: { 'a.ts': ['x'] } })
+    tabs.same()
   })
 
   it('leaves out a change another tab took back after hearing of it', async () => {
@@ -423,6 +466,85 @@ describe('a record shared by tabs that each keep their own copy of storage', () 
       const ticked = Object.keys(all[0].record.pr1.ticked).toSorted()
       expect({ seed, ticked }).toEqual({ seed, ticked: meant.flatMap((each) => [...each]).toSorted() })
       tabs.same()
+    }
+  })
+
+  it('keeps every change a tab still open has, as tabs open, close, and visit a pull request first at once', async () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      let state = seed
+      const random = (below: number) => {
+        state = (state * 48_271) % 2_147_483_647
+        return Math.floor((state / 2_147_483_647) * below)
+      }
+      let now = Date.now()
+      vi.spyOn(Date, 'now').mockImplementation(() => now)
+      const tabs = browser()
+      const openTabs = [tabs.newTab(), tabs.newTab(), tabs.newTab()]
+      await tabs.inTab(openTabs[0], () => (openTabs[0].record.pr1 = { at: 0, ticked: {} }))
+      await tabs.settle()
+      // The files ticked and those unticked again, as `pr name`, and the visits, each by the tab that made it.
+      const ticked = new Map<string, Tab>()
+      const unticked = new Map<string, Tab>()
+      const visits: [pr: string, at: number, by: Tab][] = [['pr1', 0, openTabs[0]]]
+      for (let step = 1; step <= 50; step++) {
+        now += 1000
+        const tab = openTabs[random(openTabs.length)]
+        const pr = random(2) ? 'pr1' : 'pr2'
+        const entry = tab.record[pr]
+        const mine = [...ticked].filter(([at, by]) => by === tab && at.startsWith(`${pr} `))
+        const choice = random(9)
+        if (choice === 0 && entry) {
+          ticked.set(`${pr} ${step}.ts`, tab)
+          await tabs.inTab(tab, () => (entry.ticked[`${step}.ts`] = [String(step)]))
+        } else if (choice === 1 && entry && mine.length) {
+          const [at] = mine[random(mine.length)]
+          ticked.delete(at)
+          unticked.set(at, tab)
+          await tabs.inTab(tab, () => delete entry.ticked[at.split(' ')[1]])
+        } else if (choice === 2) {
+          visits.push([pr, step, tab])
+          await tabs.inTab(tab, () => (tab.record[pr] = { ...entry, ticked: entry?.ticked ?? {}, at: step }))
+        } else if (choice === 3) await tabs.deliver(tab, false)
+        else if (choice === 4) await tabs.hear(tab)
+        else if (choice === 5 && openTabs.length > 1) {
+          tabs.close(tab)
+          openTabs.splice(openTabs.indexOf(tab), 1)
+        } else if (choice === 6 && openTabs.length < 4) openTabs.push(tabs.newTab())
+        else await tabs.deliver(tab)
+      }
+      await tabs.settle()
+      // A change is to be kept when a tab still open has it: the tab that made it, or one that got a write with it.
+      const got = openTabs.flatMap((each) => each.got)
+      const held = (by: Tab, has: (text: string | null) => boolean) => openTabs.includes(by) || got.some(has)
+      const record = openTabs[0].record
+      for (const pr of ['pr1', 'pr2']) {
+        for (const name of Object.keys(record[pr]?.ticked ?? {})) {
+          const at = `${pr} ${name}`
+          expect({ seed, at, made: ticked.has(at) || unticked.has(at) }).toEqual({ seed, at, made: true })
+        }
+        const kept = visits.filter(([of, at, by]) => of === pr && held(by, (text) => visitIn(text, pr) === at))
+        expect({ seed, pr, at: record[pr]?.at }).toEqual({ seed, pr, at: kept.at(-1)?.[1] })
+      }
+      for (const [at, by] of ticked) {
+        const [pr, name] = at.split(' ')
+        if (held(by, (text) => tickedIn(text, pr, name)))
+          expect({ seed, at, ticked: Object.hasOwn(record[pr]?.ticked ?? {}, name) }).toEqual({
+            seed,
+            at,
+            ticked: true,
+          })
+      }
+      for (const [at, by] of unticked) {
+        const [pr, name] = at.split(' ')
+        if (held(by, (text) => untickedIn(text, pr, name)))
+          expect({ seed, at, ticked: Object.hasOwn(record[pr]?.ticked ?? {}, name) }).toEqual({
+            seed,
+            at,
+            ticked: false,
+          })
+      }
+      tabs.same()
+      vi.restoreAllMocks()
     }
   })
 })

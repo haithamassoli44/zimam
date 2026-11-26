@@ -44,17 +44,28 @@ function put(root: Plain, path: string[], value: unknown) {
   }
   const name = path[path.length - 1]
   if (value === undefined) delete parent[name]
-  else parent[name] = copied(value)
+  // An object made where another tab made one keeps what that tab put in it: each of those fields is a field too.
+  else if (!isPlain(value) || !isPlain(own(parent, name))) parent[name] = copied(value)
 }
 
-/** The fields that differ from `before` to `after`, under `path`, down to the lists, which change whole. */
+/**
+ * The fields that differ from `before` to `after`, under `path`, down to the lists, which change whole. An object made
+ * where there was none is a field, and so is each field in it, so a tab's first visit doesn't take the place of what
+ * another tab changed of the same pull request since its own.
+ */
 function changesFrom(before: unknown, after: unknown, path: string[]): string[][] {
   if (same(before, after)) return []
-  if (!isPlain(before) || !isPlain(after)) return [path]
-  return [...new Set([...Object.keys(before), ...Object.keys(after)])].flatMap((name) =>
-    changesFrom(own(before, name), own(after, name), [...path, name]),
+  if (!isPlain(after)) return [path]
+  const from = isPlain(before) ? before : {}
+  const inner = [...new Set([...Object.keys(from), ...Object.keys(after)])].flatMap((name) =>
+    changesFrom(own(from, name), own(after, name), [...path, name]),
   )
+  return isPlain(before) ? inner : [path, ...inner]
 }
+
+// The order changes were made in: by time, then by tab, then the object before what's in it.
+const byTime = ([a, [x]]: [string, [Stamp, unknown]], [b, [y]]: [string, [Stamp, unknown]]) =>
+  x[0] - y[0] || (x[1] === y[1] ? pathOf(a).length - pathOf(b).length : x[1] < y[1] ? -1 : 1)
 
 /**
  * A record kept in the browser's storage under `key`, which may change, as with the workspace open. Each tab writes the
@@ -148,10 +159,10 @@ export function sharedRecord<T extends object>(
       take(storage.entries, storage.stamps)
       return
     }
-    // Each field as the copy that changed it last has it, the shallower first. A field whose entry storage doesn't
-    // have brings the entry as that copy has it.
+    // Each field as the copy that changed it last has it, in the order of the changes, so a later one stays, though it
+    // is of the object a field is in. A field whose entry storage doesn't have brings the entry as that copy has it.
     const next: Plain = copied(storage.entries)
-    for (const [at, [, copy]] of [...latest].toSorted(([a], [b]) => pathOf(a).length - pathOf(b).length)) {
+    for (const [at, [, copy]] of [...latest].toSorted(byTime)) {
       const path = pathOf(at)
       if (!Object.hasOwn(next, path[0]) && Object.hasOwn(copy.entries, path[0]))
         next[path[0]] = copied(copy.entries[path[0]])
