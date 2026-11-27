@@ -891,6 +891,45 @@ describe('Syncer', () => {
     expect(shown()).toBe(1)
   })
 
+  it.each([
+    ['an open', 'OPEN'],
+    ['a closed', 'CLOSED'],
+  ] as const)(
+    'finds %s issue that the search indexed late of the one repository it knows of an organization, for a second that holds more changes than a search lists in another, when reading the repositories failed',
+    async (_name, itemState) => {
+      const fake = await setup()
+      const { state, store, syncer } = fake
+      state.issues = []
+      await syncer.sync()
+      await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+      let now = Date.now() + 20 * MINUTE
+      vi.spyOn(Date, 'now').mockImplementation(() => now)
+      fake.gh.probe = async () => 'changed'
+      // 1,001 issues changed in one second in a repository new to the organization, which the run can't read, and two
+      // of acme/web, which had none: the search has one of those so far.
+      state.more = ['api']
+      state.onQuery = () => {
+        if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+      }
+      const once = new Date(now - 30 * 1000).toISOString()
+      const [first, late] = ['I50', 'I51'].map((id) => raw(id, itemState, once))
+      state.issues.push(first, late)
+      const api = Array.from({ length: 1001 }, (_, index) => ({
+        ...raw(`I${100 + index}`, itemState, once),
+        repository: { id: 'api' },
+      }))
+      state.searchResults = [first, ...api]
+      await syncer.sync()
+      expect(store.items.has('I50')).toBe(true)
+      // The other reaches the search index a minute later.
+      state.searchResults = [first, late, ...api]
+      now += MINUTE
+      await syncer.sync()
+      syncer.stop()
+      expect(store.items.has('I51')).toBe(true)
+    },
+  )
+
   it("keeps what it found and looks over the same time again when the hour's allowance runs low partway", async () => {
     const { gh, store, state, syncer } = await setup()
     await syncer.sync()

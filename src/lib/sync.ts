@@ -523,13 +523,6 @@ export class Syncer {
         if (done?.repos === null) return count
         const searches = narrower({ sources: group, from, to, part }, count, (source) => this.reposIn(source))
         if (!searches.length && part) {
-          // An account's search counts the repositories the workspace doesn't know of yet too, so the one it knows is
-          // searched on its own, for what it holds.
-          const known = group[0].kind === 'repo' ? [] : this.known(group[0])
-          if (known.length === 1) {
-            const own: Source = { kind: 'repo', name: known[0].fullName }
-            if ((await this.findChanges([own], from, to, found, false, part)) === 'stopped') return 'stopped'
-          }
           found.tooMany.push({ source: group[0], ...part, count })
           found.crowded[q] = { second: from, repos: null }
           return count
@@ -569,13 +562,12 @@ export class Syncer {
   }
 
   /**
-   * The repositories a source of several brings, as sources of their own, to search one by one. So are those picked of
-   * an account's, even one: its search is the whole account's.
+   * The repositories an account brings, as far as the workspace knows, as sources of their own, to search one by one,
+   * even one: the account's search also counts those the workspace doesn't know of yet, and those it leaves out.
    */
   private reposIn(source: Source): Source[] {
     if (source.kind === 'repo') return []
-    const repos = this.known(source)
-    return repos.length > 1 || source.only ? repos.map((repo) => ({ kind: 'repo', name: repo.fullName })) : []
+    return this.known(source).map((repo) => ({ kind: 'repo', name: repo.fullName }))
   }
 
   /**
