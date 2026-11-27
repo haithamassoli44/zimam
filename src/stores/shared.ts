@@ -134,7 +134,9 @@ export function sharedRecord<T extends object>(
 
   // Writes over what storage has what this tab changed since it last took storage, and what it has changed later. So it
   // does what another tab wrote, `heard`, that storage no longer has, as when this tab wrote over it before having it:
-  // the tab that wrote it may have closed since.
+  // the tab that wrote it may have closed since. Should this tab close too before it hears of that write, storage keeps
+  // only this tab's. Each tab writes the whole record, so keeping both would take each tab writing only its own, as
+  // under a key of its own, or storage that takes the tabs' changes one at a time, as IndexedDB's transactions do.
   function save(heard?: string | null) {
     const text = stored()
     const storage = parse(text)
