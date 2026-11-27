@@ -786,6 +786,77 @@ describe('Syncer', () => {
     expect(closed.filter((node) => store.items.has(node.id))).toHaveLength(1001)
   })
 
+  it('reads the open items again of a repository that had none, when one second holds more of its changes than a search lists and reading the repositories failed', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    // A run a while later, which reads the repositories first, but GitHub can't answer that.
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    state.onQuery = () => {
+      if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+    }
+    const once = new Date(now - 30 * 1000).toISOString()
+    const opened = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once))
+    state.issues.push(...opened)
+    state.searchResults = opened
+    await syncer.sync()
+    syncer.stop()
+    expect(fake.status.failedSources).toEqual(['acme'])
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('reads the open items again of a repository that had none as the run read it, when one second then holds more of its changes than a search lists', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in the second the run started, after it read the repositories and before it searched.
+    const opened = Array.from({ length: 1001 }, (_, index) =>
+      raw(`I${100 + index}`, 'OPEN', new Date(now).toISOString()),
+    )
+    state.onQuery = () => {
+      if (state.calls.at(-1) !== 'search' || state.searchResults.length) return
+      state.issues.push(...opened)
+      state.searchResults = opened
+    }
+    state.calls = []
+    await syncer.sync()
+    syncer.stop()
+    expect(state.calls.filter((call) => call === 'repos')).toHaveLength(1)
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('reads the closed history of a repository that had none closed, when one second holds more of its changes than a search lists and reading the repositories failed', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = [raw('I1', 'OPEN', ago(24))]
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    let now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    state.onQuery = () => {
+      if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+    }
+    const once = new Date(now - 30 * 1000).toISOString()
+    const closed = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    state.issues.push(...closed)
+    state.searchResults = closed
+    await syncer.sync()
+    now += MINUTE
+    await syncer.sync()
+    syncer.stop()
+    expect(closed.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
   it("keeps what it found and looks over the same time again when the hour's allowance runs low partway", async () => {
     const { gh, store, state, syncer } = await setup()
     await syncer.sync()
@@ -1222,6 +1293,28 @@ describe('Syncer with only some repositories picked', () => {
     expect(state.calls).not.toContain('repos')
     expect(store.items.has('I9')).toBe(false)
     expect(fresh).toEqual([])
+  })
+
+  it('searches the one repository picked for a second that holds more changes than a search lists, and counts only its own', async () => {
+    const fake = await setup(picking('R1'))
+    const { state, store, syncer } = fake
+    state.more = ['api']
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const now = Date.now() + MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in one second in a repository left out.
+    const once = new Date(now - 30 * 1000).toISOString()
+    state.searchResults = Array.from({ length: 1001 }, (_, index) => ({
+      ...raw(`I${100 + index}`, 'OPEN', once),
+      repository: { id: 'api' },
+    }))
+    state.itemsOf = []
+    await syncer.sync()
+    syncer.stop()
+    expect(store.repos.get('R1')?.openIssues).toBe(1)
+    expect(state.itemsOf).toEqual([])
   })
 
   it('still adds a new repository of an account that brings all of them', async () => {

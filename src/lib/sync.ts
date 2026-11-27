@@ -523,7 +523,7 @@ export class Syncer {
         if (done?.repos === null) return count
         const searches = narrower({ sources: group, from, to, part }, count, (source) => this.reposIn(source))
         if (!searches.length && part) {
-          found.tooMany.push({ source: group[0], ...part })
+          found.tooMany.push({ source: group[0], ...part, count })
           found.crowded[q] = { second: from, repos: null }
           return count
         }
@@ -556,31 +556,38 @@ export class Syncer {
     return count
   }
 
-  /** The repositories a source of several brings, as sources of their own, to search one by one. */
+  /**
+   * The repositories a source of several brings, as sources of their own, to search one by one. So are those picked of
+   * an account's, even one: its search is the whole account's.
+   */
   private reposIn(source: Source): Source[] {
     if (source.kind === 'repo') return []
     const repos = [...this.store.repos.values()].filter((repo) => brings(source, repo))
-    return repos.length > 1 ? repos.map((repo) => ({ kind: 'repo', name: repo.fullName })) : []
+    return repos.length > 1 || source.only ? repos.map((repo) => ({ kind: 'repo', name: repo.fullName })) : []
   }
 
   /**
    * Reads again, from the repositories, the parts of sources that changed more in one second than a search lists: open
    * items now, and for closed ones, the closed history too, from its latest change, as it loads, so nothing changed
-   * then is left out. Reading the open items again reads those closed then as they are now, history or not. The
-   * repositories are read first, unless this run read them already, `read`: what they count, which says what there is
-   * to read, can be from before that second.
+   * then is left out. Reading the open items again reads those closed then as they are now, history or not. What the
+   * repositories count says what there is to read, so they're read first, unless this run read them already, `read`.
+   * That count can still be from before the second, or one kept when the read failed: a repository counts at least what
+   * the search did, until the repositories are read again.
    */
   private async readAgain(parts: Found['tooMany'], read: boolean) {
     if (!read) await this.loadRepos()
-    for (const { source, kind, open } of parts)
-      for (const repo of this.store.repos.values()) {
-        if (!brings(source, repo)) continue
+    for (const { source, kind, open, count } of parts) {
+      const brought = [...this.store.repos.values()].filter((repo) => brings(source, repo))
+      // The search found them in the one repository the source brings, as far as the workspace knows of the account's.
+      if (brought.length === 1) this.store.repos.set(brought[0].id, counting(brought[0], { kind, open }, count))
+      for (const repo of brought) {
         this.cache.openDone = this.cache.openDone.filter((id) => id !== repo.id)
         if (open) continue
         const entry = this.cache.history[repo.id]
         if (entry) delete entry[KINDS[kind].history]
         this.historyWaits.delete(`${repo.id} ${kind}`)
       }
+    }
     this.showProgress()
     await this.loadOpen()
   }
@@ -957,13 +964,13 @@ const partTerms = ({ kind, open }: Part) => `is:${KINDS[kind].item} is:${open ? 
 
 /**
  * What a search for changes found, whether what it already counted changed anything, the parts of a source that
- * changed more in one second than a search lists, to read again from the repositories, and the searches of such
- * seconds, by query, as the cache keeps them.
+ * changed more in one second than a search lists, with how many it counted, to read again from the repositories, and
+ * the searches of such seconds, by query, as the cache keeps them.
  */
 type Found = {
   items: Item[]
   changed: boolean
-  tooMany: (Part & { source: Source })[]
+  tooMany: (Part & { source: Source; count: number })[]
   crowded: NonNullable<Cache['crowded']>
 }
 
@@ -994,6 +1001,14 @@ function narrower(search: ChangesSearch, count: number, reposIn: (source: Source
   if (sources.length > 1) return sources.map((source) => ({ ...search, sources: [source] }))
   if (!part) return PARTS.map((each) => ({ ...search, part: each }))
   return reposIn(sources[0]).map((repo) => ({ ...search, sources: [repo] }))
+}
+
+/** A repository counting at least `count` of a part, open or closed, as a search found, its other part as it was. */
+function counting(repo: Repo, { kind, open }: Part, count: number): Repo {
+  const { open: opened, all } = KINDS[kind]
+  if (!open) return { ...repo, [all]: Math.max(repo[all], repo[opened] + count) }
+  const more = Math.max(0, count - repo[opened])
+  return { ...repo, [opened]: repo[opened] + more, [all]: repo[all] + more }
 }
 
 /** A time in seconds, as a search's `updated:` takes it. */
