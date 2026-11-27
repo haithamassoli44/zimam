@@ -654,6 +654,34 @@ describe('reading the open pull request again', () => {
     expect(pull.value?.merge).toBe('clean')
   })
 
+  it('reads it again for checks that run again, once the list agrees with the page after its last read', async () => {
+    await opened(
+      ...Array.from({ length: 4 }, () => pullAt('h1', { checks: 'success' })),
+      pullAt('h1', { checks: 'pending' }),
+    )
+    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
+    expect(await syncsOverTime(3)).toEqual([2, 3, 4])
+    // The list catches up with the page, but no sync ends, as when one fails after its checks agree with the page.
+    // Then the checks run again, which the next sync brings.
+    listed('2026-11-25T10:00:00Z', { checks: 'success' })
+    await flushPromises()
+    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
+    await flushPromises()
+    expect(await syncsOverTime(1)).toEqual([5])
+    expect(pull.value?.checks).toBe('pending')
+  })
+
+  it('reads it a few times at most for a copy whose checks the page catches up with, but not its update', async () => {
+    await opened(
+      pullAt('h1', { checks: 'pending' }),
+      ...Array.from({ length: 4 }, () => pullAt('h1', { checks: 'success' })),
+    )
+    listed('2026-11-25T10:05:00Z', { checks: 'success' })
+    await flushPromises()
+    expect(pull.value?.checks).toBe('success')
+    expect(await syncsOverTime(4)).toEqual([3, 4, 4, 4])
+  })
+
   it('reads it again on the next syncs when the read for the first copy, with conflicts, comes back without them', async () => {
     await opened(pullAt('h1'), pullAt('h1'), pullAt('h1', { merge: 'conflicts' }))
     listed('2026-11-25T10:00:00Z', { merge: 'conflicts' })

@@ -960,20 +960,32 @@ watch(
 // How many times the page is read for one copy of the list's, a sync apart, when each read leaves it behind.
 const READS = 3
 
+/**
+ * Whether the list's copy of the open pull request and the page agree: on checks and conflicts, with the copy no newer
+ * than the page. They do while either is missing.
+ */
+const agree = computed(() => {
+  const shown = pull.value
+  const item = shown && items.value.get(shown.id)
+  if (!shown || !item) return true
+  const differ = differences(item, shown)
+  return !differ.checks && !differ.merge && item.updatedAt <= shown.updatedAt
+})
+
+// Once they agree, whichever caught up, as the list after the page's last read, the same news counts again, as checks
+// that run again.
+watch(agree, (agreed) => {
+  if (agreed && session.value) session.value.readFor = null
+})
+
 /** Reads the open pull request again when the list says it's behind, once its tab is in sight. */
 function catchUp() {
   const s = session.value
   if (!s) return
   const copy = behindBy.value
-  if (!copy) {
-    // Once the page and the list agree, the same news counts again, as checks that run again. A copy that only stops
-    // counting as news, as one read since the last sync without a copy to count from, keeps the reads it had.
-    const shown = pull.value
-    const item = shown && items.value.get(shown.id)
-    const differ = shown && item && differences(item, shown)
-    if (!differ || (!differ.checks && !differ.merge)) s.readFor = null
-    return
-  }
+  // A copy that only stops counting as news, as one read since the last sync without a copy to count from, keeps the
+  // reads it had, until the page and the list agree.
+  if (!copy) return
   const last = s.readFor?.copy === copy ? s.readFor : null
   const syncedAt = status.value.syncedAt
   if ((last && (last.syncedAt === syncedAt || last.reads >= READS)) || !inSight()) return
