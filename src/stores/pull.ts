@@ -22,6 +22,7 @@ import { generatedRules, generatedText } from '@/lib/generated'
 import type { GitHub } from '@/lib/github'
 import { isPost, readPull, type Commit, type Pull, type ReviewThread } from '@/lib/pull'
 import { refKey, sameRef, type IssueRef } from '@/lib/refs'
+import { inSight } from '@/lib/sight'
 import { BASE, changeKey, onAllChanges, readFile, tickFile, type FileTicks, type Reading } from '@/lib/ticks'
 import type { FileMode, Item } from '@/types'
 
@@ -192,7 +193,7 @@ async function open(ref: IssueRef, gh: GitHub) {
   })
 }
 
-// The visit this is, which the next one counts from: now, at this head.
+// The visit the next one counts from.
 function recordVisit(s: Session, pull: Pull) {
   const key = refKey(s.ref)
   const before = seenAll[key]
@@ -205,7 +206,7 @@ function recordVisit(s: Session, pull: Pull) {
   }
 }
 
-// The checks of the head read last: an answer about an earlier one, still on its way, is let go.
+// The checks of the head read last.
 function readRuns(s: Session, pull: Pull) {
   const asked = ++s.runsAsked
   if (!pull.checks) {
@@ -250,14 +251,13 @@ export async function refreshPull(): Promise<boolean> {
   return s.refreshing
 }
 
-/** Reads the session's pull request again, as many times as asked meanwhile. Says whether the page took the answer. */
 async function readAgain(s: Session): Promise<boolean> {
   try {
     while (s.refreshAgain && session.value === s) {
       s.refreshAgain = false
       if (s.pull === null || s.pull === 'failed') return false
       const before: Pull = s.pull
-      const listed = statusOf(items.value.get(before.id))
+      const listed = statusOf(copy.value)
       const readAt = Date.now()
       const heads: { moved: boolean; read?: Promise<{ changes: Changes; attributes: string | null } | null> } = {
         moved: false,
@@ -335,38 +335,6 @@ async function readWhole(s: Session, pull: Pull) {
   if (found) await readTextsOf(s, pull, toFiles(s, found, pull.headOid), null)
 }
 
-/** The checks and conflicts of the list's copy of a pull request, as far as it has one. */
-type ListStatus = Partial<Pick<Item, 'checks' | 'merge'>>
-const statusOf = (item: Item | undefined): ListStatus => (item ? { checks: item.checks, merge: item.merge } : {})
-
-/**
- * What the next copies' news counts from after the page was read again: what the list's copy had as the read started,
- * `started`, but what it counted from before, `before`, where the page came back without the list's news then, as when
- * GitHub's pull request lags behind its list. That news stays news, for the next syncs to read it again: without a
- * copy to count from before, as for a page read before the list had one, the news is what syncs bring after the read.
- * The page can't tell that from a list behind it then, so a copy behind the page reads it a few times too.
- */
-function listedAfter(started: ListStatus, before: ListStatus, page: Pull): ListStatus {
-  const after = { ...started }
-  if (!('checks' in started)) return after
-  const differ = differences({ checks: started.checks ?? null, merge: started.merge ?? null }, page)
-  if (differ.checks) {
-    if ('checks' in before) after.checks = before.checks
-    else delete after.checks
-  }
-  if (differ.merge) {
-    if ('merge' in before) after.merge = before.merge
-    else delete after.merge
-  }
-  return after
-}
-
-/** The list's copy of the pull request a ref names, before the page says its id. */
-function listCopy(ref: IssueRef): Item | undefined {
-  for (const item of items.value.values()) if (item.kind === 'pr' && sameRef(itemRef(item), ref)) return item
-  return undefined
-}
-
 /** A file's new side as a mark of generated text goes by: its path, and its blob, whatever commit it's read at. */
 interface NewSide {
   path: string
@@ -425,7 +393,6 @@ async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null
   )
 }
 
-/** Marks a file's new side generated, once its text is here, when the text says so. */
 function markGenerated(s: Session, at: string) {
   const side = s.newSides.get(at)
   const content = s.texts.get(at)
@@ -914,12 +881,53 @@ export function showThreadsFile(thread: ReviewThread) {
   showGenerated.value ||= allFiles.value.some((file) => file.path === thread.path && file.generated)
 }
 
-const inSight = () => globalThis.document?.visibilityState !== 'hidden'
+// --- Keeping up with the list ---------------------------------------------------------------------------------------
 
-/** Where the list's copy of the open pull request and the page differ in checks and conflicts. */
-function differences(item: Pick<Item, 'checks' | 'merge'>, shown: Pull) {
-  return { checks: item.checks !== shown.checks, merge: item.merge !== null && item.merge !== shown.merge }
+/**
+ * What the list's copy of a pull request says that the page reads too, besides when it last changed, and when the two
+ * differ on it: a copy that doesn't know whether it conflicts doesn't differ on that.
+ */
+const LISTED: Record<'checks' | 'merge', (onList: unknown, onPage: unknown) => boolean> = {
+  checks: (onList, onPage) => onList !== onPage,
+  merge: (onList, onPage) => onList !== null && onList !== onPage,
 }
+type Field = keyof typeof LISTED
+const FIELDS = Object.keys(LISTED) as Field[]
+
+/** What the list's copy of a pull request says, as far as it has one. */
+type ListStatus = Partial<Pick<Item, Field>>
+const statusOf = (item: Item | undefined): ListStatus =>
+  item ? Object.fromEntries(FIELDS.map((field) => [field, item[field]])) : {}
+
+/** Where the list's copy of the open pull request and the page differ, by field. */
+const differences = (item: Pick<Item, Field>, shown: Pull) =>
+  Object.fromEntries(FIELDS.map((field) => [field, LISTED[field](item[field], shown[field])])) as Record<Field, boolean>
+
+/**
+ * What the next copies' news counts from after the page was read again: what the list's copy had as the read started,
+ * `started`, but what it counted from before, `before`, where the page came back without the list's news then, as when
+ * GitHub's pull request lags behind its list. That news stays news, for the next syncs to read it again: without a
+ * copy to count from before, as for a page read before the list had one, the news is what syncs bring after the read.
+ * The page can't tell that from a list behind it then, so a copy behind the page reads it a few times too.
+ */
+function listedAfter(started: ListStatus, before: ListStatus, page: Pull): ListStatus {
+  const after = { ...started }
+  for (const field of FIELDS) {
+    if (!(field in started) || !LISTED[field](started[field], page[field])) continue
+    if (field in before) Object.assign(after, { [field]: before[field] })
+    else delete after[field]
+  }
+  return after
+}
+
+/** The list's copy of the pull request a ref names, before the page says its id. */
+function listCopy(ref: IssueRef): Item | undefined {
+  for (const item of items.value.values()) if (item.kind === 'pr' && sameRef(itemRef(item), ref)) return item
+  return undefined
+}
+
+/** The list's copy of the open pull request, once there's a page to compare it with. */
+const copy = computed(() => (pull.value ? items.value.get(pull.value.id) : undefined))
 
 /**
  * The list's copy of the open pull request when it says the page is behind, as after a new comment, a push, or checks
@@ -930,32 +938,28 @@ function differences(item: Pick<Item, 'checks' | 'merge'>, shown: Pull) {
 const behindBy = computed(() => {
   const s = session.value
   const shown = pull.value
-  const item = shown && items.value.get(shown.id)
+  const item = copy.value
   if (!s || !shown || !item) return null
   const differ = differences(item, shown)
   const known = s.listed
-  const news = (field: keyof ListStatus) =>
+  const news = (field: Field) =>
     differ[field] && (field in known ? item[field] !== known[field] : (status.value.syncedAt ?? 0) > s.readAt)
-  const behind = item.updatedAt > shown.updatedAt || (item.state === 'open' && (news('checks') || news('merge')))
-  return behind ? `${shown.id} ${item.updatedAt} ${item.checks} ${item.merge}` : null
+  const behind = item.updatedAt > shown.updatedAt || (item.state === 'open' && FIELDS.some(news))
+  return behind ? [shown.id, item.updatedAt, ...FIELDS.map((field) => `${item[field]}`)].join(' ') : null
 })
 
 // Where a copy agrees with the page, as one that caught up with it, is what the next copies' news count from.
-watch(
-  () => pull.value && items.value.get(pull.value.id),
-  (item) => {
-    const s = session.value
-    const shown = pull.value
-    if (!s || !item || !shown) return
-    const differ = differences(item, shown)
-    const agreed: ListStatus = {
-      ...(differ.checks ? {} : { checks: item.checks }),
-      ...(differ.merge ? {} : { merge: item.merge }),
-    }
-    const known = { ...s.listed, ...agreed }
-    if (JSON.stringify(known) !== JSON.stringify(s.listed)) s.listed = known
-  },
-)
+watch(copy, (item) => {
+  const s = session.value
+  const shown = pull.value
+  if (!s || !item || !shown) return
+  const differ = differences(item, shown)
+  const agreed: ListStatus = Object.fromEntries(
+    FIELDS.filter((field) => !differ[field]).map((field) => [field, item[field]]),
+  )
+  const known = { ...s.listed, ...agreed }
+  if (JSON.stringify(known) !== JSON.stringify(s.listed)) s.listed = known
+})
 
 // How many times the page is read for one copy of the list's, a sync apart, when each read leaves it behind.
 const READS = 3
@@ -966,10 +970,10 @@ const READS = 3
  */
 const agree = computed(() => {
   const shown = pull.value
-  const item = shown && items.value.get(shown.id)
+  const item = copy.value
   if (!shown || !item) return true
   const differ = differences(item, shown)
-  return !differ.checks && !differ.merge && item.updatedAt <= shown.updatedAt
+  return !FIELDS.some((field) => differ[field]) && item.updatedAt <= shown.updatedAt
 })
 
 // Once they agree, whichever caught up, as the list after the page's last read, the same news counts again, as checks
@@ -982,17 +986,16 @@ watch(agree, (agreed) => {
 function catchUp() {
   const s = session.value
   if (!s) return
-  const copy = behindBy.value
+  const behind = behindBy.value
   // A copy that only stops counting as news, as one read since the last sync without a copy to count from, keeps the
   // reads it had, until the page and the list agree.
-  if (!copy) return
-  const last = s.readFor?.copy === copy ? s.readFor : null
+  if (!behind) return
+  const last = s.readFor?.copy === behind ? s.readFor : null
   const syncedAt = status.value.syncedAt
   if ((last && (last.syncedAt === syncedAt || last.reads >= READS)) || !inSight()) return
-  const reading = { copy, syncedAt, reads: (last?.reads ?? 0) + 1 }
+  const reading = { copy: behind, syncedAt, reads: (last?.reads ?? 0) + 1 }
   s.readFor = reading
   void refreshPull().then((done) => {
-    // A read that failed doesn't count.
     if (!done && s.readFor === reading) s.readFor = { ...reading, reads: reading.reads - 1 }
   })
 }

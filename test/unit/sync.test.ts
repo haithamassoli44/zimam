@@ -56,6 +56,12 @@ const done = (data: unknown) => ({ data, errors: [] as QueryError[] })
 const second = (time: string) => Math.floor(Date.parse(time) / 1000)
 // A time as a search names its second.
 const secondOf = (time: string) => time.replace(/\.\d+Z$/, 'Z')
+// Searches as GitHub reads them: each one's terms in any order, and the searches in any order.
+const searches = (queries: string[]) => queries.map((q) => q.split(' ').toSorted().join(' ')).toSorted()
+// Whether a search has each of these terms.
+const has = (q: string, ...terms: string[]) => terms.every((term) => q.split(' ').includes(term))
+const byRepo = (q: string) => /(^| )repo:/.test(q)
+const byPart = (q: string) => /(^| )is:/.test(q)
 const labels = (many: number) => ({ nodes: Array.from({ length: many }, (_, n) => ({ name: `l${n}`, color: '' })) })
 
 /** A GitHub whose answers to queries are `query`'s, with nothing changed since the last look and nothing else to read. */
@@ -437,9 +443,11 @@ describe('Syncer', () => {
     state.calls = []
     await syncer.sync()
     expect(state.searchResults.every((node) => store.items.has(node.id))).toBe(true)
-    expect(state.queries.filter((q) => q.includes(' is:'))).toEqual(
-      ['is:issue is:open', 'is:issue is:closed', 'is:pr is:open', 'is:pr is:closed'].map(
-        (terms) => `org:acme ${terms} updated:${secondOf(once)}..${secondOf(once)}`,
+    expect(searches(state.queries.filter(byPart))).toEqual(
+      searches(
+        ['is:issue is:open', 'is:issue is:closed', 'is:pr is:open', 'is:pr is:closed'].map(
+          (terms) => `org:acme ${terms} updated:${secondOf(once)}..${secondOf(once)}`,
+        ),
       ),
     )
     // Nothing needed reading again from the repository.
@@ -463,12 +471,13 @@ describe('Syncer', () => {
     )
     await syncer.sync()
     const during = `updated:${secondOf(once)}..${secondOf(once)}`
-    const bySource = state.queries.filter((q) => q.endsWith(during) && !q.includes(' is:'))
-    expect(bySource).toEqual([`org:acme org:beta ${during}`, `org:acme ${during}`, `org:beta ${during}`])
-    expect(state.queries.filter((q) => q.includes(' is:issue is:closed '))).toEqual([
-      `org:acme is:issue is:closed ${during}`,
-      `org:beta is:issue is:closed ${during}`,
-    ])
+    const bySource = state.queries.filter((q) => has(q, during) && !byPart(q))
+    expect(searches(bySource)).toEqual(
+      searches([`org:acme org:beta ${during}`, `org:acme ${during}`, `org:beta ${during}`]),
+    )
+    expect(searches(state.queries.filter((q) => has(q, 'is:issue', 'is:closed')))).toEqual(
+      searches([`org:acme is:issue is:closed ${during}`, `org:beta is:issue is:closed ${during}`]),
+    )
   })
 
   it('reads the closed history again when one second holds more closed changes than a search lists', async () => {
@@ -486,7 +495,7 @@ describe('Syncer', () => {
     await vi.waitFor(() => expect(status.historyDone).toBe(true))
     expect(closed.filter((node) => !store.items.has(node.id))).toEqual([])
     // The open items were read again, and the closed issues, not the closed pull requests.
-    expect(state.lists).toEqual(['issues OPEN', 'pullRequests OPEN', 'issues CLOSED'])
+    expect(state.lists.toSorted()).toEqual(['issues CLOSED', 'issues OPEN', 'pullRequests OPEN'])
 
     // The next look starts from there.
     now += 11 * MINUTE
@@ -563,8 +572,12 @@ describe('Syncer', () => {
     expect(fake.store.items.get('I9')?.state).toBe('closed')
     const read = state.lists.map((list, index) => `${state.itemsOf[index]} ${list}`)
     expect(read.filter((each) => each.endsWith('CLOSED'))).toEqual(['web issues CLOSED'])
-    expect(state.queries.filter((q) => q.startsWith('repo:'))).toEqual(
-      ['web', 'api'].map((name) => `repo:acme/${name} is:issue is:closed updated:${secondOf(once)}..${secondOf(once)}`),
+    expect(searches(state.queries.filter(byRepo))).toEqual(
+      searches(
+        ['web', 'api'].map(
+          (name) => `repo:acme/${name} is:issue is:closed updated:${secondOf(once)}..${secondOf(once)}`,
+        ),
+      ),
     )
   })
 
@@ -619,7 +632,7 @@ describe('Syncer', () => {
     state.searchResults = [...web, ...api]
     await syncer.sync()
     // An earlier version kept how many changes the second held, not the repositories that held them.
-    const { crowded = {} } = (syncer as unknown as { cache: Cache }).cache
+    const { crowded } = (syncer as unknown as { cache: Cache }).cache
     expect(Object.keys(crowded)).not.toHaveLength(0)
     for (const [q, { second: at }] of Object.entries(crowded)) crowded[q] = { second: at, count: 1001 } as never
     Object.assign(issue, { state: 'CLOSED', updatedAt: once })
@@ -687,7 +700,7 @@ describe('Syncer', () => {
     const run = async () => {
       const before = state.queries.length
       await syncer.sync()
-      runs.push(state.queries.slice(before).filter((q) => q.startsWith('repo:')).length)
+      runs.push(state.queries.slice(before).filter(byRepo).length)
       now += MINUTE
     }
     await run()
@@ -865,12 +878,7 @@ describe('Syncer', () => {
     await syncer.sync()
     await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
     const shown = () =>
-      repoRows(
-        store.items.values(),
-        { repos: store.repos, now: Date.now(), me: noOne() },
-        status.left,
-        status.hidden,
-      )[0].counts.issues
+      repoRows(store.items.values(), { repos: store.repos, now: Date.now(), me: noOne() }, status)[0].counts.issues
     expect(shown()).toBe(1)
     const now = Date.now() + 20 * MINUTE
     vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -1189,12 +1197,7 @@ describe('Syncer', () => {
     state.hidden = ['issues']
     await syncer.sync()
     const issuesCount = () =>
-      repoRows(
-        store.items.values(),
-        { repos: store.repos, now: Date.now(), me: noOne() },
-        status.left,
-        status.hidden,
-      )[0].counts.issues
+      repoRows(store.items.values(), { repos: store.repos, now: Date.now(), me: noOne() }, status)[0].counts.issues
     expect(store.items.has('I1')).toBe(false)
     expect(status.hidden).toEqual({ R1: ['issue'] })
     expect(issuesCount()).toBe(1)

@@ -77,7 +77,6 @@ const generatedText = computed({
       .filter(Boolean)),
 })
 
-// Patterns no test can be made of count for nothing: the field says which.
 const badGenerated = computed(() => badPatterns(settings.generated))
 
 async function reload() {

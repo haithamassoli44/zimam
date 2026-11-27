@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { arrange, defaultRepoFilters, findRepos, pickRows, repoRows, toggleStatus, WEEKS } from '@/lib/repos'
-import type { Left } from '@/lib/sync'
+import type { SyncStatus } from '@/lib/sync'
 import { noOne, type Item, type Repo } from '@/types'
 
 const NOW = Date.parse('2026-11-21T12:00:00Z')
@@ -56,13 +56,8 @@ const pr = (id: string, repoId: string, overrides: Partial<Item> = {}) =>
   item(id, repoId, { kind: 'pr', review: 'required', checks: 'success', merge: 'clean', ...overrides })
 
 // The repositories as a workspace holds them, counted at NOW unless said otherwise.
-const rowsOf = (
-  repos: Repo[],
-  items: Item[],
-  now = NOW,
-  left: Record<string, Left[]> = {},
-  hidden: Record<string, Item['kind'][]> = {},
-) => repoRows(items, { repos: new Map(repos.map((each) => [each.id, each])), now, me: noOne() }, left, hidden)
+const rowsOf = (repos: Repo[], items: Item[], now = NOW, progress: Partial<Pick<SyncStatus, 'left' | 'hidden'>> = {}) =>
+  repoRows(items, { repos: new Map(repos.map((each) => [each.id, each])), now, me: noOne() }, progress)
 
 describe('repoRows', () => {
   const [web] = rowsOf(
@@ -92,12 +87,12 @@ describe('repoRows', () => {
   it("takes open issues and pull requests from GitHub's totals while they load, and counts archived repositories too", () => {
     const repos = [repo('old', { isArchived: true, openIssues: 7, openPrs: 3 })]
     const found = [pr('waiting', 'old'), pr('closed', 'old', { state: 'closed' })]
-    const [loading] = rowsOf(repos, found, NOW, { old: ['open'] })
+    const [loading] = rowsOf(repos, found, NOW, { left: { old: ['open'] } })
     expect(loading.counts).toEqual({ issues: 7, prs: 3, awaiting: 1, failing: 0, conflicts: 0 })
     const [loaded] = rowsOf(repos, found, NOW)
     expect(loaded.counts).toEqual({ issues: 0, prs: 1, awaiting: 1, failing: 0, conflicts: 0 })
     // GitHub didn't show the open issues: there are as many as it says, not none.
-    const [hidden] = rowsOf(repos, found, NOW, {}, { old: ['issue'] })
+    const [hidden] = rowsOf(repos, found, NOW, { hidden: { old: ['issue'] } })
     expect(hidden.counts).toEqual({ issues: 7, prs: 1, awaiting: 1, failing: 0, conflicts: 0 })
     expect(hidden.countsLoading).toBe(false)
   })
@@ -144,12 +139,14 @@ describe('repoRows while loading', () => {
     ],
     NOW,
     {
-      web: ['open', 'issues'],
-      quiet: ['open'],
-      issues: ['open'],
-      deep: ['issues'],
-      recent: ['issues'],
-      shallow: ['pullRequests'],
+      left: {
+        web: ['open', 'issues'],
+        quiet: ['open'],
+        issues: ['open'],
+        deep: ['issues'],
+        recent: ['issues'],
+        shallow: ['pullRequests'],
+      },
     },
   )
   const row = (name: string) => rows.find((each) => each.repo.name === name)!

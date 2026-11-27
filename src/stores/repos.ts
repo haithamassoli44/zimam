@@ -8,7 +8,7 @@ import { activeWorkspace } from './settings'
 /** The repositories page's search, statuses and order. They last until the tab closes. */
 export const repoFilters = reactive<RepoFilters>(defaultRepoFilters())
 
-const rows = computed(() => repoRows(items.value.values(), context.value, status.value.left, status.value.hidden))
+const rows = computed(() => repoRows(items.value.values(), context.value, status.value))
 
 export const repoResult = computed(() => pickRows(rows.value, repoFilters, activeWorkspace.value?.pinned))
 

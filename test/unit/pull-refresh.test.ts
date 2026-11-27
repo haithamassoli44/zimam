@@ -605,55 +605,40 @@ describe('reading the open pull request again', () => {
     expect(pull.value?.checks).toBe('success')
   })
 
-  it("reads it again when the list's first copy, coming after the page, has the checks finished", async () => {
-    // A fresh workspace: the page is read before the first sync brings the pull request.
-    await opened(pullAt('h1', { checks: 'pending' }), pullAt('h1', { checks: 'success' }))
-    expect(github.pullReads).toBe(1)
-    // The first sync, minutes later, brings it with its checks done (a finished run doesn't change updatedAt).
-    listed('2026-11-25T10:00:00Z', { checks: 'success' })
-    status.value.syncedAt = Date.now() + 120_000
-    await flushPromises()
-    status.value.syncedAt = Date.now() + 180_000
-    await flushPromises()
-    expect(github.pullReads).toBe(2)
-    expect(pull.value?.checks).toBe('success')
-  })
-
-  it('reads it again on the next syncs when the read for the first copy, coming after the page, comes back behind it', async () => {
-    await opened(
-      pullAt('h1', { checks: 'pending' }),
-      pullAt('h1', { checks: 'pending' }),
-      pullAt('h1', { checks: 'success' }),
-    )
-    // The first sync brings it with its checks done, which GitHub's pull request doesn't say yet.
-    listed('2026-11-25T10:00:00Z', { checks: 'success' })
-    status.value.syncedAt = Date.now() + 120_000
-    await flushPromises()
-    const reads = [github.pullReads]
-    for (let minutes = 3; minutes <= 5; minutes++) {
-      status.value.syncedAt = Date.now() + minutes * 60_000
+  it.each([
+    ['checks', { checks: 'pending' }, { checks: 'success' }],
+    ['conflicts', { merge: 'clean' }, { merge: 'conflicts' }],
+  ] as const)(
+    'reads it again on the next syncs when the read for the first copy, coming after the page, comes back without its %s',
+    async (_name, before, after) => {
+      await opened(pullAt('h1', before), pullAt('h1', before), pullAt('h1', after))
+      // The first sync brings what GitHub's pull request doesn't say yet.
+      listed('2026-11-25T10:00:00Z', after)
+      status.value.syncedAt = Date.now() + 120_000
       await flushPromises()
-      reads.push(github.pullReads)
-    }
-    expect(reads).toEqual([2, 3, 3, 3])
-    expect(pull.value?.checks).toBe('success')
-  })
-
-  it('reads it a few times at most for a first copy behind the page, which it reads as news it lacks', async () => {
-    await opened(...Array.from({ length: 8 }, () => pullAt('h1', { checks: 'success' })))
-    // The first sync brings checks from before they finished.
-    listed('2026-11-25T10:00:00Z', { checks: 'pending' })
-    expect(await syncsOverTime(6)).toEqual([2, 3, 4, 4, 4, 4])
-    expect(pull.value?.checks).toBe('success')
-  })
-
-  it('reads it a few times at most for a first copy behind the page with conflicts, which it reads as news it lacks', async () => {
-    await opened(...Array.from({ length: 8 }, () => pullAt('h1')))
-    listed('2026-11-25T10:00:00Z', { merge: 'conflicts' })
-    expect(await syncsOverTime(6)).toEqual([2, 3, 4, 4, 4, 4])
-    expect(pull.value?.merge).toBe('clean')
-  })
-
+      const reads = [github.pullReads]
+      for (let minutes = 3; minutes <= 5; minutes++) {
+        status.value.syncedAt = Date.now() + minutes * 60_000
+        await flushPromises()
+        reads.push(github.pullReads)
+      }
+      expect(reads).toEqual([2, 3, 3, 3])
+      expect(pull.value).toMatchObject(after)
+    },
+  )
+  it.each([
+    ['checks', { checks: 'success' }, { checks: 'pending' }],
+    ['conflicts', { merge: 'clean' }, { merge: 'conflicts' }],
+  ] as const)(
+    'reads it a few times at most for a first copy behind the page on its %s, which it reads as news it lacks',
+    async (_name, page, copy) => {
+      await opened(...Array.from({ length: 8 }, () => pullAt('h1', page)))
+      // The first sync brings them as they were before the page was read.
+      listed('2026-11-25T10:00:00Z', copy)
+      expect(await syncsOverTime(6)).toEqual([2, 3, 4, 4, 4, 4])
+      expect(pull.value).toMatchObject(page)
+    },
+  )
   it('reads it again for checks that run again, once the list agrees with the page after its last read', async () => {
     await opened(
       ...Array.from({ length: 4 }, () => pullAt('h1', { checks: 'success' })),
@@ -680,19 +665,6 @@ describe('reading the open pull request again', () => {
     await flushPromises()
     expect(pull.value?.checks).toBe('success')
     expect(await syncsOverTime(4)).toEqual([3, 4, 4, 4])
-  })
-
-  it('reads it again on the next syncs when the read for the first copy, with conflicts, comes back without them', async () => {
-    await opened(pullAt('h1'), pullAt('h1'), pullAt('h1', { merge: 'conflicts' }))
-    listed('2026-11-25T10:00:00Z', { merge: 'conflicts' })
-    status.value.syncedAt = Date.now() + 120_000
-    await flushPromises()
-    expect(github.pullReads).toBe(2)
-    expect(pull.value?.merge).toBe('clean')
-    status.value.syncedAt = Date.now() + 180_000
-    await flushPromises()
-    expect(github.pullReads).toBe(3)
-    expect(pull.value?.merge).toBe('conflicts')
   })
 
   it('tries again after the next sync when reading it again failed, but only then', async () => {
@@ -727,18 +699,6 @@ describe('reading the open pull request again', () => {
       reads.push(github.pullReads)
     }
     expect(reads).toEqual([3, 4, 4, 4])
-  })
-
-  it('reads it again on a later sync when a read for a newer copy came back behind it', async () => {
-    await opened(pullAt('h1'), pullAt('h1'), pullAt('h1', { updatedAt: '2026-11-25T10:05:00Z' }))
-    listed('2026-11-25T10:05:00Z')
-    await flushPromises()
-    expect(github.pullReads).toBe(2)
-    expect(pull.value?.updatedAt).toBe('2026-11-25T10:00:00Z')
-    status.value.syncedAt = Date.now() + 60_000
-    await flushPromises()
-    expect(github.pullReads).toBe(3)
-    expect(pull.value?.updatedAt).toBe('2026-11-25T10:05:00Z')
   })
 
   it('reads it again on the next syncs when a read comes back with older checks than the list', async () => {

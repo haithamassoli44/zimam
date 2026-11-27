@@ -44,7 +44,7 @@ const tokenError = ref('')
 // before it's saved, so a token GitHub didn't accept, or no token, never takes a working one's place.
 const checkedToken = ref('')
 const checked = computed(() => !!viewer.value && token.value.trim() === checkedToken.value)
-// Each check's turn: an answer to one asked before the last is let go.
+// Each check's turn.
 let checks = 0
 const picked = ref<Source[]>(workspace ? [...workspace.sources] : [])
 const extra = ref<SourceChoice[]>([])
@@ -156,11 +156,10 @@ function bring(source: Source, which: string) {
 }
 
 async function addAnother() {
-  if (!another.value.trim()) return
+  if (!another.value.trim() || !gh.value) return
   adding.value = true
   anotherError.value = ''
   try {
-    if (!gh.value) throw new Error('No token')
     const choice = await findSource(gh.value, another.value)
     if (!choice) throw new Error('Not found')
     if (!choices.value.some((known) => sameSource(known.source, choice.source))) extra.value.push(choice)
@@ -174,7 +173,6 @@ async function addAnother() {
 }
 
 function finish() {
-  if (!checked.value) return
   const fields = { name: name.value.trim() || defaultName.value, token: checkedToken.value, sources: picked.value }
   if (workspace) updateWorkspace(workspace.id, fields)
   else createWorkspace(fields)

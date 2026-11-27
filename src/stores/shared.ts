@@ -118,8 +118,7 @@ export function sharedRecord<T extends object>(
 
   function take(entries: Record<string, T>, found: Map<string, Stamp>) {
     for (const name of Object.keys(record)) if (!Object.hasOwn(entries, name)) delete record[name]
-    for (const [name, value] of Object.entries(entries))
-      if (JSON.stringify(record[name]) !== JSON.stringify(value)) record[name] = value
+    for (const [name, value] of Object.entries(entries)) if (!same(record[name], value)) record[name] = value
     known = new Map(Object.entries(entries).map(([name, value]) => [name, JSON.stringify(value)]))
     stamps = found
     for (const [at] of found.values()) clock = Math.max(clock, at)

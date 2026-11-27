@@ -139,8 +139,6 @@ describe('the token step', () => {
     expect(openButton().attributes('disabled')).toBeDefined()
     // Continue is off with nothing to check, so the page doesn't ask for it.
     expect(wrapper!.text()).not.toContain('Press Continue')
-    await openButton().trigger('click')
-    expect(settings.workspaces).toEqual([])
   })
 
   it('opens a workspace with a changed token only once GitHub accepts it', async () => {

@@ -22,23 +22,23 @@ export interface Cache {
   /**
    * Which save this is, made anew by each save of any tab: a tab whose copy isn't the one saved last takes it. A sync's
    * slices of the history save after its time, so that can't tell, and two tabs can save within one millisecond, so a
-   * time of saving can't either. Missing from a cache saved before it was kept.
+   * time of saving can't either.
    */
-  revision?: string | null
+  revision: string | null
   /** Repositories whose open items are loaded. */
   openDone: string[]
   /**
    * The kinds of open items GitHub didn't show of a repository, by its id, at their last read: they're as many as GitHub
-   * says, not as many as loaded. Missing from a cache saved before it was kept.
+   * says, not as many as loaded.
    */
-  openHidden?: Record<string, Item['kind'][]>
+  openHidden: Record<string, Item['kind'][]>
   /**
    * The searches of a second of one part of a source that held more changes than a search lists, by query: the second,
    * and the repositories that held its changes when it was searched repository by repository, or null when even one
-   * did, so its changes were read again from it. Missing from a cache saved before it was kept, and without either in
-   * one saved by a version that kept how many changes the second held: such an entry tells nothing.
+   * did, so its changes were read again from it. Without either in one saved by a version that kept how many changes
+   * the second held: such an entry tells nothing.
    */
-  crowded?: Record<string, { second: number; repos: string[] | null }>
+  crowded: Record<string, { second: number; repos: string[] | null }>
   /** Each repository's closed history: a cursor to resume from, or `true` once complete. */
   history: Record<string, { issues?: string | true; prs?: string | true }>
   /** Whose token reads the workspace, and the open pull requests that ask them for a review. */
@@ -170,10 +170,18 @@ export async function readCache(ws: string, closed = true): Promise<Cache | null
   if (cache?.version === UNBUCKETED) {
     cache.version = VERSION
     await writeCache(cache, null)
-    return cache
+    return kept(cache)
   }
   if (cache?.version !== VERSION) return null
   cache.items = read!.buckets.flatMap((bucket) => bucket.items)
+  return kept(cache)
+}
+
+// What a cache saved before the revision, the hidden kinds and the crowded seconds were kept starts without them.
+function kept(cache: Cache): Cache {
+  cache.revision ??= null
+  cache.openHidden ??= {}
+  cache.crowded ??= {}
   return cache
 }
 

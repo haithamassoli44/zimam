@@ -27,13 +27,13 @@ let reads = 0
 let readAt = 0
 watch(
   [() => props.item.id, () => props.item.updatedAt, () => props.item.checks, () => status.value.syncedAt],
-  (now, before) => {
-    const [id] = now
-    const synced = before && now.slice(0, 3).every((value, index) => value === before[index])
+  ([id, updatedAt, checks], before) => {
+    const [idBefore, updatedBefore, checksBefore] = before ?? []
+    const synced = id === idBefore && updatedAt === updatedBefore && checks === checksBefore
     if (synced && Date.now() - readAt < FRESH) return
     readAt = Date.now()
     const read = ++reads
-    if (before && id !== before[0]) {
+    if (before && id !== idBefore) {
       answer.value = null
       behind.value = false
     }
@@ -44,7 +44,6 @@ watch(
         answer.value = runs
         behind.value = false
       },
-      // The runs already shown stay when reading them again fails, said to be maybe out of date.
       () => {
         if (read !== reads) return
         if (answer.value) behind.value = true

@@ -119,8 +119,6 @@ const OPENED = 'zimamIssue'
 const PAGE_LOAD = randomId()
 // Set while going back over that entry, until the browser gets there.
 let closing = false
-// The workspace going back or forward switched to, whose entry's filters stay when the switch resets them otherwise.
-let restoredWorkspace: string | null = null
 
 /**
  * Opens an issue beside the list, as a new entry in the browser's history, so Back closes it. One opened in its place
@@ -158,18 +156,14 @@ export function closeIssue() {
 
 addEventListener('popstate', () => {
   closing = false
-  // The entry's own workspace first: its filters, and what it opens, are that workspace's.
+  // The entry's own workspace first: its filters, and what it opens, are that workspace's, and land after the switch's.
   const named = new URLSearchParams(location.search).get(WORKSPACE_PARAM)
-  const switched = !!named && named !== activeWorkspace.value?.id && settings.workspaces.some((ws) => ws.id === named)
-  if (switched) {
-    restoredWorkspace = named
+  if (named && named !== activeWorkspace.value?.id && settings.workspaces.some((ws) => ws.id === named))
     settings.activeWorkspaceId = named
-  }
   page.value = pageAt(location.pathname)
   // The same filters, as when an issue closes, would still be new lists: the list would look through every item again.
   const next = fromQuery(location.search)
   if (page.value === 'items' && toQuery(next) !== query.value) Object.assign(filters, next)
-  else if (page.value !== 'items' && switched) resetFilters()
   openIssue.value = page.value === 'items' ? issueAt(location.search) : null
   const pull = parsePullPath(location.pathname)
   openPull.value = pull?.ref ?? null
@@ -191,18 +185,16 @@ export function showItems(picked: Partial<Filters>) {
   go('items')
 }
 
+// Another workspace starts the list's filters and open issue anew, at once, so going back or forward to an entry of it
+// can put the entry's own after.
 watch(
   () => activeWorkspace.value?.id,
-  (id, previous) => {
-    if (id === restoredWorkspace) {
-      restoredWorkspace = null
-      return
-    }
-    if (previous && id !== previous) {
-      resetFilters()
-      openIssue.value = null
-    }
+  (_, previous) => {
+    if (!previous) return
+    resetFilters()
+    openIssue.value = null
   },
+  { flush: 'sync' },
 )
 
 export function resetFilters() {

@@ -147,35 +147,6 @@ afterEach(() => {
 })
 
 describe('two tabs of a workspace', () => {
-  it('shows in one tab the closed history another loads after its sync', async () => {
-    const gates: { letThrough?: () => void; reached?: () => void } = {}
-    const closed = new Promise<void>((resolve) => (gates.letThrough = resolve))
-    const historyAsked = new Promise<void>((resolve) => (gates.reached = resolve))
-
-    // The first tab syncs: it saves the open items, then starts on the closed ones.
-    const first = await Syncer.open(
-      ws,
-      gitHub(closed, () => gates.reached?.()),
-      storeOf(),
-      idleStatus(),
-    )
-    syncers.push(first)
-    const firstSynced = first.start()
-    await historyAsked
-
-    // The second tab opens meanwhile, and shows what the first saved.
-    const store = storeOf()
-    const second = await Syncer.open(ws, waiting, store, idleStatus())
-    syncers.push(second)
-    await second.start()
-    expect([...store.items.keys()].toSorted()).toEqual(['I1', 'I2'])
-
-    // The first tab's history comes in and is saved after its sync.
-    gates.letThrough?.()
-    await firstSynced
-    await vi.waitFor(() => expect([...store.items.keys()].toSorted()).toEqual(['I1', 'I2', 'I3', 'I4']))
-  })
-
   it('waits for a tab out of sight to be back before taking in what another tab saved', async () => {
     const other = { ...ws, id: 'tabs-unseen' }
     const gates: { letThrough?: () => void; reached?: () => void } = {}
@@ -207,9 +178,10 @@ describe('two tabs of a workspace', () => {
     await vi.waitFor(() => expect(store.items.size).toBe(4))
   })
 
-  it('takes in what another tab saved in the same millisecond as its own save', async () => {
+  it('shows in one tab the closed history another loads after its sync, though both save in the same millisecond', async () => {
     const other = { ...ws, id: 'tabs-same-time' }
-    // Every save, in either tab, happens at the same time.
+    // Every save, in either tab, happens at the same time. The first tab saves the open items, then starts on the closed
+    // ones.
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-25T12:00:00Z'))
     const gates: { letThrough?: () => void; reached?: () => void } = {}
     const closed = new Promise<void>((resolve) => (gates.letThrough = resolve))
@@ -224,12 +196,15 @@ describe('two tabs of a workspace', () => {
     const firstSynced = first.start()
     await historyAsked
     const store = storeOf()
+    // The second tab opens meanwhile, and shows what the first saved.
     const second = await Syncer.open(other, waiting, store, idleStatus())
     syncers.push(second)
     await second.start()
+    expect([...store.items.keys()].toSorted()).toEqual(['I1', 'I2'])
+    // The first tab's history comes in and is saved after its sync.
     gates.letThrough?.()
     await firstSynced
-    await vi.waitFor(() => expect(store.items.size).toBe(4))
+    await vi.waitFor(() => expect([...store.items.keys()].toSorted()).toEqual(['I1', 'I2', 'I3', 'I4']))
   })
 
   it("doesn't let what another tab saved undo what this tab synced while it was read", async () => {

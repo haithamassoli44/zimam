@@ -29,6 +29,7 @@ import {
   toItem,
   toStatus,
 } from './queries'
+import { inSight } from './sight'
 import { brings, qualifier, reposOf, sourcesKey } from './sources'
 
 const MINUTE = 60_000
@@ -225,7 +226,7 @@ export class Syncer {
     if ('BroadcastChannel' in globalThis) {
       this.channel = new BroadcastChannel('zimam')
       this.channel.addEventListener('message', (event: MessageEvent<{ ws: string }>) => {
-        if (event.data.ws === this.ws.id && !this.current && inSight()) void this.adoptStored()
+        if (event.data.ws === this.ws.id) this.onSight()
       })
     }
     globalThis.document?.addEventListener('visibilitychange', this.onSight)
@@ -410,7 +411,7 @@ export class Syncer {
     // A repository that comes back, such as one picked again, loads its items again.
     this.cache.openDone = this.cache.openDone.filter((id) => repos.has(id))
     for (const id of Object.keys(this.cache.history)) if (!repos.has(id)) delete this.cache.history[id]
-    for (const id of Object.keys(this.cache.openHidden ?? {})) if (!repos.has(id)) delete this.cache.openHidden?.[id]
+    for (const id of Object.keys(this.cache.openHidden)) if (!repos.has(id)) delete this.cache.openHidden[id]
     this.cache.reposAt = Date.now()
     this.reposRun = this.runs
     this.showProgress()
@@ -442,9 +443,8 @@ export class Syncer {
         (item) => item.repoId === repo.id && item.state === 'open' && !hidden.has(item.kind) && !seen.has(item.id),
       )
       if (missing.length) await this.refetch(missing.map((item) => item.id))
-      const openHidden = (this.cache.openHidden ??= {})
-      if (hidden.size) openHidden[repo.id] = [...hidden]
-      else delete openHidden[repo.id]
+      if (hidden.size) this.cache.openHidden[repo.id] = [...hidden]
+      else delete this.cache.openHidden[repo.id]
       this.cache.openDone.push(repo.id)
       this.opened.add(repo.id)
       this.showProgress()
@@ -458,11 +458,14 @@ export class Syncer {
     this.status.phase = 'changes'
     if (!manual && (await this.unchanged(started))) return
     const since = Math.floor(((this.cache.watermark ?? started) - OVERLAP) / 1000)
-    const crowded = (this.cache.crowded ??= {})
+    const crowded = this.cache.crowded
     for (const [q, { second }] of Object.entries(crowded)) if (second < since) delete crowded[q]
     const found: Found = { items: [], changed: false, tooMany: [], crowded: {} }
     for (const group of chunk(this.ws.sources, 8)) {
-      const searched = await this.findChanges(group, since, Math.floor(started / 1000), found)
+      const searched = await this.findChanges(
+        { sources: group, from: since, to: Math.floor(started / 1000), part: null },
+        found,
+      )
       // What was found counts, but the next run looks over the same time again.
       if (searched === 'stopped') {
         if (!this.stopped) this.put(found.items.filter((item) => this.store.repos.has(item.repoId)))
@@ -487,22 +490,15 @@ export class Syncer {
   }
 
   /**
-   * Adds to `found` what changed in a group of sources between two times, in seconds, both included: from `from` to
-   * now, or to `to` once the time is cut up. Search lists no more than 1,000 results, and after a long absence more than
-   * that can change. GitHub says how many there are, so a search finding more is made of narrower ones, as many times
-   * as it takes: shorter times, down to a second, then fewer sources, then one kind, open or closed, then one
-   * repository, as when a thousand issues change at once. What one of those still finds too many of goes into
-   * `found.tooMany`. Each search counts and is saved as soon as it's done, so a long search shows what it finds as it
-   * goes and keeps it should it stop. Says how many changes GitHub counted, or that it stopped short.
+   * Adds to `found` what changed in a search's sources between its two times: from `from` to now, while the search is
+   * `whole`, or to `to` once the time is cut up. Search lists no more than 1,000 results, and after a long absence more
+   * than that can change. GitHub says how many there are, so a search finding more is made of narrower ones, as many
+   * times as it takes, as `narrower` cuts them, as when a thousand issues change at once. What one of those still finds
+   * too many of goes into `found.tooMany`. Each search counts and is saved as soon as it's done, so a long search shows
+   * what it finds as it goes and keeps it should it stop. Says how many changes GitHub counted, or that it stopped short.
    */
-  private async findChanges(
-    group: Source[],
-    from: number,
-    to: number,
-    found: Found,
-    whole = true,
-    part: Part | null = null,
-  ): Promise<number | 'stopped'> {
+  private async findChanges(search: ChangesSearch, found: Found, whole = true): Promise<number | 'stopped'> {
+    const { sources: group, from, to, part } = search
     // The first search runs to now, so it also finds what changed since this run started, which the next one looks at
     // again anyway. The parts of a time cut up end where it ends.
     const span = whole ? `>=${isoSecond(from)}` : `${isoSecond(from)}..${isoSecond(to)}`
@@ -515,13 +511,13 @@ export class Syncer {
       const data: Searched = await this.gh.query(SEARCH, { q, after })
       count = data.search.issueCount
       if (count > SEARCH_MOST) {
+        const { by, searches } = narrower(search, count, (source) => this.reposIn(source))
         // A second of one part of a source comes up again while it's in the time each search looks back over. Read
         // again from its repository, it has nothing new for the search: the read had all of its changes, those the
         // search indexes late too, and what changes after leaves the second.
-        const crowded = !!part && from === to
-        const done = crowded ? this.cache.crowded?.[q] : undefined
+        const crowded = by === 'repo'
+        const done = crowded ? this.cache.crowded[q] : undefined
         if (done?.repos === null) return count
-        const searches = narrower({ sources: group, from, to, part }, count, (source) => this.reposIn(source))
         if (!searches.length && part) {
           found.tooMany.push({ source: group[0], ...part, count })
           found.crowded[q] = { second: from, repos: null }
@@ -530,14 +526,14 @@ export class Syncer {
         // Searched repository by repository, it's searched so again, as the search may have indexed some of its changes
         // late, whether or not it holds more: in the repositories that held its changes, then in the others, unless
         // those still hold all it does.
-        const repoOf = (search: ChangesSearch) => search.sources[0].name
+        const repoOf = (each: ChangesSearch) => each.sources[0].name
         const held = done?.repos
         const first = held ? searches.filter((each) => held.includes(repoOf(each))) : searches
         const holding: string[] = []
         let counted = 0
         for (const each of [...first, ...searches.filter((other) => !first.includes(other))]) {
           if (!first.includes(each) && counted >= count) break
-          const counts = await this.findChanges(each.sources, each.from, each.to, found, false, each.part)
+          const counts = await this.findChanges(each, found, false)
           if (counts === 'stopped') return 'stopped'
           counted += counts
           if (counts) holding.push(repoOf(each))
@@ -581,16 +577,14 @@ export class Syncer {
   private async readAgain(parts: Found['tooMany'], read: boolean) {
     if (!read) await this.loadRepos()
     for (const { source, kind, open, count } of parts) {
-      const brought = this.known(source)
-      // Only a repository's own search counts what it holds.
-      if (source.kind === 'repo' && brought.length === 1)
-        this.store.repos.set(brought[0].id, counting(brought[0], { kind, open }, count))
-      for (const repo of brought) {
+      for (const repo of this.known(source)) {
+        // Only a repository's own search counts what it holds.
+        if (source.kind === 'repo') this.store.repos.set(repo.id, counting(repo, { kind, open }, count))
         this.cache.openDone = this.cache.openDone.filter((id) => id !== repo.id)
         if (open) continue
         const entry = this.cache.history[repo.id]
         if (entry) delete entry[KINDS[kind].history]
-        this.historyWaits.delete(`${repo.id} ${kind}`)
+        this.historyWaits.delete(waitKey(repo, kind))
       }
     }
     this.showProgress()
@@ -749,7 +743,7 @@ export class Syncer {
             shown = false
             break
           }
-          this.historyWaits.delete(`${repo.id} ${kind}`)
+          this.historyWaits.delete(waitKey(repo, kind))
           this.put(page.items)
           entry[key] = page.cursor ?? true
           this.saveSoon()
@@ -800,12 +794,12 @@ export class Syncer {
       (kind) =>
         hasClosed(repo, kind) &&
         entry[KINDS[kind].history] !== true &&
-        (this.historyWaits.get(`${repo.id} ${kind}`)?.until ?? 0) <= now,
+        (this.historyWaits.get(waitKey(repo, kind))?.until ?? 0) <= now,
     )
   }
 
   private waitForHistory(repo: Repo, kind: ListKind) {
-    const key = `${repo.id} ${kind}`
+    const key = waitKey(repo, kind)
     const last = this.historyWaits.get(key)?.wait
     const wait = last ? Math.min(2 * last, HISTORY_RETRY_MOST) : HISTORY_RETRY
     this.historyWaits.set(key, { until: Date.now() + wait, wait })
@@ -953,7 +947,7 @@ export class Syncer {
 const keepMerge = (next: Item, old: Item | undefined): Item =>
   next.state === 'open' && next.merge === null && old?.merge ? { ...next, merge: old.merge } : next
 
-const inSight = () => globalThis.document?.visibilityState !== 'hidden'
+const waitKey = (repo: Repo, kind: ListKind) => `${repo.id} ${kind}`
 
 const sameStatus = (a: Item, b: Item) => STATUS_FIELDS.every((field) => a[field] === b[field])
 
@@ -976,7 +970,7 @@ type Found = {
   items: Item[]
   changed: boolean
   tooMany: (Part & { source: Source; count: number })[]
-  crowded: NonNullable<Cache['crowded']>
+  crowded: Cache['crowded']
 }
 
 /** A search for changes: in some sources, from one second to another, both included, and maybe in one part of them. */
@@ -988,24 +982,29 @@ interface ChangesSearch {
 }
 
 /**
- * The narrower searches that find what a search finds `count` of, more than it lists. Its time first, in parts of about
- * 800 each, should the changes be spread evenly, with room for some more meanwhile, down to a second. Then a second
- * source by source, then by kind, open and closed, then repository by repository, as `reposIn` gives a source's. None
- * once there's no narrower search.
+ * The narrower searches that find what a search finds `count` of, more than it lists, and how they're cut. Its time
+ * first, in parts of about 800 each, should the changes be spread evenly, with room for some more meanwhile, down to a
+ * second. Then a second source by source, then by kind, open and closed, then repository by repository, as `reposIn`
+ * gives a source's. None once there's no narrower search.
  */
-function narrower(search: ChangesSearch, count: number, reposIn: (source: Source) => Source[]): ChangesSearch[] {
+function narrower(
+  search: ChangesSearch,
+  count: number,
+  reposIn: (source: Source) => Source[],
+): { by: 'time' | 'source' | 'part' | 'repo'; searches: ChangesSearch[] } {
   const { sources, from, to, part } = search
   if (to > from) {
     const size = Math.ceil((to - from + 1) / Math.min(to - from + 1, Math.ceil(count / (0.8 * SEARCH_MOST))))
-    return Array.from({ length: Math.ceil((to - from + 1) / size) }, (_, index) => ({
+    const searches = Array.from({ length: Math.ceil((to - from + 1) / size) }, (_, index) => ({
       ...search,
       from: from + index * size,
       to: Math.min(from + (index + 1) * size - 1, to),
     }))
+    return { by: 'time', searches }
   }
-  if (sources.length > 1) return sources.map((source) => ({ ...search, sources: [source] }))
-  if (!part) return PARTS.map((each) => ({ ...search, part: each }))
-  return reposIn(sources[0]).map((repo) => ({ ...search, sources: [repo] }))
+  if (sources.length > 1) return { by: 'source', searches: sources.map((source) => ({ ...search, sources: [source] })) }
+  if (!part) return { by: 'part', searches: PARTS.map((each) => ({ ...search, part: each })) }
+  return { by: 'repo', searches: reposIn(sources[0]).map((repo) => ({ ...search, sources: [repo] })) }
 }
 
 /** A repository counting at least `count` of a part, open or closed, as a search found, its other part as it was. */

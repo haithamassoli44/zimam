@@ -12,7 +12,7 @@ import {
   type RepoStatus,
 } from './filters'
 import { KINDS, LIST_KINDS } from './queries'
-import type { Left } from './sync'
+import type { SyncStatus } from './sync'
 import { normalize } from './text'
 
 const WEEK = 7 * 86_400_000
@@ -78,12 +78,14 @@ export function defaultRepoFilters(): RepoFilters {
 export const isFiltered = ({ q, status }: Pick<RepoFilters, 'q' | 'status'>) =>
   q.trim() !== '' || status.join() !== defaultRepoFilters().status.join()
 
-/** Counted as the list counts, in `ctx`. `left` is what each repository still has to load, as the sync shows it. */
+/**
+ * Counted as the list counts, in `ctx`, with what each repository still has to load and what GitHub didn't show of it,
+ * as the sync says.
+ */
 export function repoRows(
   items: Iterable<Item>,
   ctx: Context,
-  left: Record<string, Left[]> = {},
-  hidden: Record<string, Item['kind'][]> = {},
+  { left = {}, hidden = {} }: Partial<Pick<SyncStatus, 'left' | 'hidden'>> = {},
 ): RepoRow[] {
   const { now } = ctx
   const tallies = new Map<string, { row: RepoRow; oldestClosed: Record<Item['kind'], number> }>()
@@ -124,7 +126,6 @@ export function repoRows(
   for (const { row, oldestClosed } of tallies.values()) {
     const kinds = left[row.repo.id] ?? []
     const open = kinds.includes('open')
-    // GitHub's totals count while the open items load, and for those of a kind GitHub didn't show.
     const unseen = hidden[row.repo.id] ?? []
     for (const key of COUNT_KEYS) {
       const { total, filters } = COUNTS[key] as CountOf
