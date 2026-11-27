@@ -17,6 +17,7 @@
     "useGh": "Use my gh CLI token",
     "continue": "Continue",
     "badToken": "GitHub didn't accept this token",
+    "checkAgain": "The token changed. Press Continue to check it.",
     "offline": "Couldn't reach GitHub, check your connection",
     "readingAs": "Reading as {login}",
     "noPrivate": "This token can't read private repositories. Add the repo scope to see them.",
@@ -209,6 +210,7 @@
     "show": "Show checks: {state}",
     "loading": "Loading the checks",
     "failed": "Couldn't load the checks",
+    "behind": "Couldn't load them again: they may be out of date",
     "none": "No checks on the last commit",
     "onGitHub": "Open on GitHub",
     "more": "No more | 1 more on GitHub | {n} more on GitHub",
@@ -393,7 +395,8 @@
       },
       "generated": {
         "title": "Also treat as generated",
-        "help": "One pattern per line, like .gitattributes. GitHub's own list and each repository's linguist-generated marks always count."
+        "help": "One pattern per line, like .gitattributes. GitHub's own list and each repository's linguist-generated marks always count.",
+        "bad": "These lines aren't patterns and are skipped: {patterns}"
       }
     }
   },
@@ -510,6 +513,11 @@
     "whitespaceHelp": "Hide changes in spacing alone",
     "changesFailed": "Couldn't read the changed files.",
     "end": "That's every file.",
+    "noEnd": "No newline at end of file",
+    "capped": "GitHub lists only the first 3,000 files of a pull request, and this one changes {n}.",
+    "cappedMaybe": "GitHub lists only the first 3,000 files of a pull request, and this one may change more.",
+    "cappedEnd": "GitHub lists no more of the files.",
+    "cut": "This conversation is too long to read here in full: its latest posts and review threads are on GitHub.",
     "previousFile": "Previous file",
     "nextFile": "Next file",
     "viewedNext": "Viewed, next",

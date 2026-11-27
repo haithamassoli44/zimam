@@ -6,6 +6,7 @@ import type { Context } from '@/lib/filters'
 import { createGitHub, type GitHub } from '@/lib/github'
 import { readIssue, readMoreComments, type Thread } from '@/lib/issue'
 import type { IssueRef } from '@/lib/refs'
+import { inSight } from '@/lib/sight'
 import { idleStatus, syncKey, Syncer, TICK, type SyncStatus, type SyncStore } from '@/lib/sync'
 import { noOne, type Item, type Me, type Repo, type Workspace } from '@/types'
 
@@ -210,14 +211,14 @@ function markFresh(ids: string[]) {
 let lastTick = Date.now()
 
 function tick() {
-  if (document.visibilityState !== 'visible') return
+  if (!inSight()) return
   lastTick = Date.now()
   void syncNow()
 }
 
 setInterval(tick, TICK)
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && Date.now() - lastTick > TICK / 2) tick()
+  if (inSight() && Date.now() - lastTick > TICK / 2) tick()
 })
 // Back online: catch up now, not at the next tick.
 addEventListener('online', tick)

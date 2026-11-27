@@ -1,6 +1,16 @@
 import type { Item, Me, Repo, Source, Workspace } from '@/types'
 
-import { bucketOf, emptyCache, readCache, setMarker, syncedMarker, writeCache, type Cache } from './cache'
+import {
+  bucketOf,
+  emptyCache,
+  newRevision,
+  readCache,
+  savedMarker,
+  setMarker,
+  syncedMarker,
+  writeCache,
+  type Cache,
+} from './cache'
 import { GitHubError, type ErrorKind, type GitHub, type RateLimit } from './github'
 import {
   hasClosed,
@@ -19,6 +29,7 @@ import {
   toItem,
   toStatus,
 } from './queries'
+import { inSight } from './sight'
 import { brings, qualifier, reposOf, sourcesKey } from './sources'
 
 const MINUTE = 60_000
@@ -32,6 +43,8 @@ const SLACK = TICK / 4
 const HISTORY_SLICE = 0.75 * TICK
 // GitHub's search lags behind a change by a little, so each check looks this far before the last one.
 const OVERLAP = 10 * MINUTE
+// The most results a search lists, however many it finds.
+const SEARCH_MOST = 1000
 const REPOS_EVERY = 15 * MINUTE
 // How often an open pull request's checks, review and conflicts are read again: running checks soon, failing ones in a
 // while, the rest now and then. A conflict GitHub is still working out is asked again a few times at the shortest.
@@ -50,6 +63,10 @@ const PROBE_LIMIT = 50
 // Search can't report what disappeared, such as deleted or transferred issues, so open items are refetched now and then.
 const RECONCILE_EVERY = 6 * HOUR
 const RECONCILE_MANUAL = 10 * MINUTE
+// A closed history GitHub won't show for now, as when an organization's SAML sign-on has lapsed, is asked for again
+// after this long, twice as long each time after, up to the longest. A refresh asks again at once.
+const HISTORY_RETRY = 5 * MINUTE
+const HISTORY_RETRY_MOST = HOUR
 // The hourly allowance is shared with every other tool on the same GitHub account, so some of it is always left.
 const RESERVE = 0.02
 const HISTORY_RESERVE = 0.15
@@ -70,6 +87,8 @@ export interface SyncStatus {
   historyDone: boolean
   /** Each repository with something left to load, by id. Open items read again, as a reconcile does, don't count. */
   left: Record<string, Left[]>
+  /** The kinds of open items GitHub didn't show of each repository, by its id, when they were last read. */
+  hidden: Record<string, Item['kind'][]>
   pausedUntil: number | null
   rate: RateLimit | null
   /** Rate limits pause instead: see `pausedUntil`. */
@@ -87,6 +106,7 @@ export function idleStatus(): SyncStatus {
     history: { done: 0, total: 0 },
     historyDone: false,
     left: {},
+    hidden: {},
     pausedUntil: null,
     rate: null,
     error: null,
@@ -115,6 +135,15 @@ export class Syncer {
   private current: Promise<void> | null = null
   private saveTimer: ReturnType<typeof setTimeout> | undefined
   private channel: BroadcastChannel | null = null
+  // The revision a tab last told the others it saved, as this tab last looked: until another is told, nothing is new.
+  private toldRevision: string | null = null
+  // The read of what another tab saved, while it's on its way: a run starting meanwhile waits for it, and goes on from
+  // what it takes. And how many saves this tab made: a read from before one is older than what this tab holds.
+  private adopting: Promise<boolean> | null = null
+  private saves = 0
+  private onSight = () => {
+    if (inSight() && !this.current) void this.adoptStored()
+  }
   private newsSince = Infinity
   private unsaved = false
   private settled = false
@@ -131,10 +160,15 @@ export class Syncer {
   private unprobeable = new Set<string>()
   // When the current run started. What it reads counts as read then.
   private runStartedAt = 0
+  // Which run this is, and the last one that read the repositories.
+  private runs = 0
+  private reposRun = 0
   // The review requests are asked for once per syncer, since a new one may come with a new token, and so a new person.
   private askedRequested = false
   // How many times in a row GitHub hasn't known whether a pull request conflicts.
   private unknownMerge = new Map<string, number>()
+  // Closed histories GitHub wouldn't show, by repository and kind: when to ask again, and how long the wait was.
+  private historyWaits = new Map<string, { until: number; wait: number }>()
   // Repositories the search finds changes in that the workspace doesn't hold, such as those left out of a source.
   private outside = new Set<string>()
   // The buckets of items changed since the last save, which the next one writes, or null for all of them.
@@ -147,6 +181,7 @@ export class Syncer {
     // The open items first, which most lists show: start() reads the closed ones.
     const stored = await readCache(ws.id, false)
     const syncer = new Syncer(ws, gh, store, status, stored ?? emptyCache(ws.id, sourcesKey(ws.sources)))
+    syncer.toldRevision = stored?.revision ?? null
     // Without a cache to read, buckets an older one left behind go with the first save.
     if (!stored) syncer.changedBuckets = null
     syncer.closedLeft = !!stored
@@ -186,12 +221,15 @@ export class Syncer {
       await this.closedRead
       if (this.stopped) return
     }
+    // What another tab saves shows here at once, or, while this tab is out of sight, once it's back: reading the whole
+    // cache again for each slice of another tab's history would cost a tab no one looks at for nothing.
     if ('BroadcastChannel' in globalThis) {
       this.channel = new BroadcastChannel('zimam')
       this.channel.addEventListener('message', (event: MessageEvent<{ ws: string }>) => {
-        if (event.data.ws === this.ws.id && !this.current) void this.adoptStored()
+        if (event.data.ws === this.ws.id) this.onSight()
       })
     }
+    globalThis.document?.addEventListener('visibilitychange', this.onSight)
     return this.sync()
   }
 
@@ -208,6 +246,7 @@ export class Syncer {
     this.stopped = true
     clearTimeout(this.saveTimer)
     this.channel?.close()
+    globalThis.document?.removeEventListener('visibilitychange', this.onSight)
   }
 
   sync(manual = false): Promise<void> {
@@ -238,9 +277,11 @@ export class Syncer {
   private async run(manual: boolean) {
     const started = Date.now()
     this.runStartedAt = started
+    this.runs++
     // A refused token stays refused until it's replaced, which opens the workspace anew.
     if (this.stopped || this.status.error === 'auth' || (this.status.pausedUntil ?? 0) > started) return
     this.status.pausedUntil = null
+    if (manual) this.historyWaits.clear()
     const peerJustSynced = (await this.adoptStored()) && started - syncedMarker(this.ws.id) < 0.75 * TICK
     if (peerJustSynced && !manual) return
 
@@ -286,10 +327,22 @@ export class Syncer {
     }
   }
 
-  private async adoptStored(): Promise<boolean> {
-    if (syncedMarker(this.ws.id) <= (this.cache.syncedAt ?? 0)) return false
+  private adoptStored(): Promise<boolean> {
+    this.adopting ??= this.takeStored().finally(() => (this.adopting = null))
+    return this.adopting
+  }
+
+  // What another tab saved since this one's copy, the history it loaded after its sync too. Only a save another tab told
+  // of is read: a cache that isn't this tab's own copy is the other tab's, saved after it, unless this tab changed or
+  // saved something while it was read.
+  private async takeStored(): Promise<boolean> {
+    const told = savedMarker(this.ws.id)
+    if (!told || told === this.toldRevision) return false
+    this.toldRevision = told
+    const saves = this.saves
     const stored = await readCache(this.ws.id)
-    if (!stored || (stored.syncedAt ?? 0) <= (this.cache.syncedAt ?? 0)) return false
+    if (this.stopped || this.unsaved || saves !== this.saves) return false
+    if (!stored?.revision || stored.revision === this.cache.revision) return false
     this.cache = stored
     this.changedBuckets = new Set()
     this.show(stored)
@@ -358,7 +411,9 @@ export class Syncer {
     // A repository that comes back, such as one picked again, loads its items again.
     this.cache.openDone = this.cache.openDone.filter((id) => repos.has(id))
     for (const id of Object.keys(this.cache.history)) if (!repos.has(id)) delete this.cache.history[id]
+    for (const id of Object.keys(this.cache.openHidden)) if (!repos.has(id)) delete this.cache.openHidden[id]
     this.cache.reposAt = Date.now()
+    this.reposRun = this.runs
     this.showProgress()
     this.changed([])
   }
@@ -388,6 +443,8 @@ export class Syncer {
         (item) => item.repoId === repo.id && item.state === 'open' && !hidden.has(item.kind) && !seen.has(item.id),
       )
       if (missing.length) await this.refetch(missing.map((item) => item.id))
+      if (hidden.size) this.cache.openHidden[repo.id] = [...hidden]
+      else delete this.cache.openHidden[repo.id]
       this.cache.openDone.push(repo.id)
       this.opened.add(repo.id)
       this.showProgress()
@@ -400,29 +457,138 @@ export class Syncer {
     if (!this.hasBudget(RESERVE)) return
     this.status.phase = 'changes'
     if (!manual && (await this.unchanged(started))) return
-    const since = new Date((this.cache.watermark ?? started) - OVERLAP).toISOString().replace(/\.\d+Z$/, 'Z')
-    const found: Item[] = []
-    let tooMany = false
-    type Found = { search: Page<RawItem | Record<string, never>> & { issueCount: number } }
-    for await (const data of this.search<Found>(SEARCH, `updated:>=${since}`)) {
-      // Search stops at 1,000 results. After a long absence, refetching the open items is cheaper and complete.
-      tooMany = data.search.issueCount > 1000
-      if (tooMany) break
-      for (const node of data.search.nodes) if (node && 'id' in node) found.push(toItem(node as RawItem))
+    const since = Math.floor(((this.cache.watermark ?? started) - OVERLAP) / 1000)
+    const crowded = this.cache.crowded
+    for (const [q, { second }] of Object.entries(crowded)) if (second < since) delete crowded[q]
+    const found: Found = { items: [], changed: false, tooMany: [], crowded: {} }
+    for (const group of chunk(this.ws.sources, 8)) {
+      const searched = await this.findChanges(
+        { sources: group, from: since, to: Math.floor(started / 1000), part: null },
+        found,
+      )
+      // What was found counts, but the next run looks over the same time again.
+      if (searched === 'stopped') {
+        if (!this.stopped) this.put(found.items.filter((item) => this.store.repos.has(item.repoId)))
+        return
+      }
     }
-    if (tooMany) {
-      this.cache.openDone = []
-      this.cache.reconciledAt = started
-      await this.loadOpen()
-    }
+    // Repositories this run read are as they were when the changes the search found were made, or since.
+    const reposRead = () => this.reposRun === this.runs
+    if (found.tooMany.length) await this.readAgain(found.tooMany, reposRead())
+    Object.assign(crowded, found.crowded)
     // A change in a repository the workspace doesn't hold may be in a new one, or in one it leaves out.
-    const unknown = found.filter((item) => !this.store.repos.has(item.repoId) && !this.outside.has(item.repoId))
-    if (unknown.length) await this.loadRepos()
+    const unknown = found.items.filter((item) => !this.store.repos.has(item.repoId) && !this.outside.has(item.repoId))
+    if (unknown.length && !reposRead()) await this.loadRepos()
     for (const item of unknown) if (!this.store.repos.has(item.repoId)) this.outside.add(item.repoId)
-    this.busy = this.put(found.filter((item) => this.store.repos.has(item.repoId))) || tooMany
+    this.busy =
+      this.put(found.items.filter((item) => this.store.repos.has(item.repoId))) ||
+      found.changed ||
+      !!found.tooMany.length
     if (unknown.length) await this.loadOpen()
     this.searchedAt = started
     this.cache.watermark = started
+  }
+
+  /**
+   * Adds to `found` what changed in a search's sources between its two times: from `from` to now, while the search is
+   * `whole`, or to `to` once the time is cut up. Search lists no more than 1,000 results, and after a long absence more
+   * than that can change. GitHub says how many there are, so a search finding more is made of narrower ones, as many
+   * times as it takes, as `narrower` cuts them, as when a thousand issues change at once. What one of those still finds
+   * too many of goes into `found.tooMany`. Each search counts and is saved as soon as it's done, so a long search shows
+   * what it finds as it goes and keeps it should it stop. Says how many changes GitHub counted, or that it stopped short.
+   */
+  private async findChanges(search: ChangesSearch, found: Found, whole = true): Promise<number | 'stopped'> {
+    const { sources: group, from, to, part } = search
+    // The first search runs to now, so it also finds what changed since this run started, which the next one looks at
+    // again anyway. The parts of a time cut up end where it ends.
+    const span = whole ? `>=${isoSecond(from)}` : `${isoSecond(from)}..${isoSecond(to)}`
+    const q = [...group.map(qualifier), ...(part ? [partTerms(part)] : []), `updated:${span}`].join(' ')
+    const items: Item[] = []
+    let after: string | null = null
+    let count = 0
+    do {
+      if (this.stopped || !this.hasBudget(RESERVE)) return 'stopped'
+      const data: Searched = await this.gh.query(SEARCH, { q, after })
+      count = data.search.issueCount
+      if (count > SEARCH_MOST) {
+        const { by, searches } = narrower(search, count, (source) => this.reposIn(source))
+        // A second of one part of a source comes up again while it's in the time each search looks back over. Read
+        // again from its repository, it has nothing new for the search: the read had all of its changes, those the
+        // search indexes late too, and what changes after leaves the second.
+        const crowded = by === 'repo'
+        const done = crowded ? this.cache.crowded[q] : undefined
+        if (done?.repos === null) return count
+        if (!searches.length && part) {
+          found.tooMany.push({ source: group[0], ...part, count })
+          found.crowded[q] = { second: from, repos: null }
+          return count
+        }
+        // Searched repository by repository, it's searched so again, as the search may have indexed some of its changes
+        // late, whether or not it holds more: in the repositories that held its changes, then in the others, unless
+        // those still hold all it does.
+        const repoOf = (each: ChangesSearch) => each.sources[0].name
+        const held = done?.repos
+        const first = held ? searches.filter((each) => held.includes(repoOf(each))) : searches
+        const holding: string[] = []
+        let counted = 0
+        for (const each of [...first, ...searches.filter((other) => !first.includes(other))]) {
+          if (!first.includes(each) && counted >= count) break
+          const counts = await this.findChanges(each, found, false)
+          if (counts === 'stopped') return 'stopped'
+          counted += counts
+          if (counts) holding.push(repoOf(each))
+        }
+        if (crowded) found.crowded[q] = { second: from, repos: holding }
+        return count
+      }
+      for (const node of data.search.nodes) if (node && 'id' in node) items.push(toItem(node as RawItem))
+      after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null
+    } while (after)
+    found.items.push(...items)
+    if (!whole && items.length) {
+      found.changed = this.put(items.filter((item) => this.store.repos.has(item.repoId))) || found.changed
+      await this.save(true)
+    }
+    return count
+  }
+
+  /** The repositories the workspace knows a source brings. */
+  private known(source: Source): Repo[] {
+    return [...this.store.repos.values()].filter((repo) => brings(source, repo))
+  }
+
+  /**
+   * The repositories an account brings, as far as the workspace knows, as sources of their own, to search one by one,
+   * even one: the account's search also counts those the workspace doesn't know of yet, and those it leaves out.
+   */
+  private reposIn(source: Source): Source[] {
+    if (source.kind === 'repo') return []
+    return this.known(source).map((repo) => ({ kind: 'repo', name: repo.fullName }))
+  }
+
+  /**
+   * Reads again, from the repositories, the parts of sources that changed more in one second than a search lists: open
+   * items now, and for closed ones, the closed history too, from its latest change, as it loads, so nothing changed
+   * then is left out. Reading the open items again reads those closed then as they are now, history or not. What the
+   * repositories count says what there is to read, so they're read first, unless this run read them already, `read`.
+   * That count can still be from before the second, or one kept when the read failed: a repository counts at least what
+   * its own search did, until the repositories are read again.
+   */
+  private async readAgain(parts: Found['tooMany'], read: boolean) {
+    if (!read) await this.loadRepos()
+    for (const { source, kind, open, count } of parts) {
+      for (const repo of this.known(source)) {
+        // Only a repository's own search counts what it holds.
+        if (source.kind === 'repo') this.store.repos.set(repo.id, counting(repo, { kind, open }, count))
+        this.cache.openDone = this.cache.openDone.filter((id) => id !== repo.id)
+        if (open) continue
+        const entry = this.cache.history[repo.id]
+        if (entry) delete entry[KINDS[kind].history]
+        this.historyWaits.delete(waitKey(repo, kind))
+      }
+    }
+    this.showProgress()
+    await this.loadOpen()
   }
 
   /**
@@ -529,8 +695,8 @@ export class Syncer {
     if (!this.hasBudget(RESERVE)) return
     let login: string | null = null
     const requested: string[] = []
-    type Found = { viewer: { login: string }; search: Page<{ id?: string } | null> }
-    for await (const data of this.search<Found>(REVIEW_REQUESTED, 'is:pr is:open review-requested:@me')) {
+    type Requested = { viewer: { login: string }; search: Page<{ id?: string } | null> }
+    for await (const data of this.search<Requested>(REVIEW_REQUESTED, 'is:pr is:open review-requested:@me')) {
       login = data.viewer.login
       for (const node of data.search.nodes) if (node?.id) requested.push(node.id)
     }
@@ -571,16 +737,22 @@ export class Syncer {
         const key = KINDS[kind].history
         const saved = entry[key]
         const resume = typeof saved === 'string' ? saved : null
+        let shown = true
         for await (const page of this.pages(repo, kind, KINDS[kind].closed, resume)) {
-          // A repository GitHub won't show has no history to load.
-          if (!page) break
+          if (!page) {
+            shown = false
+            break
+          }
+          this.historyWaits.delete(waitKey(repo, kind))
           this.put(page.items)
           entry[key] = page.cursor ?? true
           this.saveSoon()
           if (!more()) return
         }
         if (this.stopped) return
-        entry[key] = true
+        // What GitHub won't show isn't all there is: it keeps its place, to be asked for again in a while.
+        if (shown) entry[key] = true
+        else this.waitForHistory(repo, kind)
         this.showProgress()
       }
     })
@@ -601,6 +773,7 @@ export class Syncer {
       if (kinds.length) left[repo.id] = kinds
     }
     this.status.left = left
+    this.status.hidden = { ...this.cache.openHidden }
     return pending
   }
 
@@ -613,9 +786,23 @@ export class Syncer {
       )
   }
 
+  // A history waiting to be asked for again doesn't count as left meanwhile: it isn't loading.
   private historyKinds(repo: Repo): ListKind[] {
     const entry = this.cache.history[repo.id] ?? {}
-    return LIST_KINDS.filter((kind) => hasClosed(repo, kind) && entry[KINDS[kind].history] !== true)
+    const now = Date.now()
+    return LIST_KINDS.filter(
+      (kind) =>
+        hasClosed(repo, kind) &&
+        entry[KINDS[kind].history] !== true &&
+        (this.historyWaits.get(waitKey(repo, kind))?.until ?? 0) <= now,
+    )
+  }
+
+  private waitForHistory(repo: Repo, kind: ListKind) {
+    const key = waitKey(repo, kind)
+    const last = this.historyWaits.get(key)?.wait
+    const wait = last ? Math.min(2 * last, HISTORY_RETRY_MOST) : HISTORY_RETRY
+    this.historyWaits.set(key, { until: Date.now() + wait, wait })
   }
 
   // GitHub times out on heavy pages, so any page that times out is asked for again at half the size. A repository
@@ -690,9 +877,16 @@ export class Syncer {
       const old = this.store.items.get(incoming.id)
       if (old && old.updatedAt > incoming.updatedAt) continue
       const item = keepMerge(incoming, old)
-      // Open pull requests always come with their checks.
-      if (item.kind === 'pr' && item.state === 'open') this.cache.checkedAt[item.id] = this.runStartedAt
-      if (old && old.updatedAt === item.updatedAt && sameStatus(old, item)) continue
+      // Open pull requests always come with their checks. One GitHub doesn't know yet whether it conflicts, as after a
+      // push, is asked again soon, as when the checks find it so: the last answer it keeps meanwhile may no longer hold.
+      if (item.kind === 'pr' && item.state === 'open') {
+        this.cache.checkedAt[item.id] = this.runStartedAt
+        if (incoming.merge === null) this.unknownMerge.set(item.id, this.unknownMerge.get(item.id) ?? 0)
+        else this.unknownMerge.delete(item.id)
+      }
+      // A copy kept from before up to 100 labels were read can have fewer than GitHub gives now, with the same time.
+      const same = old && old.updatedAt === item.updatedAt && old.labels.length === item.labels.length
+      if (same && sameStatus(old, item)) continue
       this.keep(item, old)
       changed = true
       if (old?.updatedAt !== item.updatedAt && Date.parse(item.updatedAt) > this.newsSince) fresh.push(item.id)
@@ -719,26 +913,32 @@ export class Syncer {
     this.saveTimer = setTimeout(() => void this.save(), 2000)
   }
 
-  // Other tabs only hear about saves with new data, so a quiet minute doesn't make each of them reread the cache.
-  private async save() {
+  // Other tabs only hear about saves with new data, so a quiet minute doesn't make each of them reread the cache. A quiet
+  // save, as each part of a long search makes, tells them nothing: the save at the end of the run does, once.
+  private async save(quiet = false) {
     clearTimeout(this.saveTimer)
     if (this.stopped) return
-    const announce = this.unsaved
+    const announce = !quiet && this.unsaved
     const changed = this.changedBuckets
-    this.unsaved = false
+    if (!quiet) this.unsaved = false
     this.changedBuckets = new Set()
     this.cache.repos = [...this.store.repos.values()]
     this.cache.items = [...this.store.items.values()]
     this.cache.login = this.store.me.login
     this.cache.requested = [...this.store.me.requested]
+    const revision = this.cache.revision
+    this.cache.revision = newRevision()
     if (!(await writeCache(this.cache, changed))) {
       // What wasn't saved waits for the next save.
+      this.cache.revision = revision
       this.unsaved ||= announce
       this.changedBuckets = changed && this.changedBuckets && new Set([...changed, ...this.changedBuckets])
       return
     }
+    this.saves++
     if (!announce) return
-    setMarker(this.ws.id, this.cache.syncedAt)
+    this.toldRevision = this.cache.revision
+    setMarker(this.ws.id, this.cache.syncedAt, this.cache.revision)
     this.channel?.postMessage({ ws: this.ws.id })
   }
 }
@@ -747,7 +947,76 @@ export class Syncer {
 const keepMerge = (next: Item, old: Item | undefined): Item =>
   next.state === 'open' && next.merge === null && old?.merge ? { ...next, merge: old.merge } : next
 
+const waitKey = (repo: Repo, kind: ListKind) => `${repo.id} ${kind}`
+
 const sameStatus = (a: Item, b: Item) => STATUS_FIELDS.every((field) => a[field] === b[field])
+
+type Searched = { search: Page<RawItem | Record<string, never>> & { issueCount: number } }
+
+/** Part of what changed in a source: one kind, open or closed. */
+interface Part {
+  kind: ListKind
+  open: boolean
+}
+const PARTS: Part[] = LIST_KINDS.flatMap((kind) => [true, false].map((open) => ({ kind, open })))
+const partTerms = ({ kind, open }: Part) => `is:${KINDS[kind].item} is:${open ? 'open' : 'closed'}`
+
+/**
+ * What a search for changes found, whether what it already counted changed anything, the parts of a source that
+ * changed more in one second than a search lists, with how many it counted, to read again from the repositories, and
+ * the searches of such seconds, by query, as the cache keeps them.
+ */
+type Found = {
+  items: Item[]
+  changed: boolean
+  tooMany: (Part & { source: Source; count: number })[]
+  crowded: Cache['crowded']
+}
+
+/** A search for changes: in some sources, from one second to another, both included, and maybe in one part of them. */
+interface ChangesSearch {
+  sources: Source[]
+  from: number
+  to: number
+  part: Part | null
+}
+
+/**
+ * The narrower searches that find what a search finds `count` of, more than it lists, and how they're cut. Its time
+ * first, in parts of about 800 each, should the changes be spread evenly, with room for some more meanwhile, down to a
+ * second. Then a second source by source, then by kind, open and closed, then repository by repository, as `reposIn`
+ * gives a source's. None once there's no narrower search.
+ */
+function narrower(
+  search: ChangesSearch,
+  count: number,
+  reposIn: (source: Source) => Source[],
+): { by: 'time' | 'source' | 'part' | 'repo'; searches: ChangesSearch[] } {
+  const { sources, from, to, part } = search
+  if (to > from) {
+    const size = Math.ceil((to - from + 1) / Math.min(to - from + 1, Math.ceil(count / (0.8 * SEARCH_MOST))))
+    const searches = Array.from({ length: Math.ceil((to - from + 1) / size) }, (_, index) => ({
+      ...search,
+      from: from + index * size,
+      to: Math.min(from + (index + 1) * size - 1, to),
+    }))
+    return { by: 'time', searches }
+  }
+  if (sources.length > 1) return { by: 'source', searches: sources.map((source) => ({ ...search, sources: [source] })) }
+  if (!part) return { by: 'part', searches: PARTS.map((each) => ({ ...search, part: each })) }
+  return { by: 'repo', searches: reposIn(sources[0]).map((repo) => ({ ...search, sources: [repo] })) }
+}
+
+/** A repository counting at least `count` of a part, open or closed, as a search found, its other part as it was. */
+function counting(repo: Repo, { kind, open }: Part, count: number): Repo {
+  const { open: opened, all } = KINDS[kind]
+  if (!open) return { ...repo, [all]: Math.max(repo[all], repo[opened] + count) }
+  const more = Math.max(0, count - repo[opened])
+  return { ...repo, [opened]: repo[opened] + more, [all]: repo[all] + more }
+}
+
+/** A time in seconds, as a search's `updated:` takes it. */
+const isoSecond = (seconds: number) => new Date(seconds * 1000).toISOString().replace(/\.\d+Z$/, 'Z')
 
 function chunk<T>(list: T[], size: number): T[][] {
   const chunks: T[][] = []

@@ -18,7 +18,7 @@ import { i18n } from '@/locale'
 import type { ItemKind, View } from '@/types'
 
 import { context, itemRef, items } from './data'
-import { activeWorkspace, WORKSPACE_PARAM } from './settings'
+import { activeWorkspace, settings, WORKSPACE_PARAM } from './settings'
 
 export const filters = reactive<Filters>(fromQuery(location.search))
 export const query = computed(() => toQuery(filters))
@@ -156,6 +156,10 @@ export function closeIssue() {
 
 addEventListener('popstate', () => {
   closing = false
+  // The entry's own workspace first: its filters, and what it opens, are that workspace's, and land after the switch's.
+  const named = new URLSearchParams(location.search).get(WORKSPACE_PARAM)
+  if (named && named !== activeWorkspace.value?.id && settings.workspaces.some((ws) => ws.id === named))
+    settings.activeWorkspaceId = named
   page.value = pageAt(location.pathname)
   // The same filters, as when an issue closes, would still be new lists: the list would look through every item again.
   const next = fromQuery(location.search)
@@ -181,14 +185,16 @@ export function showItems(picked: Partial<Filters>) {
   go('items')
 }
 
+// Another workspace starts the list's filters and open issue anew, at once, so going back or forward to an entry of it
+// can put the entry's own after.
 watch(
   () => activeWorkspace.value?.id,
-  (id, previous) => {
-    if (previous && id !== previous) {
-      resetFilters()
-      openIssue.value = null
-    }
+  (_, previous) => {
+    if (!previous) return
+    resetFilters()
+    openIssue.value = null
   },
+  { flush: 'sync' },
 )
 
 export function resetFilters() {

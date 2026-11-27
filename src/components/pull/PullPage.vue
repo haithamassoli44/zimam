@@ -9,12 +9,21 @@ import { kbds, useKeys, useMain } from '@/components/keys'
 import PullLayout from '@/components/pull/PullLayout.vue'
 import { pullUrl, refKey } from '@/lib/refs'
 import { formatNumber } from '@/locale'
-import { problem, pull, reloadPull } from '@/stores/pull'
+import { syncNow } from '@/stores/data'
+import { problem, pull, refreshPull, reloadPull } from '@/stores/pull'
 import { openSettings } from '@/stores/ui'
 import { activeView, leavePull, movePull, neighbors, openPull, viewName } from '@/stores/view'
 
 const { t } = useI18n()
-useKeys({ back: leavePull, pulls: [() => movePull(neighbors.value.next), () => movePull(neighbors.value.previous)] })
+useKeys({
+  back: leavePull,
+  pulls: [() => movePull(neighbors.value.next), () => movePull(neighbors.value.previous)],
+  // Checking GitHub for changes here checks the pull request too.
+  refresh: () => {
+    void syncNow(true)
+    void refreshPull()
+  },
+})
 // When the pull request can't be read, what says so is the page's main part, as the diff is otherwise.
 const page = useTemplateRef<HTMLElement>('page')
 useMain(page)

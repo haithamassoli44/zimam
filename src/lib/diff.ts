@@ -19,6 +19,8 @@ export interface Line {
   words: Span[] | null
   /** For a changed line, once there is a last visit: whether it was already there then. */
   seen: boolean | null
+  /** A changed line that is its side's last, without a line end after it. */
+  noEnd?: true
 }
 
 export interface FileDiff {
@@ -33,15 +35,22 @@ export interface FileDiff {
 }
 
 // Lines keep a Windows line end for the comparison, so a file that only changed its line ends shows as changed, but a
-// line's text leaves it out, as the syntax highlighter's lines do.
+// line's text leaves it out, as the syntax highlighter's lines do. A last line without a line end after it carries a
+// mark instead, so adding or removing the file's last line end shows as a change too, as Git shows it.
+const NO_END = '\u0000'
 const splitLines = (text: string) => {
   const lines = text.split('\n')
   if (lines.at(-1) === '') lines.pop()
+  else lines[lines.length - 1] += NO_END
   return lines
 }
-const textOf = (line: string) => (line.endsWith('\r') ? line.slice(0, -1) : line)
+const textOf = (line: string) => {
+  const text = line.endsWith(NO_END) ? line.slice(0, -1) : line
+  return text.endsWith('\r') ? text.slice(0, -1) : text
+}
 
-const normalize = (line: string) => line.trim().replace(/\s+/g, ' ')
+// Ignoring white space ignores the last line end too.
+const normalize = (line: string) => line.replace(NO_END, '').trim().replace(/\s+/g, ' ')
 
 type Op = { kind: LineKind; count: number }
 
@@ -154,6 +163,7 @@ export function diffFiles({ old, new: next, ignoreSpace = false, visited }: Diff
     const number = ++ia
     const seen = visited === undefined ? null : goneAtVisit ? goneAtVisit.has(number) : false
     const line: Line = { kind: 'del', old: number, new: null, text: textOf(a[number - 1]), words: null, seen }
+    if (a[number - 1].endsWith(NO_END)) line.noEnd = true
     lines.push(line)
     deletions++
     return line
@@ -162,6 +172,7 @@ export function diffFiles({ old, new: next, ignoreSpace = false, visited }: Diff
     const number = ++ib
     const seen = visited === undefined ? null : sinceVisit ? !sinceVisit.added.has(number) : false
     const line: Line = { kind: 'add', old: null, new: number, text: textOf(b[number - 1]), words: null, seen }
+    if (b[number - 1].endsWith(NO_END)) line.noEnd = true
     lines.push(line)
     additions++
     return line
