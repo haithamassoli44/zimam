@@ -857,6 +857,40 @@ describe('Syncer', () => {
     expect(closed.filter((node) => store.items.has(node.id))).toHaveLength(1001)
   })
 
+  it('counts no more in the one repository it knows of an organization for a second that holds more changes than a search lists in another, when reading the repositories failed', async () => {
+    const fake = await setup()
+    const { state, store, status, syncer } = fake
+    // GitHub hides the repository's issues from the app, so it shows what it counts.
+    state.hidden = ['issues']
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const shown = () =>
+      repoRows(
+        store.items.values(),
+        { repos: store.repos, now: Date.now(), me: noOne() },
+        status.left,
+        status.hidden,
+      )[0].counts.issues
+    expect(shown()).toBe(1)
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in one second in a repository new to the organization, which the run can't read.
+    state.more = ['api']
+    state.onQuery = () => {
+      if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+    }
+    const once = new Date(now - 30 * 1000).toISOString()
+    state.searchResults = Array.from({ length: 1001 }, (_, index) => ({
+      ...raw(`I${100 + index}`, 'OPEN', once),
+      repository: { id: 'api' },
+    }))
+    await syncer.sync()
+    syncer.stop()
+    expect(store.repos.get('R1')?.openIssues).toBe(1)
+    expect(shown()).toBe(1)
+  })
+
   it("keeps what it found and looks over the same time again when the hour's allowance runs low partway", async () => {
     const { gh, store, state, syncer } = await setup()
     await syncer.sync()

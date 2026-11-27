@@ -523,6 +523,13 @@ export class Syncer {
         if (done?.repos === null) return count
         const searches = narrower({ sources: group, from, to, part }, count, (source) => this.reposIn(source))
         if (!searches.length && part) {
+          // An account's search counts the repositories the workspace doesn't know of yet too, so the one it knows is
+          // searched on its own, for what it holds.
+          const known = group[0].kind === 'repo' ? [] : this.known(group[0])
+          if (known.length === 1) {
+            const own: Source = { kind: 'repo', name: known[0].fullName }
+            if ((await this.findChanges([own], from, to, found, false, part)) === 'stopped') return 'stopped'
+          }
           found.tooMany.push({ source: group[0], ...part, count })
           found.crowded[q] = { second: from, repos: null }
           return count
@@ -556,13 +563,18 @@ export class Syncer {
     return count
   }
 
+  /** The repositories the workspace knows a source brings. */
+  private known(source: Source): Repo[] {
+    return [...this.store.repos.values()].filter((repo) => brings(source, repo))
+  }
+
   /**
    * The repositories a source of several brings, as sources of their own, to search one by one. So are those picked of
    * an account's, even one: its search is the whole account's.
    */
   private reposIn(source: Source): Source[] {
     if (source.kind === 'repo') return []
-    const repos = [...this.store.repos.values()].filter((repo) => brings(source, repo))
+    const repos = this.known(source)
     return repos.length > 1 || source.only ? repos.map((repo) => ({ kind: 'repo', name: repo.fullName })) : []
   }
 
@@ -572,14 +584,15 @@ export class Syncer {
    * then is left out. Reading the open items again reads those closed then as they are now, history or not. What the
    * repositories count says what there is to read, so they're read first, unless this run read them already, `read`.
    * That count can still be from before the second, or one kept when the read failed: a repository counts at least what
-   * the search did, until the repositories are read again.
+   * its own search did, until the repositories are read again.
    */
   private async readAgain(parts: Found['tooMany'], read: boolean) {
     if (!read) await this.loadRepos()
     for (const { source, kind, open, count } of parts) {
-      const brought = [...this.store.repos.values()].filter((repo) => brings(source, repo))
-      // The search found them in the one repository the source brings, as far as the workspace knows of the account's.
-      if (brought.length === 1) this.store.repos.set(brought[0].id, counting(brought[0], { kind, open }, count))
+      const brought = this.known(source)
+      // Only a repository's own search counts what it holds.
+      if (source.kind === 'repo' && brought.length === 1)
+        this.store.repos.set(brought[0].id, counting(brought[0], { kind, open }, count))
       for (const repo of brought) {
         this.cache.openDone = this.cache.openDone.filter((id) => id !== repo.id)
         if (open) continue
