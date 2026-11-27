@@ -225,6 +225,21 @@ function setSight(state: 'visible' | 'hidden') {
   document.dispatchEvent(new Event('visibilitychange'))
 }
 
+// Syncs a minute apart as the clock goes, and how many times the page was read by the end of each.
+async function syncsOverTime(times: number) {
+  let now = Date.now()
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+  const reads: number[] = []
+  for (let sync = 0; sync < times; sync++) {
+    now += 60_000
+    status.value.syncedAt = now
+    await flushPromises()
+    reads.push(github.pullReads)
+  }
+  clock.mockRestore()
+  return reads
+}
+
 describe('reading the open pull request again', () => {
   it('takes the new conversation without reading the same changes again', async () => {
     await opened(pullAt('h1'), pullAt('h1', { title: 'Add a better thing' }))
@@ -625,19 +640,18 @@ describe('reading the open pull request again', () => {
   })
 
   it('reads it a few times at most for a first copy behind the page, which it reads as news it lacks', async () => {
-    await opened(...Array.from({ length: 5 }, () => pullAt('h1', { checks: 'success' })))
+    await opened(...Array.from({ length: 8 }, () => pullAt('h1', { checks: 'success' })))
     // The first sync brings checks from before they finished.
     listed('2026-11-25T10:00:00Z', { checks: 'pending' })
-    status.value.syncedAt = Date.now() + 120_000
-    await flushPromises()
-    const reads = [github.pullReads]
-    for (let minutes = 3; minutes <= 6; minutes++) {
-      status.value.syncedAt = Date.now() + minutes * 60_000
-      await flushPromises()
-      reads.push(github.pullReads)
-    }
-    expect(reads).toEqual([2, 3, 4, 4, 4])
+    expect(await syncsOverTime(6)).toEqual([2, 3, 4, 4, 4, 4])
     expect(pull.value?.checks).toBe('success')
+  })
+
+  it('reads it a few times at most for a first copy behind the page with conflicts, which it reads as news it lacks', async () => {
+    await opened(...Array.from({ length: 8 }, () => pullAt('h1')))
+    listed('2026-11-25T10:00:00Z', { merge: 'conflicts' })
+    expect(await syncsOverTime(6)).toEqual([2, 3, 4, 4, 4, 4])
+    expect(pull.value?.merge).toBe('clean')
   })
 
   it('reads it again on the next syncs when the read for the first copy, with conflicts, comes back without them', async () => {

@@ -965,9 +965,13 @@ function catchUp() {
   const s = session.value
   if (!s) return
   const copy = behindBy.value
-  // Once the page and the list agree, the same news counts again, as checks that run again.
   if (!copy) {
-    s.readFor = null
+    // Once the page and the list agree, the same news counts again, as checks that run again. A copy that only stops
+    // counting as news, as one read since the last sync without a copy to count from, keeps the reads it had.
+    const shown = pull.value
+    const item = shown && items.value.get(shown.id)
+    const differ = shown && item && differences(item, shown)
+    if (!differ || (!differ.checks && !differ.merge)) s.readFor = null
     return
   }
   const last = s.readFor?.copy === copy ? s.readFor : null
