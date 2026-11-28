@@ -1,4 +1,4 @@
-import type { Repo, Source } from '@/types'
+import type { Repo, RepoBasics, Source } from '@/types'
 
 import { GitHubError, type GitHub, type QueryError } from './github'
 import {
@@ -8,10 +8,12 @@ import {
   ORG_REPOS,
   OWNER,
   toRepo,
+  toRepoBasics,
   USER_REPOS,
   VIEWER,
   type Page,
   type RawRepo,
+  type RawRepoBasics,
 } from './queries'
 
 interface Owner {
@@ -43,7 +45,7 @@ export function belongsTo(fullName: string, source: Source): boolean {
 }
 
 /** Whether a source brings a repository into its workspace: it belongs to the source, and was picked if any were. */
-export function brings(source: Source, repo: Repo): boolean {
+export function brings(source: Source, repo: RepoBasics): boolean {
   return belongsTo(repo.fullName, source) && (!source.only || source.only.includes(repo.id))
 }
 
@@ -110,7 +112,7 @@ export type ContributionKind = (typeof CONTRIBUTION_KINDS)[number]
 
 /** A repository someone contributed to: how, how many pull requests and issues they opened in it, and when last. */
 export interface Contribution {
-  repo: Repo
+  repo: RepoBasics
   kinds: ContributionKind[]
   prs: number
   issues: number
@@ -155,14 +157,14 @@ export async function contributionsOf(gh: GitHub, login: string, signal?: AbortS
     return answer.data
   }
   const found = new Map<string, Contribution>()
-  const add = (raw: RawRepo, kind: ContributionKind) => {
+  const add = (raw: RawRepoBasics, kind: ContributionKind) => {
     let entry = found.get(raw.id)
-    if (!entry) found.set(raw.id, (entry = { repo: toRepo(raw), kinds: [], prs: 0, issues: 0, lastAt: null }))
+    if (!entry) found.set(raw.id, (entry = { repo: toRepoBasics(raw), kinds: [], prs: 0, issues: 0, lastAt: null }))
     if (!entry.kinds.includes(kind)) entry.kinds.push(kind)
     return entry
   }
   type User<T> = { user: T | null }
-  type Listed = { totalCount: number; nodes: (RawRepo | null)[] } | null
+  type Listed = { totalCount: number; nodes: (RawRepoBasics | null)[] } | null
   const recent = (await ask<User<Record<ContributionKind, Listed>>>(CONTRIBUTED, { login })).user
   if (!recent) throw new GitHubError(login, 'query')
   let reposCut = false
@@ -179,7 +181,7 @@ export async function contributionsOf(gh: GitHub, login: string, signal?: AbortS
   ] as const) {
     let after: string | null = null
     for (let pages = 0; pages < OPENED_PAGES; pages++) {
-      type Opened = { createdAt: string; repository: RawRepo | null } | null
+      type Opened = { createdAt: string; repository: RawRepoBasics | null } | null
       const page: Page<Opened> | undefined =
         (await ask<User<{ list: Page<Opened> | null }>>(opened(list), { login, after })).user?.list ?? undefined
       if (!page) throw new GitHubError(`${login}: ${list}`, 'query')

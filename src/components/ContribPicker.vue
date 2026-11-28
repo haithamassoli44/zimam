@@ -26,7 +26,7 @@ import {
 } from '@/lib/sources'
 import { formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
-import type { Repo, Source } from '@/types'
+import type { RepoBasics, Source } from '@/types'
 
 // The repositories someone contributed to, to add each as a repository of its own.
 const props = defineProps<{ gh: GitHub; login: string }>()
@@ -103,13 +103,13 @@ function toggleIn<T>(list: T[], value: T): T[] {
   return list.includes(value) ? list.filter((other) => other !== value) : [...list, value]
 }
 
-const asSource = (repo: Repo): Source => ({ kind: 'repo', name: repo.fullName })
-const isPicked = (repo: Repo) => picked.value.some((source) => sameSource(source, asSource(repo)))
+const asSource = (repo: RepoBasics): Source => ({ kind: 'repo', name: repo.fullName })
+const isPicked = (repo: RepoBasics) => picked.value.some((source) => sameSource(source, asSource(repo)))
 /** The account the workspace already brings the repository with, if any. */
-const broughtBy = (repo: Repo) =>
+const broughtBy = (repo: RepoBasics) =>
   picked.value.find((source) => source.kind !== 'repo' && brings(source, repo))?.name ?? null
 
-function tick(repo: Repo, on: boolean | 'indeterminate') {
+function tick(repo: RepoBasics, on: boolean | 'indeterminate') {
   const others = picked.value.filter((source) => !sameSource(source, asSource(repo)))
   picked.value = on === true ? [...others, asSource(repo)] : others
 }

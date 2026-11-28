@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Answer, GitHub, QueryError } from '@/lib/github'
-import { CONTRIBUTED, type RawRepo } from '@/lib/queries'
+import { CONTRIBUTED, opened, type RawRepoBasics } from '@/lib/queries'
 import { defaultContributionFilters, pickContributions } from '@/lib/repos'
 import { contributionsOf, OPENED_PAGES, type Contribution } from '@/lib/sources'
-import type { Repo } from '@/types'
+import type { RepoBasics } from '@/types'
 
-function raw(fullName: string, overrides: Partial<RawRepo> = {}): RawRepo {
+function raw(fullName: string, overrides: Partial<RawRepoBasics> = {}): RawRepoBasics {
   const [owner, name] = fullName.split('/')
   return {
     id: fullName,
@@ -18,20 +18,16 @@ function raw(fullName: string, overrides: Partial<RawRepo> = {}): RawRepo {
     pushedAt: null,
     owner: { login: owner, avatarUrl: '' },
     primaryLanguage: null,
-    openIssues: { totalCount: 0 },
-    openPrs: { totalCount: 0 },
-    allIssues: { totalCount: 0 },
-    allPrs: { totalCount: 0 },
     ...overrides,
   }
 }
 
-type Opened = { createdAt: string; repository: RawRepo | null }
+type Opened = { createdAt: string; repository: RawRepoBasics | null }
 type List = 'pullRequests' | 'issues'
 
 interface Story {
   /** Recent contributions by kind. A kind given as null comes back null, as a list GitHub didn't give. */
-  recent?: Partial<Record<'commit' | 'pr' | 'issue' | 'review', (RawRepo | null)[] | null>>
+  recent?: Partial<Record<'commit' | 'pr' | 'issue' | 'review', (RawRepoBasics | null)[] | null>>
   /** How many GitHub says each recent kind has, when more than it gives. */
   totals?: Partial<Record<'commit' | 'pr' | 'issue' | 'review', number>>
   /** Pages of what was opened. A page given as null comes back without the person. */
@@ -85,9 +81,15 @@ function deferred() {
   return { promise, resolve: () => settle.resolve?.() }
 }
 
-const at = (createdAt: string, repository: RawRepo | null): Opened => ({ createdAt, repository })
+const at = (createdAt: string, repository: RawRepoBasics | null): Opened => ({ createdAt, repository })
 
 describe('contributionsOf', () => {
+  // GitHub works out a repository's counts in each repository, and refuses a query with a few hundred of them.
+  it('asks for no counts of the repositories it lists', () => {
+    for (const text of [CONTRIBUTED, opened('pullRequests'), opened('issues')])
+      expect(text).not.toMatch(/openIssues|openPrs|allIssues|allPrs/)
+  })
+
   it('merges the recent contributions by kind with what was opened, by repository', async () => {
     const web = raw('acme/web')
     const api = raw('nuxt/api')
@@ -237,7 +239,7 @@ describe('contributionsOf', () => {
   })
 })
 
-function entry(fullName: string, overrides: Partial<Contribution> = {}, repo: Partial<Repo> = {}): Contribution {
+function entry(fullName: string, overrides: Partial<Contribution> = {}, repo: Partial<RepoBasics> = {}): Contribution {
   const [owner, name] = fullName.split('/')
   return {
     repo: {
@@ -251,10 +253,6 @@ function entry(fullName: string, overrides: Partial<Contribution> = {}, repo: Pa
       isPrivate: false,
       isArchived: false,
       pushedAt: null,
-      openIssues: 0,
-      openPrs: 0,
-      issues: 0,
-      prs: 0,
       ...repo,
     },
     kinds: ['pr'],

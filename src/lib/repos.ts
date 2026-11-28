@@ -1,4 +1,4 @@
-import type { Item, Repo } from '@/types'
+import type { Item, Repo, RepoBasics } from '@/types'
 
 import {
   defaultFilters,
@@ -183,11 +183,11 @@ export function pickRows(rows: RepoRow[], filters: RepoFilters, pinned: string[]
  * What a search and a status pick keep of `entries`, with how many the search finds in each status. The search reads
  * `textOf`: what the list shows of a repository, normalized.
  */
-export function findRepos<T>(
+export function findRepos<T, R extends RepoBasics>(
   entries: Iterable<T>,
-  repoOf: (entry: T) => Repo,
+  repoOf: (entry: T) => R,
   { q, status }: Pick<RepoFilters, 'q' | 'status'>,
-  textOf: (repo: Repo) => string,
+  textOf: (repo: R) => string,
 ) {
   const terms = normalize(q).split(/\s+/).filter(Boolean)
   const counts: Record<RepoStatus, number> = { active: 0, archived: 0 }
@@ -232,10 +232,10 @@ export function defaultContributionFilters(): ContributionFilters {
   return { q: '', status: defaultRepoFilters().status, kinds: [], owners: [], sort: 'recent' }
 }
 
-const contributionText = new WeakMap<Repo, string>()
+const contributionText = new WeakMap<RepoBasics, string>()
 
 // The picker shows a repository's full name and description, so its search reads both.
-function pickerText(repo: Repo): string {
+function pickerText(repo: RepoBasics): string {
   let text = contributionText.get(repo)
   if (text === undefined) {
     text = normalize(`${repo.fullName} ${repo.description ?? ''}`)
