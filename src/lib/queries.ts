@@ -14,7 +14,8 @@ import type {
 
 export const PERSON = 'login avatarUrl(size: 64)'
 export const ASSIGNEES = `assignees(first: 10) { nodes { ${PERSON} } }`
-export const LABELS = 'labels(first: 20) { nodes { name color } }'
+// Every label an item has, as far as one list goes: GitHub charges a list inside each item the same whatever its size.
+export const LABELS = 'labels(first: 100) { nodes { name color } }'
 
 const SHARED = `
     id number title url state createdAt updatedAt

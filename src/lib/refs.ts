@@ -73,5 +73,16 @@ export const issueUrl = (ref: IssueRef) => `https://github.com/${ref.repo}/issue
 export const pullUrl = (ref: IssueRef) => `https://github.com/${ref.repo}/pull/${ref.number}`
 /** A commit as its pull request shows it. */
 export const commitUrl = (ref: IssueRef, oid: string) => `${pullUrl(ref)}/commits/${oid}`
-/** A file as it is at a commit. */
-export const blobUrl = (repo: string, oid: string, path: string) => `https://github.com/${repo}/blob/${oid}/${path}`
+/** A file as it is at a commit. Each part of its path is encoded, so a name like `a#b.ts` stays a name. */
+export const blobUrl = (repo: string, oid: string, path: string) =>
+  `https://github.com/${repo}/blob/${oid}/${path.split('/').map(encodeURIComponent).join('/')}`
+
+/** A changed file as a diff leaves it, at the commit it shows it at: a removed file as it was before, where it still is. */
+export function changedFileUrl(
+  repo: string,
+  file: { status: string; path: string; oldPath: string | null; at: string; base: string },
+): string {
+  return file.status === 'removed'
+    ? blobUrl(repo, file.base, file.oldPath ?? file.path)
+    : blobUrl(repo, file.at, file.path)
+}

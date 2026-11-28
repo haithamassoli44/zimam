@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatRef, parsePullPath, parseRef, pullPath, sameRef } from '@/lib/refs'
+import { blobUrl, changedFileUrl, formatRef, parsePullPath, parseRef, pullPath, sameRef } from '@/lib/refs'
 
 describe('issue references', () => {
   it('reads and writes them the way GitHub writes them', () => {
@@ -56,5 +56,31 @@ describe('pull request pages', () => {
 
   it('leave the commits out beside a part that doesn’t name them', () => {
     expect(pullPath({ ref, part: 'conversation', run: { before: null, last: sha } })).toBe('/nuxt/nuxt/pull/36177')
+  })
+})
+
+describe('files on GitHub', () => {
+  it('keeps every part of a path a name, whatever it holds', () => {
+    const url = new URL(blobUrl('acme/web', 'abc', 'src/a#b.ts'))
+    expect(url.hash).toBe('')
+    expect(decodeURIComponent(url.pathname)).toBe('/acme/web/blob/abc/src/a#b.ts')
+    expect(new URL(blobUrl('acme/web', 'abc', 'docs/why?.md')).search).toBe('')
+    expect(blobUrl('acme/web', 'abc', 'docs/100%25 done.md')).toBe(
+      'https://github.com/acme/web/blob/abc/docs/100%2525%20done.md',
+    )
+    expect(blobUrl('acme/web', 'abc', 'src/app.ts')).toBe('https://github.com/acme/web/blob/abc/src/app.ts')
+  })
+
+  it('shows a removed file where it still is, before the change', () => {
+    const file = { path: 'old.ts', oldPath: null, at: 'head', base: 'base' }
+    expect(changedFileUrl('acme/web', { ...file, status: 'removed' })).toBe(
+      'https://github.com/acme/web/blob/base/old.ts',
+    )
+    expect(changedFileUrl('acme/web', { ...file, status: 'modified' })).toBe(
+      'https://github.com/acme/web/blob/head/old.ts',
+    )
+    expect(changedFileUrl('acme/web', { ...file, path: 'new.ts', oldPath: 'old.ts', status: 'renamed' })).toBe(
+      'https://github.com/acme/web/blob/head/new.ts',
+    )
   })
 })

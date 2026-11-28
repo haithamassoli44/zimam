@@ -58,10 +58,10 @@ Zimam is a static single-page app with no backend: the browser calls GitHub's Gr
 
 Read access is enough. Each workspace keeps its own token.
 
-| Token                                                                                                                                                                                                    | Reaches                                   | Permissions                                                      |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
-| [Fine-grained](https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&issues=read&pull_requests=read&metadata=read&commit_statuses=read) | One organization or account, as its owner | Issues, pull requests, metadata and commit statuses: read-only   |
-| [Classic](https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam)                                                                                                                 | Every organization you belong to          | `repo` and `read:org` (without `repo`, public repositories only) |
+| Token                                                                                                                                                                                                           | Reaches                                   | Permissions                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ |
+| [Fine-grained](https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&contents=read&issues=read&pull_requests=read&metadata=read&statuses=read) | One organization or account, as its owner | Contents, issues, pull requests, metadata and commit statuses: read-only |
+| [Classic](https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam)                                                                                                                        | Every organization you belong to          | `repo` and `read:org` (without `repo`, public repositories only)         |
 
 ## Stack
 

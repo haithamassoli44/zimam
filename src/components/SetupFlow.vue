@@ -30,8 +30,9 @@ const cancellable = !!activeWorkspace.value
 const isDev = import.meta.env.DEV
 // Zimam's own code, for anyone who wants to check what happens to their token.
 const CODE = 'https://github.com/ieasybooks/zimam'
+// Contents is for a pull request's diff: its comparison and its files' texts. Statuses is for its checks.
 const FINE_GRAINED =
-  'https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&issues=read&pull_requests=read&metadata=read&commit_statuses=read'
+  'https://github.com/settings/personal-access-tokens/new?name=Zimam&description=Read-only+access+for+Zimam&expires_in=90&contents=read&issues=read&pull_requests=read&metadata=read&statuses=read'
 const CLASSIC = 'https://github.com/settings/tokens/new?scopes=repo,read:org&description=Zimam'
 
 const token = ref(activeWorkspace.value?.token ?? '')
@@ -40,6 +41,12 @@ const viewer = ref<Viewer | null>(null)
 const scopes = ref<string[] | null>(null)
 const checking = ref(false)
 const tokenError = ref('')
+// The token GitHub last accepted. What the field holds counts only while it's that token: one changed since is checked
+// before it's saved, so a token GitHub didn't accept, or no token, never takes a working one's place.
+const checkedToken = ref('')
+const checked = computed(() => !!viewer.value && token.value.trim() === checkedToken.value)
+// Each check's turn.
+let checks = 0
 const picked = ref<Source[]>(workspace ? [...workspace.sources] : [])
 const extra = ref<SourceChoice[]>([])
 const another = ref('')
@@ -70,7 +77,8 @@ const choices = computed<SourceChoice[]>(() => {
   return [...known, ...extra.value, ...unknown]
 })
 
-const noPrivate = computed(() => scopes.value !== null && !scopes.value.includes('repo'))
+// About the token checked, so only while the field still holds it.
+const noPrivate = computed(() => checked.value && scopes.value !== null && !scopes.value.includes('repo'))
 const defaultName = computed(() => {
   const first = picked.value[0]
   if (!first) return viewer.value?.login ?? 'Zimam'
@@ -83,25 +91,32 @@ const defaultName = computed(() => {
 if (workspace) void check()
 
 async function check() {
+  const asked = token.value.trim()
+  const turn = ++checks
   checking.value = true
   tokenError.value = ''
   try {
-    const client = createGitHub(token.value.trim())
-    viewer.value = await findViewer(client)
+    const client = createGitHub(asked)
+    const found = await findViewer(client)
+    if (turn !== checks) return
+    viewer.value = found
     scopes.value = client.scopes()
     gh.value = client
+    checkedToken.value = asked
     if (contributing.value) void nextTick(() => contributions.value?.scrollIntoView({ block: 'start' }))
     if (!picked.value.length) {
       const org = viewer.value.organizations[0]
       picked.value = [org ? { kind: 'org', name: org.login } : { kind: 'user', name: viewer.value.login }]
     }
   } catch (error) {
+    if (turn !== checks) return
     viewer.value = null
     gh.value = null
+    checkedToken.value = ''
     tokenError.value =
       error instanceof GitHubError && error.kind === 'network' ? t('setup.offline') : t('setup.badToken')
   } finally {
-    checking.value = false
+    if (turn === checks) checking.value = false
   }
 }
 
@@ -146,11 +161,11 @@ function bring(source: Source, which: string) {
 }
 
 async function addAnother() {
-  if (!another.value.trim()) return
+  if (!another.value.trim() || !gh.value) return
   adding.value = true
   anotherError.value = ''
   try {
-    const choice = await findSource(createGitHub(token.value.trim()), another.value)
+    const choice = await findSource(gh.value, another.value)
     if (!choice) throw new Error('Not found')
     if (!choices.value.some((known) => sameSource(known.source, choice.source))) extra.value.push(choice)
     if (!isPicked(choice.source)) picked.value.push(choice.source)
@@ -163,7 +178,7 @@ async function addAnother() {
 }
 
 function finish() {
-  const fields = { name: name.value.trim() || defaultName.value, token: token.value.trim(), sources: picked.value }
+  const fields = { name: name.value.trim() || defaultName.value, token: checkedToken.value, sources: picked.value }
   if (workspace) updateWorkspace(workspace.id, fields)
   else createWorkspace(fields)
   ui.setup = null
@@ -251,10 +266,13 @@ function finish() {
             icon="i-octicon-alert-16"
             :title="tokenError"
           />
-          <div v-if="viewer" class="enter flex items-center gap-2 text-sm text-toned">
+          <div v-if="viewer && checked" class="enter flex items-center gap-2 text-sm text-toned">
             <UAvatar :src="viewer.avatarUrl" :alt="viewer.login" size="2xs" />
             <span>{{ t('setup.readingAs', { login: viewer.name || viewer.login }) }}</span>
           </div>
+          <p v-else-if="viewer && !checking && token.trim()" class="enter text-sm text-toned">
+            {{ t('setup.checkAgain') }}
+          </p>
           <UAlert
             v-if="noPrivate"
             color="warning"
@@ -398,7 +416,7 @@ function finish() {
             v-if="viewer"
             color="neutral"
             size="lg"
-            :disabled="!picked.length || unpicked"
+            :disabled="!checked || !picked.length || unpicked"
             :label="workspace ? t('setup.save') : t('setup.open')"
             trailing-icon="i-octicon-arrow-right-16"
             :ui="{ base: 'h-11 px-5', trailingIcon: 'rtl:rotate-180' }"

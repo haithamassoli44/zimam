@@ -13,7 +13,7 @@ import {
 } from './filters'
 import { KINDS, LIST_KINDS } from './queries'
 import { CONTRIBUTION_KINDS, type Contribution, type ContributionKind } from './sources'
-import type { Left } from './sync'
+import type { SyncStatus } from './sync'
 import { normalize } from './text'
 
 const WEEK = 7 * 86_400_000
@@ -23,7 +23,11 @@ export const WEEKS = 26
 interface CountOf {
   /** The list that shows what it counts. */
   filters: Partial<Filters>
-  /** GitHub's own total. Without one, the count tallies the items read so far that match the filters. */
+  /**
+   * GitHub's own total, which counts while the repository's open items load, and when GitHub didn't show those of their
+   * kind. Every count tallies the items read so far that match the filters once they have: the total is only as fresh
+   * as the last read of the repositories.
+   */
   total?: (repo: Repo) => number
 }
 
@@ -40,7 +44,7 @@ export type Count = keyof typeof COUNTS
 
 export const COUNT_KEYS = Object.keys(COUNTS) as Count[]
 
-/** The counts that come from the items read so far, rather than from GitHub's totals. */
+/** The counts that come from the items read so far alone, with no total from GitHub to show while they load. */
 export const TALLIED = COUNT_KEYS.filter((key) => !(COUNTS[key] as CountOf).total)
 
 export type RepoSort = 'activity' | 'name' | Count
@@ -75,15 +79,20 @@ export function defaultRepoFilters(): RepoFilters {
 export const isFiltered = ({ q, status }: Pick<RepoFilters, 'q' | 'status'>) =>
   q.trim() !== '' || status.join() !== defaultRepoFilters().status.join()
 
-/** Counted as the list counts, in `ctx`. `left` is what each repository still has to load, as the sync shows it. */
-export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<string, Left[]> = {}): RepoRow[] {
+/**
+ * Counted as the list counts, in `ctx`, with what each repository still has to load and what GitHub didn't show of it,
+ * as the sync says.
+ */
+export function repoRows(
+  items: Iterable<Item>,
+  ctx: Context,
+  { left = {}, hidden = {} }: Partial<Pick<SyncStatus, 'left' | 'hidden'>> = {},
+): RepoRow[] {
   const { now } = ctx
   const tallies = new Map<string, { row: RepoRow; oldestClosed: Record<Item['kind'], number> }>()
   for (const repo of ctx.repos.values()) {
     const pushedAt = repo.pushedAt ? Date.parse(repo.pushedAt) : 0
-    const counts = Object.fromEntries(
-      COUNT_KEYS.map((key) => [key, (COUNTS[key] as CountOf).total?.(repo) ?? 0]),
-    ) as Record<Count, number>
+    const counts = Object.fromEntries(COUNT_KEYS.map((key) => [key, 0])) as Record<Count, number>
     const row: RepoRow = {
       repo,
       counts,
@@ -95,7 +104,7 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
     tallies.set(repo.id, { row, oldestClosed: { issue: Infinity, pr: Infinity } })
   }
   // In an archived repository too, so the counts don't depend on the list's default of active ones.
-  const tallied = TALLIED.map(
+  const tallied = COUNT_KEYS.map(
     (key) => [key, matcher({ ...defaultFilters(), status: [], ...COUNTS[key].filters }, ctx)] as const,
   )
   for (const item of items) {
@@ -116,10 +125,15 @@ export function repoRows(items: Iterable<Item>, ctx: Context, left: Record<strin
   // from before the first week shown, all that was opened since is in.
   const start = now - WEEKS * WEEK
   for (const { row, oldestClosed } of tallies.values()) {
-    const kinds = left[row.repo.id]
-    if (!kinds) continue
-    const { openIssues, openPrs } = row.repo
+    const kinds = left[row.repo.id] ?? []
     const open = kinds.includes('open')
+    const unseen = hidden[row.repo.id] ?? []
+    for (const key of COUNT_KEYS) {
+      const { total, filters } = COUNTS[key] as CountOf
+      if (total && (open || unseen.some((kind) => filters.kind?.includes(kind)))) row.counts[key] = total(row.repo)
+    }
+    if (!kinds.length) continue
+    const { openIssues, openPrs } = row.repo
     row.countsLoading = open && openPrs > 0
     row.weeksLoading =
       (open && openIssues + openPrs > 0) ||

@@ -12,6 +12,7 @@ import {
   type RawItem,
   type RawRepo,
 } from '@/lib/queries'
+import { repoRows } from '@/lib/repos'
 import { sourcesKey } from '@/lib/sources'
 import { idleStatus, Syncer, type SyncStore } from '@/lib/sync'
 import { noOne, type Item, type Repo, type Workspace } from '@/types'
@@ -52,6 +53,16 @@ const count = (nodes: RawItem[], state: RawItem['state']) => nodes.filter((node)
 const size = (kind: 'issues' | 'pullRequests', open: boolean) => repoItems(kind, open).size
 
 const done = (data: unknown) => ({ data, errors: [] as QueryError[] })
+const second = (time: string) => Math.floor(Date.parse(time) / 1000)
+// A time as a search names its second.
+const secondOf = (time: string) => time.replace(/\.\d+Z$/, 'Z')
+// Searches as GitHub reads them: each one's terms in any order, and the searches in any order.
+const searches = (queries: string[]) => queries.map((q) => q.split(' ').toSorted().join(' ')).toSorted()
+// Whether a search has each of these terms.
+const has = (q: string, ...terms: string[]) => terms.every((term) => q.split(' ').includes(term))
+const byRepo = (q: string) => /(^| )repo:/.test(q)
+const byPart = (q: string) => /(^| )is:/.test(q)
+const labels = (many: number) => ({ nodes: Array.from({ length: many }, (_, n) => ({ name: `l${n}`, color: '' })) })
 
 /** A GitHub whose answers to queries are `query`'s, with nothing changed since the last look and nothing else to read. */
 const answering = (query: GitHub['query']): GitHub => ({
@@ -73,6 +84,9 @@ function fakeGitHub() {
     issues,
     prs,
     searchResults: [] as RawItem[],
+    // The times each search looked over: since the last look, or a part of that time. And each search's whole query.
+    searched: [] as string[],
+    queries: [] as string[],
     checks: {} as Record<string, string>,
     mergeable: {} as Record<string, RawItem['mergeable']>,
     requested: [] as string[],
@@ -86,6 +100,8 @@ function fakeGitHub() {
     // whose items were asked for.
     more: [] as string[],
     itemsOf: [] as string[],
+    // The lists asked for, as `kind states`, like `issues CLOSED`.
+    lists: [] as string[],
     probes: {} as Record<string, Probe>,
     probed: [] as string[],
     seen: new Set<string>(),
@@ -93,11 +109,6 @@ function fakeGitHub() {
     serverErrors: 0,
     rateLimited: false,
     calls: [] as string[],
-    // Every search for changes as asked, and how many results each page of one holds.
-    searches: [] as { q: string; after: unknown }[],
-    searchPage: Infinity,
-    // Searches whose terms hold this fail, as GitHub failing.
-    failSearch: '',
     pageSize: Infinity,
     onQuery: () => {},
   }
@@ -133,9 +144,7 @@ function fakeGitHub() {
         [PR_STATUS]: 'checks',
         [REVIEW_REQUESTED]: 'requested',
       }[text] ?? 'items'
-    // The issues and the pull requests are searched apart, as a fine-grained token needs: the pair is one search.
-    const q = typeof variables.q === 'string' ? variables.q : ''
-    if (call !== 'search' || !q.includes('is:pr')) state.calls.push(call)
+    state.calls.push(call)
     state.onQuery()
     if (state.rateLimited) throw new GitHubError('Rate limited', 'rate', Date.now() + 60_000)
     if (call === 'repos') {
@@ -158,14 +167,24 @@ function fakeGitHub() {
       return done({ organization: { repositories: page([repo, ...more]) } })
     }
     if (call === 'search') {
-      state.searches.push({ q, after: variables.after ?? null })
-      if (state.failSearch && q.includes(state.failSearch)) throw new GitHubError('GitHub answered 502', 'server')
-      const found = state.searchResults.filter((node) => q.includes(node.kind === 'PullRequest' ? 'is:pr' : 'is:issue'))
-      const from = Number(variables.after ?? 0)
-      const to = Math.min(found.length, from + state.searchPage)
-      const more = to < found.length
-      const pageInfo = { hasNextPage: more, endCursor: more ? String(to) : null }
-      return done({ search: { issueCount: found.length, pageInfo, nodes: found.slice(from, to) } })
+      // Like GitHub: a time from one second to another, both included, or from one on, and no more than 1,000
+      // results listed. And of one kind, open or closed, or in one repository, when the query says so.
+      const q = variables.q as string
+      const span = /updated:(\S+)\.\.(\S+)/.exec(q) ?? /updated:>=(\S+)()/.exec(q)
+      const kind = /is:(issue|pr)\b/.exec(q)?.[1]
+      const open = /is:(open|closed)\b/.exec(q)?.[1]
+      const repo = /repo:acme\/(\S+)/.exec(q)?.[1]
+      const matching = state.searchResults.filter(
+        (node) =>
+          (!span ||
+            (second(node.updatedAt) >= second(span[1]) && (!span[2] || second(node.updatedAt) <= second(span[2])))) &&
+          (!repo || node.repository.id === (repo === 'web' ? 'R1' : repo)) &&
+          (!kind || (node.kind === 'PullRequest') === (kind === 'pr')) &&
+          (!open || (node.state === 'OPEN') === (open === 'open')),
+      )
+      state.searched.push(span?.[2] ? `${span[1]}..${span[2]}` : 'since')
+      state.queries.push(q)
+      return done({ search: { issueCount: matching.length, ...page(matching.slice(0, 1000)) } })
     }
     if (call === 'requested')
       return done({ viewer: { login: 'ali' }, search: page(state.requested.map((id) => ({ id }))) })
@@ -196,6 +215,7 @@ function fakeGitHub() {
     const states = variables.states as string[]
     const list = text.includes('issues(') ? state.issues : state.prs
     const kind = text.includes('issues(') ? 'issues' : 'pullRequests'
+    state.lists.push(`${kind} ${states.join(',')}`)
     if (state.hidden.includes(kind))
       return done(kind === 'issues' ? { repository: null } : { repository: { [kind]: null } })
     const matching = list.filter((node) => states.includes(node.state))
@@ -219,6 +239,17 @@ const ws: Workspace = {
   sources: [{ kind: 'org', name: 'acme' }],
   views: [],
   pinned: [],
+}
+
+// GitHub's answer to items asked for by id: each as it is now.
+function answerNodes(fake: Awaited<ReturnType<typeof setup>>) {
+  const request = fake.gh.request.bind(fake.gh)
+  fake.gh.request = async <T>(text: string, variables: Record<string, unknown> = {}) => {
+    if (text !== NODES) return request<T>(text, variables)
+    const all = [...fake.state.issues, ...fake.state.prs]
+    const ids = variables.ids as string[]
+    return { data: { nodes: ids.map((id) => all.find((node) => node.id === id) ?? null) } as T, errors: [] }
+  }
 }
 
 async function setup(workspace = ws) {
@@ -348,18 +379,604 @@ describe('Syncer', () => {
     expect(fresh).toEqual(['I1'])
   })
 
-  it('reads the open items again instead when the search finds too many changes', async () => {
+  it('searches the time away in parts when it holds more changes than a search lists', async () => {
     const { store, state, syncer } = await setup()
     await syncer.sync()
-    state.issues.push(raw('I7', 'OPEN', new Date().toISOString()))
-    // A long absence: search can't list all that changed, and GitHub's count says so.
-    state.searchResults = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', ago(1)))
+    // Two hours away, in which 1,001 items changed, one issue was opened and closed, and a closed one was edited.
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const during = (minutes: number) => new Date(now - minutes * MINUTE).toISOString()
+    const busy = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', during(index / 10)))
+    const openedAndClosed = raw('I8', 'CLOSED', during(30))
+    const edited = { ...raw('I3', 'CLOSED', during(20)), title: 'Edited while away' }
+    state.searchResults = [...busy, openedAndClosed, edited]
     state.calls = []
     await syncer.sync()
-    expect(state.calls.filter((call) => call === 'search')).toHaveLength(1)
+
+    expect(store.items.get('I8')?.state).toBe('closed')
+    expect(store.items.get('I3')?.title).toBe('Edited while away')
+    expect(busy.every((node) => store.items.has(node.id))).toBe(true)
+    // The first search said how many, then the time was searched again in parts, without reading every open item.
+    expect(state.searched[0]).toBe('since')
+    expect(state.searched.length).toBeGreaterThan(2)
+    expect(state.calls).not.toContain('items')
+
+    // The next look starts from there: nothing is searched in parts again.
+    now += MINUTE
+    state.searched = []
+    state.searchResults = []
+    await syncer.sync(true)
+    expect(state.searched).toEqual(['since'])
+  })
+
+  it('shows and keeps the parts of the time away it searched when GitHub fails partway', async () => {
+    const { store, state, status, syncer } = await setup()
+    await syncer.sync()
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    state.searchResults = Array.from({ length: 1500 }, (_, index) =>
+      raw(`I${100 + index}`, 'OPEN', new Date(now - index * 5000).toISOString()),
+    )
+    // GitHub stops answering after the first part of the time.
+    state.onQuery = () => {
+      if (state.searched.length === 2) state.rateLimited = true
+    }
+    await syncer.sync()
+    expect(status.pausedUntil).not.toBeNull()
+    const kept = state.searchResults.filter((node) => store.items.has(node.id)).length
+    expect(kept).toBeGreaterThan(0)
+    expect(kept).toBeLessThan(1500)
+  })
+
+  it('searches a second holding more changes than a search lists by kind, open and closed', async () => {
+    const { store, state, syncer } = await setup()
+    await syncer.sync()
+    let now = Date.now() + HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const once = new Date(now - 5 * MINUTE).toISOString()
+    // A change made to 1,100 items at once: open and closed issues, and pull requests.
+    state.searchResults = [
+      ...Array.from({ length: 500 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once)),
+      ...Array.from({ length: 500 }, (_, index) => raw(`I${700 + index}`, 'CLOSED', once)),
+      ...Array.from({ length: 100 }, (_, index) => raw(`P${100 + index}`, 'MERGED', once, true)),
+    ]
+    state.calls = []
+    await syncer.sync()
+    expect(state.searchResults.every((node) => store.items.has(node.id))).toBe(true)
+    expect(searches(state.queries.filter(byPart))).toEqual(
+      searches(
+        ['is:issue is:open', 'is:issue is:closed', 'is:pr is:open', 'is:pr is:closed'].map(
+          (terms) => `org:acme ${terms} updated:${secondOf(once)}..${secondOf(once)}`,
+        ),
+      ),
+    )
+    // Nothing needed reading again from the repository.
+    expect(state.calls).not.toContain('items')
+  })
+
+  it('searches a second holding more changes than a search lists source by source', async () => {
+    const { state, syncer } = await setup({
+      ...ws,
+      sources: [
+        { kind: 'org', name: 'acme' },
+        { kind: 'org', name: 'beta' },
+      ],
+    })
+    await syncer.sync()
+    let now = Date.now() + HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const once = new Date(now - 5 * MINUTE).toISOString()
+    state.searchResults = Array.from({ length: 1001 }, (_, index) =>
+      raw(`I${100 + index}`, index % 2 ? 'OPEN' : 'CLOSED', once),
+    )
+    await syncer.sync()
+    const during = `updated:${secondOf(once)}..${secondOf(once)}`
+    const bySource = state.queries.filter((q) => has(q, during) && !byPart(q))
+    expect(searches(bySource)).toEqual(
+      searches([`org:acme org:beta ${during}`, `org:acme ${during}`, `org:beta ${during}`]),
+    )
+    expect(searches(state.queries.filter((q) => has(q, 'is:issue', 'is:closed')))).toEqual(
+      searches([`org:acme is:issue is:closed ${during}`, `org:beta is:issue is:closed ${during}`]),
+    )
+  })
+
+  it('reads the closed history again when one second holds more closed changes than a search lists', async () => {
+    const { store, state, status, syncer } = await setup()
+    await syncer.sync()
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    // A thousand and one issues closed at once while away.
+    const once = new Date(now - 30 * MINUTE).toISOString()
+    const closed = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    state.issues.push(...closed)
+    state.searchResults = closed
+    state.lists = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(status.historyDone).toBe(true))
+    expect(closed.filter((node) => !store.items.has(node.id))).toEqual([])
+    // The open items were read again, and the closed issues, not the closed pull requests.
+    expect(state.lists.toSorted()).toEqual(['issues CLOSED', 'issues OPEN', 'pullRequests OPEN'])
+
+    // The next look starts from there.
+    now += 11 * MINUTE
+    state.searched = []
+    state.searchResults = []
+    await syncer.sync(true)
+    expect(state.searched).toEqual(['since'])
+  })
+
+  it('shows issues closed at once in a crowded second as closed, before the closed history loads', async () => {
+    const fake = await setup()
+    const { store, state, syncer } = fake
+    answerNodes(fake)
+    const many = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', ago(48)))
+    state.issues.push(...many)
+    await syncer.sync()
+    const now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const once = new Date(now - 5 * MINUTE).toISOString()
+    for (const node of many) Object.assign(node, { state: 'CLOSED', updatedAt: once })
+    state.searchResults = many
+    // A tenth of the hour's points left: enough for a sync, not for the history.
+    fake.gh.rate = () => ({ limit: 5000, remaining: 500, resetAt: now + HOUR })
+    await syncer.sync()
+    expect(many.filter((node) => store.items.get(node.id)?.state === 'open')).toEqual([])
+  })
+
+  it("reads a crowded second's closed history again once, though later runs look over that second again", async () => {
+    const fake = await setup()
+    const { state, syncer } = fake
+    await syncer.sync()
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const once = new Date(now - 30 * 1000).toISOString()
+    const closed = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    state.issues.push(...closed)
+    state.searchResults = closed
+    state.pageSize = 10
+    // Each request takes 3 seconds: a slice of the history holds about 15 pages.
+    state.onQuery = () => (now += 3000)
+    const starts: number[] = []
+    const query = fake.gh.query.bind(fake.gh)
+    fake.gh.query = async <T>(text: string, variables?: Record<string, unknown>) => {
+      const states = variables?.states as string[] | undefined
+      if (text.includes('issues(') && states?.includes('CLOSED') && variables?.after == null) starts.push(now)
+      return query<T>(text, variables)
+    }
+    // A run a minute until the second is past what the search looks back over.
+    while (now < Date.parse(once) + 12 * MINUTE) {
+      await syncer.sync()
+      now += MINUTE
+    }
+    syncer.stop()
+    expect(starts).toHaveLength(1)
+  })
+
+  it('reads again the closed history of the repository with a crowded second alone', async () => {
+    const fake = await setup()
+    const { state, syncer } = fake
+    state.more = ['api']
+    await syncer.sync()
+    const now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const once = new Date(now - 5 * MINUTE).toISOString()
+    // A thousand and one issues of acme/web closed at once, and one of acme/api.
+    const closed = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    state.issues.push(...closed)
+    const other = { ...raw('I9', 'CLOSED', once), repository: { id: 'api' } }
+    state.searchResults = [...closed, other]
+    state.itemsOf = []
+    state.lists = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    expect(fake.store.items.get('I9')?.state).toBe('closed')
+    const read = state.lists.map((list, index) => `${state.itemsOf[index]} ${list}`)
+    expect(read.filter((each) => each.endsWith('CLOSED'))).toEqual(['web issues CLOSED'])
+    expect(searches(state.queries.filter(byRepo))).toEqual(
+      searches(
+        ['web', 'api'].map(
+          (name) => `repo:acme/${name} is:issue is:closed updated:${secondOf(once)}..${secondOf(once)}`,
+        ),
+      ),
+    )
+  })
+
+  it('finds an item of a crowded second that the search indexed after the run that split it by repository', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.more = ['api']
+    // An open issue of acme/web the list holds.
+    const issue = raw('I5000', 'OPEN', ago(48))
+    state.issues.push(issue)
+    await syncer.sync()
+    expect(store.items.get('I5000')?.state).toBe('open')
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    const once = new Date(now - 30 * 1000).toISOString()
+    // 1,001 issues of the organization closed in one second: 600 of acme/web and 401 of acme/api, so each
+    // repository's own search lists all of its own.
+    const web = Array.from({ length: 600 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    const api = Array.from({ length: 401 }, (_, index) => ({
+      ...raw(`I${1000 + index}`, 'CLOSED', once),
+      repository: { id: 'api' },
+    }))
+    state.searchResults = [...web, ...api]
+    await syncer.sync()
+    expect(store.items.get('I100')?.state).toBe('closed')
+    expect(store.items.get('I1000')?.state).toBe('closed')
+    // It was closed in that second too, and reaches the search index late, as the overlap is there for.
+    Object.assign(issue, { state: 'CLOSED', updatedAt: once })
+    state.searchResults = [...state.searchResults, issue]
+    now += MINUTE
+    await syncer.sync()
+    expect(store.items.get('I5000')?.state).toBe('closed')
+  })
+
+  it('finds an item of a crowded second that the search indexed late, from what an earlier version kept of it', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.more = ['api']
+    const issue = raw('I5000', 'OPEN', ago(48))
+    state.issues.push(issue)
+    await syncer.sync()
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    const once = new Date(now - 30 * 1000).toISOString()
+    const web = Array.from({ length: 600 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    const api = Array.from({ length: 401 }, (_, index) => ({
+      ...raw(`I${1000 + index}`, 'CLOSED', once),
+      repository: { id: 'api' },
+    }))
+    state.searchResults = [...web, ...api]
+    await syncer.sync()
+    // An earlier version kept how many changes the second held, not the repositories that held them.
+    const { crowded } = (syncer as unknown as { cache: Cache }).cache
+    expect(Object.keys(crowded)).not.toHaveLength(0)
+    for (const [q, { second: at }] of Object.entries(crowded)) crowded[q] = { second: at, count: 1001 } as never
+    Object.assign(issue, { state: 'CLOSED', updatedAt: once })
+    state.searchResults = [...state.searchResults, issue]
+    now += MINUTE
+    await syncer.sync()
+    syncer.stop()
+    expect(store.items.get('I5000')?.state).toBe('closed')
+  })
+
+  it('finds an item of a crowded second that the search indexed late, though another left it meanwhile', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.more = ['api']
+    const issue = raw('I5000', 'OPEN', ago(48))
+    state.issues.push(issue)
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    const once = new Date(now - 30 * 1000).toISOString()
+    // 1,001 issues of the organization closed in one second, which each repository's own search lists.
+    const web = Array.from({ length: 600 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    const api = Array.from({ length: 401 }, (_, index) => ({
+      ...raw(`I${1000 + index}`, 'CLOSED', once),
+      repository: { id: 'api' },
+    }))
+    state.searchResults = [...web, ...api]
+    await syncer.sync()
+    expect(store.items.get('I100')?.state).toBe('closed')
+    // One of them is edited again, which takes it out of that second, as one closed then reaches the search index:
+    // the second holds as many as before.
+    now += MINUTE
+    Object.assign(web[0], { updatedAt: new Date(now - 1000).toISOString() })
+    Object.assign(issue, { state: 'CLOSED', updatedAt: once })
+    state.searchResults = [...state.searchResults, issue]
+    // A run a minute until the second is past what the search looks back over.
+    while (now < Date.parse(once) + 12 * MINUTE) {
+      await syncer.sync()
+      now += MINUTE
+    }
+    syncer.stop()
+    expect(store.items.get('I5000')?.state).toBe('closed')
+  })
+
+  it('searches a crowded second again in the repositories that held its changes, while they hold all it does', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.more = ['api', ...Array.from({ length: 38 }, (_, index) => `quiet${index}`)]
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    const once = new Date(now - 30 * 1000).toISOString()
+    // 1,001 issues closed in one second, in two of the organization's 40 repositories.
+    const web = Array.from({ length: 600 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    const api = Array.from({ length: 401 }, (_, index) => ({
+      ...raw(`I${1000 + index}`, 'CLOSED', once),
+      repository: { id: 'api' },
+    }))
+    state.searchResults = [...web, ...api]
+    const runs: number[] = []
+    const run = async () => {
+      const before = state.queries.length
+      await syncer.sync()
+      runs.push(state.queries.slice(before).filter(byRepo).length)
+      now += MINUTE
+    }
+    await run()
+    await run()
+    // One of them is edited again, which takes it out of that second, as one closed then in a quiet repository reaches
+    // the search index: the second holds as many as before, though not all in the two.
+    Object.assign(web[0], { updatedAt: new Date(now - 1000).toISOString() })
+    state.searchResults.push({ ...raw('I5000', 'CLOSED', once), repository: { id: 'quiet7' } })
+    await run()
+    await run()
+    syncer.stop()
+    // The others are searched until those found make up what the second holds.
+    expect(runs).toEqual([40, 2, 10, 3])
+    expect(store.items.get('I5000')?.state).toBe('closed')
+  })
+
+  it('reads the open items again when a single second holds more changes than a search lists', async () => {
+    const { store, state, syncer } = await setup()
+    await syncer.sync()
+    let now = Date.now() + HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    state.issues.push(raw('I7', 'OPEN', new Date(now).toISOString()))
+    // A change made to 1,001 issues at once.
+    const once = new Date(now - 5 * MINUTE).toISOString()
+    state.searchResults = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once))
+    state.calls = []
+    await syncer.sync()
     expect(state.calls).toContain('items')
     expect(store.items.has('I7')).toBe(true)
-    expect(store.items.has('I100')).toBe(false)
+    // Each part is cut again until a second alone holds too many: a few searches, not one per second.
+    expect(state.searched.length).toBeLessThan(60)
+    now += MINUTE
+    state.searched = []
+    await syncer.sync(true)
+    expect(state.searched[0]).toBe('since')
+  })
+
+  it('reads the open items again of a repository that had none, when one second holds more of its changes than a search lists', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const now = Date.now() + MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in one second, in a repository that had no open issues a minute ago.
+    const once = new Date(now - 30 * 1000).toISOString()
+    const opened = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once))
+    state.issues.push(...opened)
+    state.searchResults = opened
+    await syncer.sync()
+    syncer.stop()
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('reads the repositories once in a run that reads them anyway, for a crowded second and a change outside them', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    // A run a while later, which reads the repositories first.
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    const once = new Date(now - 30 * 1000).toISOString()
+    const opened = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once))
+    state.issues.push(...opened)
+    state.searchResults = [...opened, { ...raw('X1', 'OPEN', once), repository: { id: 'elsewhere' } }]
+    state.calls = []
+    await syncer.sync()
+    syncer.stop()
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+    expect(state.calls.filter((call) => call === 'repos')).toHaveLength(1)
+  })
+
+  it('reads the closed history of a repository that had none closed, when one second holds more of its changes than a search lists', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = [raw('I1', 'OPEN', ago(24))]
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    let now = Date.now() + MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened and closed in one second.
+    const once = new Date(now - 30 * 1000).toISOString()
+    const closed = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    state.issues.push(...closed)
+    state.searchResults = closed
+    await syncer.sync()
+    now += MINUTE
+    await syncer.sync()
+    syncer.stop()
+    expect(closed.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('reads the open items again of a repository that had none, when one second holds more of its changes than a search lists and reading the repositories failed', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    // A run a while later, which reads the repositories first, but GitHub can't answer that.
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    state.onQuery = () => {
+      if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+    }
+    const once = new Date(now - 30 * 1000).toISOString()
+    const opened = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'OPEN', once))
+    state.issues.push(...opened)
+    state.searchResults = opened
+    await syncer.sync()
+    syncer.stop()
+    expect(fake.status.failedSources).toEqual(['acme'])
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('reads the open items again of a repository that had none as the run read it, when one second then holds more of its changes than a search lists', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = []
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in the second the run started, after it read the repositories and before it searched.
+    const opened = Array.from({ length: 1001 }, (_, index) =>
+      raw(`I${100 + index}`, 'OPEN', new Date(now).toISOString()),
+    )
+    state.onQuery = () => {
+      if (state.calls.at(-1) !== 'search' || state.searchResults.length) return
+      state.issues.push(...opened)
+      state.searchResults = opened
+    }
+    state.calls = []
+    await syncer.sync()
+    syncer.stop()
+    expect(state.calls.filter((call) => call === 'repos')).toHaveLength(1)
+    expect(opened.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('reads the closed history of a repository that had none closed, when one second holds more of its changes than a search lists and reading the repositories failed', async () => {
+    const fake = await setup()
+    const { state, store, syncer } = fake
+    state.issues = [raw('I1', 'OPEN', ago(24))]
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    let now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    state.onQuery = () => {
+      if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+    }
+    const once = new Date(now - 30 * 1000).toISOString()
+    const closed = Array.from({ length: 1001 }, (_, index) => raw(`I${100 + index}`, 'CLOSED', once))
+    state.issues.push(...closed)
+    state.searchResults = closed
+    await syncer.sync()
+    now += MINUTE
+    await syncer.sync()
+    syncer.stop()
+    expect(closed.filter((node) => store.items.has(node.id))).toHaveLength(1001)
+  })
+
+  it('counts no more in the one repository it knows of an organization for a second that holds more changes than a search lists in another, when reading the repositories failed', async () => {
+    const fake = await setup()
+    const { state, store, status, syncer } = fake
+    // GitHub hides the repository's issues from the app, so it shows what it counts.
+    state.hidden = ['issues']
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const shown = () =>
+      repoRows(store.items.values(), { repos: store.repos, now: Date.now(), me: noOne() }, status)[0].counts.issues
+    expect(shown()).toBe(1)
+    const now = Date.now() + 20 * MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in one second in a repository new to the organization, which the run can't read.
+    state.more = ['api']
+    state.onQuery = () => {
+      if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+    }
+    const once = new Date(now - 30 * 1000).toISOString()
+    state.searchResults = Array.from({ length: 1001 }, (_, index) => ({
+      ...raw(`I${100 + index}`, 'OPEN', once),
+      repository: { id: 'api' },
+    }))
+    await syncer.sync()
+    syncer.stop()
+    expect(store.repos.get('R1')?.openIssues).toBe(1)
+    expect(shown()).toBe(1)
+  })
+
+  it.each([
+    ['an open', 'OPEN'],
+    ['a closed', 'CLOSED'],
+  ] as const)(
+    'finds %s issue that the search indexed late of the one repository it knows of an organization, for a second that holds more changes than a search lists in another, when reading the repositories failed',
+    async (_name, itemState) => {
+      const fake = await setup()
+      const { state, store, syncer } = fake
+      state.issues = []
+      await syncer.sync()
+      await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+      let now = Date.now() + 20 * MINUTE
+      vi.spyOn(Date, 'now').mockImplementation(() => now)
+      fake.gh.probe = async () => 'changed'
+      // 1,001 issues changed in one second in a repository new to the organization, which the run can't read, and two
+      // of acme/web, which had none: the search has one of those so far.
+      state.more = ['api']
+      state.onQuery = () => {
+        if (state.calls.at(-1) === 'repos') throw new GitHubError('Something went wrong', 'query')
+      }
+      const once = new Date(now - 30 * 1000).toISOString()
+      const [first, late] = ['I50', 'I51'].map((id) => raw(id, itemState, once))
+      state.issues.push(first, late)
+      const api = Array.from({ length: 1001 }, (_, index) => ({
+        ...raw(`I${100 + index}`, itemState, once),
+        repository: { id: 'api' },
+      }))
+      state.searchResults = [first, ...api]
+      await syncer.sync()
+      expect(store.items.has('I50')).toBe(true)
+      // The other reaches the search index a minute later.
+      state.searchResults = [first, late, ...api]
+      now += MINUTE
+      await syncer.sync()
+      syncer.stop()
+      expect(store.items.has('I51')).toBe(true)
+    },
+  )
+
+  it("keeps what it found and looks over the same time again when the hour's allowance runs low partway", async () => {
+    const { gh, store, state, syncer } = await setup()
+    await syncer.sync()
+    let now = Date.now() + 2 * HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    // Spread over the time away, the latest first.
+    state.searchResults = Array.from({ length: 1500 }, (_, index) =>
+      raw(`I${100 + index}`, 'OPEN', new Date(now - index * 5000).toISOString()),
+    )
+    // The allowance runs low once the first part of the time has been searched.
+    const low = { limit: 5000, remaining: 50, resetAt: now + 10 * MINUTE }
+    state.onQuery = () => {
+      if (state.searched.length === 1) gh.rate = () => low
+    }
+    await syncer.sync()
+    const kept = state.searchResults.filter((node) => store.items.has(node.id)).length
+    expect(kept).toBeGreaterThan(0)
+    expect(kept).toBeLessThan(1500)
+
+    gh.rate = () => null
+    state.onQuery = () => {}
+    now += 11 * MINUTE
+    state.searched = []
+    await syncer.sync()
+    expect(state.searched[0]).toBe('since')
+    expect(state.searchResults.every((node) => store.items.has(node.id))).toBe(true)
+  })
+
+  it('takes the labels a copy kept from before lacks, when the open items are read again', async () => {
+    const { store, state, syncer } = await setup()
+    state.issues[0] = { ...state.issues[0], labels: labels(20) }
+    await syncer.sync()
+    expect(store.items.get('I1')?.labels).toHaveLength(20)
+    // GitHub gives all 25 now, and the issue hasn't changed since.
+    state.issues[0] = { ...state.issues[0], labels: labels(25) }
+    const later = Date.now() + HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => later)
+    await syncer.sync(true)
+    expect(store.items.get('I1')?.labels).toHaveLength(25)
   })
 
   it('keeps the newer copy when an older one arrives later', async () => {
@@ -463,6 +1080,32 @@ describe('Syncer', () => {
     expect(await checkCalls(1)).toBe(0)
   })
 
+  it('asks again soon when a pull request known to be clean changes and the search finds it unknown', async () => {
+    const { store, state, syncer } = await setup()
+    await syncer.sync()
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    // A push, in a repository without checks: the search finds it while GitHub works out whether it still merges.
+    now += MINUTE
+    state.searchResults = [{ ...raw('P2', 'OPEN', new Date(now).toISOString(), true), mergeable: 'UNKNOWN' }]
+    await syncer.sync()
+    expect(store.items.get('P2')).toMatchObject({ merge: 'clean', checks: null })
+
+    // GitHub has worked it out: it conflicts now.
+    state.mergeable.P2 = 'CONFLICTING'
+    state.searchResults = []
+    now += MINUTE
+    state.calls = []
+    await syncer.sync()
+    expect(state.calls).toContain('checks')
+    expect(store.items.get('P2')?.merge).toBe('conflicts')
+    // Known again, it waits its usual turn.
+    now += MINUTE
+    state.calls = []
+    await syncer.sync()
+    expect(state.calls).not.toContain('checks')
+  })
+
   it('drops the checks and conflicts of a pull request once it merges', async () => {
     const { store, state, syncer } = await setup()
     state.mergeable.P2 = 'CONFLICTING'
@@ -549,6 +1192,78 @@ describe('Syncer', () => {
     expect(store.items.has('I1')).toBe(true)
   })
 
+  it("counts a repository's open items of a kind GitHub won't show as GitHub does, until it shows them", async () => {
+    const { store, state, status, syncer } = await setup()
+    state.hidden = ['issues']
+    await syncer.sync()
+    const issuesCount = () =>
+      repoRows(store.items.values(), { repos: store.repos, now: Date.now(), me: noOne() }, status)[0].counts.issues
+    expect(store.items.has('I1')).toBe(false)
+    expect(status.hidden).toEqual({ R1: ['issue'] })
+    expect(issuesCount()).toBe(1)
+
+    // A refresh a while later, as the open items are read again.
+    state.hidden = []
+    const later = Date.now() + HOUR
+    vi.spyOn(Date, 'now').mockImplementation(() => later)
+    await syncer.sync(true)
+    expect(store.items.has('I1')).toBe(true)
+    expect(status.hidden).toEqual({})
+    expect(issuesCount()).toBe(1)
+  })
+
+  it("asks again in a while for a closed history GitHub won't show for now, rather than counting it complete", async () => {
+    const { store, state, status, syncer } = await setup()
+    // As when an organization's SAML sign-on lapses for a moment.
+    state.hidden = ['issues']
+    await syncer.sync()
+    expect(store.items.has('I3')).toBe(false)
+    expect(store.items.get('P4')?.state).toBe('merged')
+    // Nothing else is loading meanwhile.
+    expect(status.left).toEqual({})
+
+    state.hidden = []
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const closedIssues = async (minutes: number) => {
+      now += minutes * MINUTE
+      state.lists = []
+      await syncer.sync()
+      return state.lists.filter((list) => list === 'issues CLOSED').length
+    }
+    expect(await closedIssues(1)).toBe(0)
+    expect(await closedIssues(4)).toBe(1)
+    expect(store.items.get('I3')?.state).toBe('closed')
+    expect(await closedIssues(60)).toBe(0)
+  })
+
+  it("waits longer each time GitHub still won't show a closed history, and asks again at once on a refresh", async () => {
+    const { store, state, syncer } = await setup()
+    state.hidden = ['issues']
+    await syncer.sync()
+    // No second try right after the first, as the next slice of the history would be.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(state.lists.filter((list) => list === 'issues CLOSED')).toHaveLength(1)
+
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const tries: number[] = []
+    for (let minute = 1; minute <= 30; minute++) {
+      now += MINUTE
+      state.lists = []
+      await syncer.sync()
+      if (state.lists.includes('issues CLOSED')) tries.push(minute)
+    }
+    // After five minutes, then ten more, then twenty more.
+    expect(tries).toEqual([5, 15])
+
+    state.hidden = []
+    now += 11 * MINUTE
+    await syncer.sync(true)
+    expect(store.items.get('I1')?.state).toBe('open')
+    expect(store.items.get('I3')?.state).toBe('closed')
+  })
+
   it('finds the pull requests that ask the viewer for a review every five minutes', async () => {
     const { store, state, syncer } = await setup()
     state.requested = ['P2']
@@ -632,76 +1347,6 @@ const change = (id: string, repo: string) => ({
   repository: { id: repo },
 })
 
-// The search terms after the sources' qualifiers, and the window they look back to.
-const terms = (q: string) => q.split(' ').filter((term) => !term.includes(':') || /^(is|updated):/.test(term))
-const since = (q: string) => /updated:>=(\S+)/.exec(q)?.[1]
-
-describe('Syncer searching for changes', () => {
-  it('searches the issues and the pull requests apart, over the same window, once each', async () => {
-    const { state, syncer } = await setup()
-    await syncer.sync()
-    state.searches = []
-    await syncer.sync()
-    expect(state.searches.map(({ q, after }) => [terms(q)[0], after])).toEqual([
-      ['is:issue', null],
-      ['is:pr', null],
-    ])
-    const [issues, prs] = state.searches
-    expect(since(issues.q)).toBeDefined()
-    expect(since(prs.q)).toBe(since(issues.q))
-  })
-
-  it('pages through each search with its own cursor', async () => {
-    const { store, state, syncer } = await setup()
-    await syncer.sync()
-    const now = new Date().toISOString()
-    state.searchResults = [
-      raw('I1', 'CLOSED', now),
-      raw('I3', 'OPEN', now),
-      raw('P2', 'MERGED', now, true),
-      raw('P4', 'CLOSED', now, true),
-    ]
-    state.searchPage = 1
-    state.searches = []
-    await syncer.sync()
-    expect(state.searches.map(({ q, after }) => [terms(q)[0], after])).toEqual([
-      ['is:issue', null],
-      ['is:issue', '1'],
-      ['is:pr', null],
-      ['is:pr', '1'],
-    ])
-    expect(['I1', 'I3', 'P2', 'P4'].map((id) => store.items.get(id)?.state)).toEqual([
-      'closed',
-      'open',
-      'merged',
-      'closed',
-    ])
-  })
-
-  it('looks back as far again after the pull requests’ search fails, taking nothing from that scan', async () => {
-    const { store, state, status, syncer } = await setup()
-    await syncer.sync()
-    const start = Date.now()
-    vi.spyOn(Date, 'now').mockImplementation(() => start + 2 * 60_000)
-    state.searchResults = [raw('I1', 'CLOSED', new Date(start + 60_000).toISOString())]
-    state.failSearch = 'is:pr'
-    state.searches = []
-    await syncer.sync()
-    expect(status.error).toBe('server')
-    expect(state.searches.map(({ q }) => terms(q)[0])).toEqual(['is:issue', 'is:pr'])
-    // Nothing of a scan that didn't finish is taken.
-    expect(store.items.get('I1')?.state).toBe('open')
-    const failedSince = since(state.searches[0].q)
-
-    vi.spyOn(Date, 'now').mockImplementation(() => start + 4 * 60_000)
-    state.failSearch = ''
-    state.searches = []
-    await syncer.sync()
-    expect(state.searches.map(({ q }) => since(q))).toEqual([failedSince, failedSince])
-    expect(store.items.get('I1')?.state).toBe('closed')
-  })
-})
-
 describe('Syncer with only some repositories picked', () => {
   it('reads only the repositories picked', async () => {
     const { store, state, syncer } = await setup(picking('R1'))
@@ -724,6 +1369,28 @@ describe('Syncer with only some repositories picked', () => {
     expect(state.calls).not.toContain('repos')
     expect(store.items.has('I9')).toBe(false)
     expect(fresh).toEqual([])
+  })
+
+  it('searches the one repository picked for a second that holds more changes than a search lists, and counts only its own', async () => {
+    const fake = await setup(picking('R1'))
+    const { state, store, syncer } = fake
+    state.more = ['api']
+    await syncer.sync()
+    await vi.waitFor(() => expect(fake.status.historyDone).toBe(true))
+    const now = Date.now() + MINUTE
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    fake.gh.probe = async () => 'changed'
+    // 1,001 issues opened in one second in a repository left out.
+    const once = new Date(now - 30 * 1000).toISOString()
+    state.searchResults = Array.from({ length: 1001 }, (_, index) => ({
+      ...raw(`I${100 + index}`, 'OPEN', once),
+      repository: { id: 'api' },
+    }))
+    state.itemsOf = []
+    await syncer.sync()
+    syncer.stop()
+    expect(store.repos.get('R1')?.openIssues).toBe(1)
+    expect(state.itemsOf).toEqual([])
   })
 
   it('still adds a new repository of an account that brings all of them', async () => {

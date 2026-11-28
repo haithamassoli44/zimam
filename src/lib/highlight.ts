@@ -56,11 +56,12 @@ const BY_NAME: Record<string, string> = {
   Makefile: 'make',
 }
 
+// Only the lists' own names count: a file called `constructor` or `toString` would find the object's own functions.
 export function languageOf(path: string): string | null {
   const name = path.split('/').pop() ?? ''
-  if (BY_NAME[name]) return BY_NAME[name]
+  if (Object.hasOwn(BY_NAME, name)) return BY_NAME[name]
   const extension = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
-  return BY_EXTENSION[extension] ?? null
+  return Object.hasOwn(BY_EXTENSION, extension) ? BY_EXTENSION[extension] : null
 }
 
 /** What the page asks the highlighting worker: a text, in a language. */

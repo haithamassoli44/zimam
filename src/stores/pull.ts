@@ -1,5 +1,5 @@
 // The open pull request: what it is, what it changed, and what the reader saw of it before.
-import { computed, reactive, shallowReactive, shallowRef, watch } from 'vue'
+import { computed, shallowReactive, shallowRef, watch } from 'vue'
 
 import { seenKey } from '@/lib/cache'
 import {
@@ -18,15 +18,17 @@ import {
 } from '@/lib/changes'
 import { readCheckRuns, type CheckRuns } from '@/lib/checks'
 import { diffFiles, type FileDiff } from '@/lib/diff'
-import { generatedRules } from '@/lib/generated'
+import { generatedRules, generatedText } from '@/lib/generated'
 import type { GitHub } from '@/lib/github'
 import { isPost, readPull, type Commit, type Pull, type ReviewThread } from '@/lib/pull'
-import { refKey, type IssueRef } from '@/lib/refs'
+import { refKey, sameRef, type IssueRef } from '@/lib/refs'
+import { inSight } from '@/lib/sight'
 import { BASE, changeKey, onAllChanges, readFile, tickFile, type FileTicks, type Reading } from '@/lib/ticks'
-import type { FileMode } from '@/types'
+import type { FileMode, Item } from '@/types'
 
-import { client } from './data'
+import { client, itemRef, items, status } from './data'
 import { activeWorkspace, postShown, settings } from './settings'
+import { sharedRecord } from './shared'
 import { openPull, pullScope } from './view'
 
 // --- What the reader saw: visits, viewed files, and a pull request's own file mode ----------------------------------
@@ -46,35 +48,21 @@ interface Seen {
 // the browser gives the whole app.
 const ROOM = 1_000_000
 
-function readSeen(): Record<string, Seen> {
-  try {
-    return JSON.parse(localStorage.getItem(seenKey(activeWorkspace.value?.id ?? '')) ?? '{}')
-  } catch {
-    return {}
-  }
-}
-const seenAll = reactive<Record<string, Seen>>(readSeen())
-watch(
-  () => activeWorkspace.value?.id,
-  () => {
-    for (const key of Object.keys(seenAll)) delete seenAll[key]
-    Object.assign(seenAll, readSeen())
+// Each pull request is an entry the tabs share field by field, so a tab doesn't undo what another saw, even of the same
+// pull request.
+const seenAll = sharedRecord<Seen>(
+  () => seenKey(activeWorkspace.value?.id ?? ''),
+  (entries) => {
+    const kept: [string, Seen][] = []
+    let used = 0
+    for (const entry of entries.toSorted(([, a], [, b]) => b.at - a.at)) {
+      used += entry[0].length + JSON.stringify(entry[1]).length
+      if (used > ROOM && kept.length) break
+      kept.push(entry)
+    }
+    return kept
   },
 )
-watch(seenAll, () => {
-  const kept: [string, Seen][] = []
-  let used = 0
-  for (const entry of Object.entries(seenAll).toSorted(([, a], [, b]) => b.at - a.at)) {
-    used += entry[0].length + JSON.stringify(entry[1]).length
-    if (used > ROOM && kept.length) break
-    kept.push(entry)
-  }
-  try {
-    localStorage.setItem(seenKey(activeWorkspace.value?.id ?? ''), JSON.stringify(Object.fromEntries(kept)))
-  } catch {
-    // Without storage, what was seen lasts until the tab closes.
-  }
-})
 
 // --- The session: one pull request, from opening it until another opens --------------------------------------------
 
@@ -105,10 +93,34 @@ interface Session {
   commitsRead: boolean
   textsDone: number
   textsTotal: number
-  /** Files whose new side's text marks them generated, by path. */
+  /**
+   * The files' new sides, by `commit:path`, with what their marks go by, and the marks of those whose text says they're
+   * generated. A mark goes with the text, by its blob, so a push that changes the file takes it off, one that leaves the
+   * file as it was keeps it, and a commit with another text doesn't share it. The text alone gives it: .gitattributes
+   * and Settings can change, and are read as they are now.
+   */
+  newSides: Map<string, NewSide>
   marked: Set<string>
   showGenerated: boolean
   diffs: Map<string, FileDiff>
+  /** Its read again on its way, which says whether the page took GitHub's answer, and whether to read once more after. */
+  refreshing: Promise<boolean> | null
+  refreshAgain: boolean
+  /**
+   * The list's copy it was last read again for, the sync that brought it, and how many reads it had, until the page
+   * and the list agree. The page can still be behind it after a read, as when GitHub's search runs ahead of the pull
+   * request: it's read again on the next syncs, a few times.
+   */
+  readFor: { copy: string; syncedAt: number | null; reads: number } | null
+  /**
+   * The checks and conflicts the list's copy had when the page's last read started, each until a copy agrees with the
+   * page on it: a copy that differs from them and the page has news, where one that differs from the page alone is just
+   * behind it. And when that read started, for a list without a copy then.
+   */
+  listed: ListStatus
+  readAt: number
+  /** How many times its checks were asked for: only the last answer counts. */
+  runsAsked: number
 }
 
 const ALL = 'all'
@@ -130,9 +142,16 @@ function newSession(ref: IssueRef, gh: GitHub): Session {
     commitsRead: false,
     textsDone: 0,
     textsTotal: 0,
+    newSides: new Map(),
     marked: shallowReactive(new Set()),
     showGenerated: false,
     diffs: new Map(),
+    refreshing: null,
+    refreshAgain: false,
+    readFor: null,
+    listed: {},
+    readAt: 0,
+    runsAsked: 0,
   })
 }
 
@@ -146,6 +165,8 @@ const sessionVisits = new Map<string, { at: number; head: string } | null>()
 async function open(ref: IssueRef, gh: GitHub) {
   const s = newSession(ref, gh)
   session.value = s
+  s.listed = statusOf(listCopy(ref))
+  s.readAt = Date.now()
   let pull: Pull
   try {
     // What the pull request changed is read as soon as its first answer says where it starts and ends.
@@ -160,6 +181,22 @@ async function open(ref: IssueRef, gh: GitHub) {
   const before = seenAll[key]
   if (!sessionVisits.has(key)) sessionVisits.set(key, before ? { at: before.at, head: before.head } : null)
   s.lastVisit = sessionVisits.get(key) ?? null
+  recordVisit(s, pull)
+  s.pull = pull
+  readRuns(s, pull)
+  // What the address shows first, then the whole pull request, which the marks since the last visit count in, then
+  // what the commits list needs for its ticks, where the reader ticks commits.
+  if (scope.value) void changesOf(s, pull, scope.value)
+  const onCommits = ticksCommits(s)
+  void readWhole(s, pull).then(() => {
+    if (onCommits) void readCommits(s, pull)
+  })
+}
+
+// The visit the next one counts from.
+function recordVisit(s: Session, pull: Pull) {
+  const key = refKey(s.ref)
+  const before = seenAll[key]
   seenAll[key] = {
     ...before,
     ticked: before?.ticked ?? {},
@@ -167,23 +204,99 @@ async function open(ref: IssueRef, gh: GitHub) {
     at: Date.now(),
     head: pull.headOid,
   }
-  s.pull = pull
-  if (pull.checks)
-    readCheckRuns(gh, pull).then(
-      (found) => (s.runs = found),
-      () => (s.runs = 'failed'),
-    )
-  // What the address shows first, then the whole pull request, which the marks since the last visit count in, then
-  // what the commits list needs for its ticks, where the reader ticks commits.
-  if (scope.value) void changesOf(s, pull, scope.value)
-  const onCommits = !Object.values(seenAll[key].ticked).flat().every(onAllChanges)
-  void readWhole(s, pull).then(() => {
-    if (onCommits) void readCommits(s, pull)
-  })
 }
 
+// The checks of the head read last.
+function readRuns(s: Session, pull: Pull) {
+  const asked = ++s.runsAsked
+  if (!pull.checks) {
+    s.runs = null
+    return
+  }
+  readCheckRuns(s.gh, pull).then(
+    (found) => {
+      if (asked === s.runsAsked) s.runs = found
+    },
+    () => {
+      if (asked === s.runsAsked) s.runs = 'failed'
+    },
+  )
+}
+
+// Whether the reader ticked files in a run of commits, which the commits list's ticks need read.
+const ticksCommits = (s: Session) =>
+  !Object.values(seenAll[refKey(s.ref)]?.ticked ?? {})
+    .flat()
+    .every(onAllChanges)
+
 export function reloadPull() {
-  if (openPull.value && client.value) void open(openPull.value, client.value)
+  return openPull.value && client.value ? open(openPull.value, client.value) : Promise.resolve()
+}
+
+/**
+ * Reads the open pull request again, as GitHub has it now, without starting over: what's on screen stays until the new
+ * answer is in. When its head or base moved, what it changed is read again before the page takes the new answer, so
+ * the diff never shows one head's files at another's. So is what it changed when that couldn't be read last time, and
+ * the commits shown. Asked again while it reads, it reads once more after.
+ */
+export async function refreshPull(): Promise<boolean> {
+  const s = session.value
+  if (!s || s.pull === null) return false
+  if (s.pull === 'failed') {
+    await reloadPull()
+    return true
+  }
+  s.refreshAgain = true
+  s.refreshing ??= readAgain(s)
+  return s.refreshing
+}
+
+async function readAgain(s: Session): Promise<boolean> {
+  try {
+    while (s.refreshAgain && session.value === s) {
+      s.refreshAgain = false
+      if (s.pull === null || s.pull === 'failed') return false
+      const before: Pull = s.pull
+      const listed = statusOf(copy.value)
+      const readAt = Date.now()
+      const heads: { moved: boolean; read?: Promise<{ changes: Changes; attributes: string | null } | null> } = {
+        moved: false,
+      }
+      const next = await readPull(s.gh, s.ref, (found) => {
+        heads.moved = found.headOid !== before.headOid || found.baseOid !== before.baseOid
+        if (heads.moved || s.changes.get(ALL) === 'failed') heads.read = readChanges(s.gh, found).catch(() => null)
+      })
+      const found = heads.read && (await heads.read)
+      if (session.value !== s) return false
+      if (heads.read) {
+        s.reads.delete(ALL)
+        if (found) {
+          s.reads.set(ALL, Promise.resolve(found.changes))
+          s.changes.set(ALL, found.changes)
+          s.attributes = found.attributes
+        } else s.changes.set(ALL, 'failed')
+      }
+      // A tab out of sight reads it again for when it's back, which isn't a visit.
+      if (inSight()) recordVisit(s, next)
+      s.pull = next
+      s.listed = listedAfter(listed, s.listed, next)
+      s.readAt = readAt
+      readRuns(s, next)
+      const run = scope.value
+      if (run && s.changes.get(run.key) === 'failed') void changesOf(s, next, run)
+      // New commits need their changes read for the commits list's ticks too.
+      if (heads.moved && ticksCommits(s)) {
+        s.commitsRead = false
+        void readCommits(s, next)
+      }
+    }
+    return session.value === s
+  } catch {
+    // What's on screen stays as it was: the next refresh tries again.
+    return false
+  } finally {
+    s.refreshing = null
+  }
 }
 
 /** What a run of commits changed, or the whole pull request (null): null when it can't be read. */
@@ -192,20 +305,25 @@ function changesOf(s: Session, pull: PullHeads, run: Scope | null): Promise<Chan
   let read = s.reads.get(key)
   if (!read) {
     s.changes.set(key, null)
-    const asked = run
-      ? readRange(s.gh, pull.ref.repo, run.base, run.head)
-      : readChanges(s.gh, pull).then((answer) => {
-          s.attributes = answer.attributes
-          return answer.changes
-        })
-    read = asked.then(
-      (found) => (s.changes.set(key, found), found),
+    const asked: Promise<{ changes: Changes; attributes?: string | null }> = run
+      ? readRange(s.gh, pull.ref.repo, run.base, run.head).then((changes) => ({ changes }))
+      : readChanges(s.gh, pull)
+    // A read whose place a newer one took, as a refresh after a push does, leaves the page alone and gives nothing.
+    const current: Promise<Changes | null> = asked.then(
+      ({ changes, attributes }) => {
+        if (s.reads.get(key) !== current) return null
+        if (attributes !== undefined) s.attributes = attributes
+        s.changes.set(key, changes)
+        return changes
+      },
       () => {
+        if (s.reads.get(key) !== current) return null
         s.reads.delete(key)
         s.changes.set(key, 'failed')
         return null
       },
     )
+    read = current
     s.reads.set(key, read)
   }
   return read
@@ -217,6 +335,13 @@ async function readWhole(s: Session, pull: Pull) {
   if (found) await readTextsOf(s, pull, toFiles(s, found, pull.headOid), null)
 }
 
+/** A file's new side as a mark of generated text goes by: its path, and its blob, whatever commit it's read at. */
+interface NewSide {
+  path: string
+  mark: string
+}
+const markOf = (file: { path: string; blob: string }) => `${file.blob} ${file.path}`
+
 /**
  * Reads the texts of the files a run's diff shows, or all the changes': each file's two sides, and in all the changes
  * its copy from the last visit, together, so the top of the page fills first.
@@ -227,7 +352,7 @@ function readTextsOf(s: Session, pull: Pull, files: PullFile[], run: Scope | nul
     pull,
     files.flatMap((file) => [
       { at: file.oldAt },
-      { at: file.newAt, path: file.path },
+      { at: file.newAt, side: { path: file.path, mark: markOf(file) } },
       { at: run ? null : visitedAt(s, file) },
     ]),
   )
@@ -237,8 +362,14 @@ function readTextsOf(s: Session, pull: Pull, files: PullFile[], run: Scope | nul
  * Reads the texts not asked for yet: a small first read, so the top of the page fills first, then the rest side by
  * side. A read that fails leaves its own files unreadable, not the whole diff. A file's new side may mark it generated.
  */
-async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null; path?: string }[]) {
-  const fresh = wanted.filter((each): each is { at: string; path?: string } => !!each.at && !s.asked.has(each.at))
+async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null; side?: NewSide }[]) {
+  // A file's new side may have been read already, as another diff's old side.
+  for (const { at, side } of wanted)
+    if (at && side && !s.newSides.has(at)) {
+      s.newSides.set(at, side)
+      markGenerated(s, at)
+    }
+  const fresh = wanted.filter((each): each is { at: string; side?: NewSide } => !!each.at && !s.asked.has(each.at))
   for (const { at } of fresh) s.asked.add(at)
   s.textsTotal += fresh.length
   const reads: (typeof fresh)[] = []
@@ -251,15 +382,21 @@ async function readTextsInto(s: Session, pull: Pull, wanted: { at: string | null
         pull.ref.repo,
         read.map((each) => each.at),
       )
-      read.forEach(({ at, path }, index) => {
+      read.forEach(({ at }, index) => {
         const { content, version } = answers[index]
         s.texts.set(at, content)
         if (version !== undefined) s.versions.set(at, version)
-        if (path && 'text' in content && isGenerated.value(path, content.text)) s.marked.add(path)
+        markGenerated(s, at)
       })
       s.textsDone += read.length
     }),
   )
+}
+
+function markGenerated(s: Session, at: string) {
+  const side = s.newSides.get(at)
+  const content = s.texts.get(at)
+  if (side && content && 'text' in content && generatedText(side.path, content.text)) s.marked.add(side.mark)
 }
 
 /**
@@ -301,6 +438,8 @@ export interface PullFile extends FileChange {
   generated: boolean
   /** The commit the diff shows it at: the head, or the last of the commits shown. */
   at: string
+  /** The commit its old side is read at: where the base and the head meet, or the commit before those shown. */
+  base: string
   /** Expressions of its two sides' texts, null for a side it doesn't have. */
   oldAt: string | null
   newAt: string | null
@@ -314,8 +453,8 @@ function toFiles(s: Session, found: Changes, head: string): PullFile[] {
   return found.files
     .map((file) => {
       const { old, new: next } = sides(file, found.mergeBase, head)
-      const generated = isGenerated.value(file.path) ?? s.marked.has(file.path)
-      return { ...file, at: head, oldAt: old, newAt: next, generated }
+      const generated = isGenerated.value(file.path) ?? (next !== null && s.marked.has(markOf(file)))
+      return { ...file, at: head, base: found.mergeBase, oldAt: old, newAt: next, generated }
     })
     .toSorted((a, b) => comparePaths(a.path, b.path))
 }
@@ -741,6 +880,130 @@ export function showThreadsFile(thread: ReviewThread) {
   if (scope.value && !threadsByPath.value.get(thread.path)?.includes(thread)) showAllChanges()
   showGenerated.value ||= allFiles.value.some((file) => file.path === thread.path && file.generated)
 }
+
+// --- Keeping up with the list ---------------------------------------------------------------------------------------
+
+/**
+ * What the list's copy of a pull request says that the page reads too, besides when it last changed, and when the two
+ * differ on it: a copy that doesn't know whether it conflicts doesn't differ on that.
+ */
+const LISTED: Record<'checks' | 'merge', (onList: unknown, onPage: unknown) => boolean> = {
+  checks: (onList, onPage) => onList !== onPage,
+  merge: (onList, onPage) => onList !== null && onList !== onPage,
+}
+type Field = keyof typeof LISTED
+const FIELDS = Object.keys(LISTED) as Field[]
+
+/** What the list's copy of a pull request says, as far as it has one. */
+type ListStatus = Partial<Pick<Item, Field>>
+const statusOf = (item: Item | undefined): ListStatus =>
+  item ? Object.fromEntries(FIELDS.map((field) => [field, item[field]])) : {}
+
+/** Where the list's copy of the open pull request and the page differ, by field. */
+const differences = (item: Pick<Item, Field>, shown: Pull) =>
+  Object.fromEntries(FIELDS.map((field) => [field, LISTED[field](item[field], shown[field])])) as Record<Field, boolean>
+
+/**
+ * What the next copies' news counts from after the page was read again: what the list's copy had as the read started,
+ * `started`, but what it counted from before, `before`, where the page came back without the list's news then, as when
+ * GitHub's pull request lags behind its list. That news stays news, for the next syncs to read it again: without a
+ * copy to count from before, as for a page read before the list had one, the news is what syncs bring after the read.
+ * The page can't tell that from a list behind it then, so a copy behind the page reads it a few times too.
+ */
+function listedAfter(started: ListStatus, before: ListStatus, page: Pull): ListStatus {
+  const after = { ...started }
+  for (const field of FIELDS) {
+    if (!(field in started) || !LISTED[field](started[field], page[field])) continue
+    if (field in before) Object.assign(after, { [field]: before[field] })
+    else delete after[field]
+  }
+  return after
+}
+
+/** The list's copy of the pull request a ref names, before the page says its id. */
+function listCopy(ref: IssueRef): Item | undefined {
+  for (const item of items.value.values()) if (item.kind === 'pr' && sameRef(itemRef(item), ref)) return item
+  return undefined
+}
+
+/** The list's copy of the open pull request, once there's a page to compare it with. */
+const copy = computed(() => (pull.value ? items.value.get(pull.value.id) : undefined))
+
+/**
+ * The list's copy of the open pull request when it says the page is behind, as after a new comment, a push, or checks
+ * that finished: null when it doesn't, or when there's no copy or no page yet. The checks and conflicts the list reads
+ * now and then can be older than the page's, so only those that changed in the list since the page's read started
+ * count, or, without a copy then, those a sync since brought.
+ */
+const behindBy = computed(() => {
+  const s = session.value
+  const shown = pull.value
+  const item = copy.value
+  if (!s || !shown || !item) return null
+  const differ = differences(item, shown)
+  const known = s.listed
+  const news = (field: Field) =>
+    differ[field] && (field in known ? item[field] !== known[field] : (status.value.syncedAt ?? 0) > s.readAt)
+  const behind = item.updatedAt > shown.updatedAt || (item.state === 'open' && FIELDS.some(news))
+  return behind ? [shown.id, item.updatedAt, ...FIELDS.map((field) => `${item[field]}`)].join(' ') : null
+})
+
+// Where a copy agrees with the page, as one that caught up with it, is what the next copies' news count from.
+watch(copy, (item) => {
+  const s = session.value
+  const shown = pull.value
+  if (!s || !item || !shown) return
+  const differ = differences(item, shown)
+  const agreed: ListStatus = Object.fromEntries(
+    FIELDS.filter((field) => !differ[field]).map((field) => [field, item[field]]),
+  )
+  const known = { ...s.listed, ...agreed }
+  if (JSON.stringify(known) !== JSON.stringify(s.listed)) s.listed = known
+})
+
+// How many times the page is read for one copy of the list's, a sync apart, when each read leaves it behind.
+const READS = 3
+
+/**
+ * Whether the list's copy of the open pull request and the page agree: on checks and conflicts, with the copy no newer
+ * than the page. They do while either is missing.
+ */
+const agree = computed(() => {
+  const shown = pull.value
+  const item = copy.value
+  if (!shown || !item) return true
+  const differ = differences(item, shown)
+  return !FIELDS.some((field) => differ[field]) && item.updatedAt <= shown.updatedAt
+})
+
+// Once they agree, whichever caught up, as the list after the page's last read, the same news counts again, as checks
+// that run again.
+watch(agree, (agreed) => {
+  if (agreed && session.value) session.value.readFor = null
+})
+
+/** Reads the open pull request again when the list says it's behind, once its tab is in sight. */
+function catchUp() {
+  const s = session.value
+  if (!s) return
+  const behind = behindBy.value
+  // A copy that only stops counting as news, as one read since the last sync without a copy to count from, keeps the
+  // reads it had, until the page and the list agree.
+  if (!behind) return
+  const last = s.readFor?.copy === behind ? s.readFor : null
+  const syncedAt = status.value.syncedAt
+  if ((last && (last.syncedAt === syncedAt || last.reads >= READS)) || !inSight()) return
+  const reading = { copy: behind, syncedAt, reads: (last?.reads ?? 0) + 1 }
+  s.readFor = reading
+  void refreshPull().then((done) => {
+    if (!done && s.readFor === reading) s.readFor = { ...reading, reads: reading.reads - 1 }
+  })
+}
+
+// Every sync reads the list's copy again: whichever comes first, the page or the copy, they're compared once both are
+// here, and again after each sync while the page is behind it.
+watch([behindBy, () => status.value.syncedAt], catchUp)
+globalThis.document?.addEventListener('visibilitychange', catchUp)
 
 // Opens the pull request the address names, once a workspace can read it.
 watch(

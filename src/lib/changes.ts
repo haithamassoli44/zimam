@@ -89,6 +89,8 @@ export async function readChanges(
       files.push(...batch.map(toFile))
       if (batch.length < PAGE) break
     }
+    // A list as long as GitHub gives may have been cut, whatever the count said: it comes from an earlier answer, and a
+    // push since can add files the list leaves out.
     changes = { mergeBase: compared.mergeBase, files, capped: files.length >= PAGE * PAGES }
   }
   const [{ content }] = await attributes

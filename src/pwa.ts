@@ -2,6 +2,8 @@
 import { registerSW } from 'virtual:pwa-register'
 import { ref, shallowRef } from 'vue'
 
+import { inSight } from '@/lib/sight'
+
 const HOUR = 60 * 60_000
 
 /** A new version is installed and waits for a reload. */
@@ -22,7 +24,7 @@ const activate = registerSW({
     if (!registration) return
     // Browsers look for a new version when a page loads, and a dashboard can stay open for days.
     setInterval(() => {
-      if (document.visibilityState === 'visible' && navigator.onLine) registration.update().catch(() => {})
+      if (inSight() && navigator.onLine) registration.update().catch(() => {})
     }, HOUR)
   },
 })
