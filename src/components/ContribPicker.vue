@@ -24,7 +24,7 @@ import {
   type ContributionKind,
   type OpenedKind,
 } from '@/lib/sources'
-import { formatList, formatNumber, relativeTime } from '@/locale'
+import { formatNumber, relativeTime } from '@/locale'
 import { now } from '@/stores/clock'
 import type { Repo, Source } from '@/types'
 
@@ -147,7 +147,15 @@ function resetFilters() {
 const count = (kind: OpenedKind, n: number) =>
   t(`contrib.${kind === 'pr' ? 'prs' : 'issues'}${countsCut.value.includes(kind) ? 'AtLeast' : ''}`, n)
 
-const kindsText = (entry: Contribution) => formatList(entry.kinds.map((kind) => t(`contrib.kinds.${kind}`)))
+/** Each way someone contributed to a repository, with a figure for the pull requests and issues they opened in it. */
+function tallies(entry: Contribution) {
+  return entry.kinds.map((kind) => {
+    const n = kind === 'pr' ? entry.prs : kind === 'issue' ? entry.issues : 0
+    if (n && (kind === 'pr' || kind === 'issue'))
+      return { kind, figure: formatNumber(n) + (countsCut.value.includes(kind) ? '+' : ''), label: count(kind, n) }
+    return { kind, figure: '', label: t(`contrib.kinds.${kind}`) }
+  })
+}
 
 const lastOpened = (entry: Contribution) =>
   entry.lastAt ? t('contrib.lastOpened', { time: relativeTime(Date.parse(entry.lastAt), now.value) }) : ''
@@ -176,18 +184,15 @@ const lastOpened = (entry: Contribution) =>
       <dl v-else class="enter grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div
           v-for="stat in [
-            { key: 'repos', icon: 'i-octicon-repo-16', value: totals.repos, capped: reposCut },
-            { key: 'owners', icon: 'i-octicon-organization-16', value: totals.owners, capped: reposCut },
-            { key: 'prs', icon: ICONS.pr, value: totals.prs, capped: countsCut.includes('pr') },
-            { key: 'issues', icon: ICONS.issue, value: totals.issues, capped: countsCut.includes('issue') },
+            { key: 'repos', value: totals.repos, capped: reposCut },
+            { key: 'owners', value: totals.owners, capped: reposCut },
+            { key: 'prs', value: totals.prs, capped: countsCut.includes('pr') },
+            { key: 'issues', value: totals.issues, capped: countsCut.includes('issue') },
           ]"
           :key="stat.key"
           class="rounded-md bg-elevated/50 px-3 py-2"
         >
-          <dt class="flex items-center gap-1.5 text-xs text-muted">
-            <UIcon :name="stat.icon" class="size-3.5 shrink-0" />
-            <span class="truncate">{{ t(`contrib.stats.${stat.key}`) }}</span>
-          </dt>
+          <dt class="truncate text-xs text-muted">{{ t(`contrib.stats.${stat.key}`) }}</dt>
           <dd class="font-mono text-lg font-medium text-highlighted tabular-nums">
             {{ formatNumber(stat.value) }}<span v-if="stat.capped">+</span>
           </dd>
@@ -216,7 +221,9 @@ const lastOpened = (entry: Contribution) =>
             />
           </UDropdownMenu>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
+        <div
+          class="-mx-3 flex [scrollbar-width:none] items-center gap-2 overflow-x-auto px-3 *:shrink-0 sm:flex-wrap sm:overflow-visible"
+        >
           <ChoiceGroup
             :label="t('contrib.kindsTitle')"
             :choices="kinds"
@@ -254,7 +261,7 @@ const lastOpened = (entry: Contribution) =>
           <label
             v-for="entry in shown"
             :key="entry.repo.id"
-            class="flex cursor-pointer items-start gap-3 border-b border-default px-3 py-2.5 transition-colors last:border-b-0 hover:bg-elevated/50"
+            class="flex cursor-pointer items-start gap-3 border-b border-default px-3 py-3 transition-colors last:border-b-0 hover:bg-elevated/50"
             :class="broughtBy(entry.repo) && 'cursor-default'"
           >
             <UCheckbox
@@ -272,7 +279,7 @@ const lastOpened = (entry: Contribution) =>
                 <UIcon
                   v-if="entry.repo.isPrivate"
                   name="i-octicon-lock-16"
-                  class="size-3.5 shrink-0 text-muted"
+                  class="size-4 shrink-0 text-muted"
                   :aria-label="t('contrib.private')"
                 />
                 <span
@@ -282,7 +289,7 @@ const lastOpened = (entry: Contribution) =>
                 >
                 <span
                   v-if="broughtBy(entry.repo)"
-                  class="inline-flex h-5 shrink-0 items-center rounded-sm bg-primary/10 px-1.5 text-xs text-primary"
+                  class="inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-xs text-toned ring-1 ring-default ring-inset"
                   >{{ t('contrib.via', { name: broughtBy(entry.repo) }) }}</span
                 >
               </span>
@@ -290,12 +297,16 @@ const lastOpened = (entry: Contribution) =>
                 entry.repo.description
               }}</span>
               <span class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-toned">
-                <span class="flex items-center gap-1.5" :title="kindsText(entry)">
-                  <UIcon v-for="kind in entry.kinds" :key="kind" :name="ICONS[kind]" class="size-3.5 text-muted" />
-                  <span class="sr-only">{{ kindsText(entry) }}</span>
+                <span
+                  v-for="tally in tallies(entry)"
+                  :key="tally.kind"
+                  class="inline-flex items-center gap-1.5"
+                  :title="tally.label"
+                >
+                  <UIcon :name="ICONS[tally.kind]" class="size-4 text-muted" />
+                  <span v-if="tally.figure" class="font-mono tabular-nums" aria-hidden="true">{{ tally.figure }}</span>
+                  <span class="sr-only">{{ tally.label }}</span>
                 </span>
-                <span v-if="entry.prs" class="tabular-nums">{{ count('pr', entry.prs) }}</span>
-                <span v-if="entry.issues" class="tabular-nums">{{ count('issue', entry.issues) }}</span>
                 <span v-if="entry.repo.language" class="flex items-center gap-1">
                   <span
                     class="size-2 rounded-full"

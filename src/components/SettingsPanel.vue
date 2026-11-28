@@ -191,9 +191,7 @@ async function upload(event: Event) {
               color="neutral"
               variant="outline"
               block
-              icon="i-octicon-git-pull-request-16"
               :label="t('contrib.open')"
-              :ui="{ leadingIcon: 'text-muted' }"
               @click="openSetup('edit', true)"
             />
             <div>

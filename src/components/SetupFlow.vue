@@ -352,9 +352,6 @@ function finish() {
               :aria-expanded="contributing"
               @click="contributing = !contributing"
             >
-              <span class="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                <UIcon name="i-octicon-git-pull-request-16" class="size-4" />
-              </span>
               <span class="min-w-0 flex-1">
                 <span class="block text-sm font-medium text-highlighted">{{ t('contrib.title') }}</span>
                 <span class="block text-xs text-muted">{{ t('contrib.help') }}</span>
